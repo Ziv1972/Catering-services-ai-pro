@@ -1,0 +1,234 @@
+# Catering Services AI Pro - Development Rules for Claude Code/Cursor
+
+## Project Overview
+Building an AI-native catering management system for HP Israel. This is NOT traditional CRUD - it's an intelligent agent system that proactively manages catering operations.
+
+## Core Principles
+1. **AI-First**: Every feature should leverage Claude API for intelligence
+2. **Proactive, Not Reactive**: System should anticipate needs, not wait for clicks
+3. **Conversational**: Natural language interactions preferred over forms
+4. **Context-Aware**: Always consider user's role, history, patterns
+5. **Production Quality**: Enterprise-grade code, error handling, security
+
+## Architecture
+- **Backend**: Python 3.11+, FastAPI, PostgreSQL, SQLAlchemy (async)
+- **AI**: Anthropic Claude API (Sonnet 4)
+- **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind, shadcn/ui
+- **Agent System**: Specialist agents for different domains (meetings, complaints, budget, etc.)
+
+## Code Style
+
+### Python (Backend)
+- Use async/await everywhere
+- Type hints required for all functions
+- Docstrings for all classes and public methods
+- Follow PEP 8, use Black formatter
+- Error handling: specific exceptions, informative messages
+- Example:
+```python
+async def prepare_meeting_brief(
+    self,
+    db: AsyncSession,
+    meeting: Meeting
+) -> Dict[str, Any]:
+    """
+    Generate a comprehensive meeting brief
+
+    Args:
+        db: Database session
+        meeting: Meeting model instance
+
+    Returns:
+        Structured brief dictionary
+
+    Raises:
+        ValueError: If meeting data is invalid
+    """
+```
+
+### TypeScript (Frontend)
+- Strict mode enabled
+- Explicit types (avoid `any`)
+- Functional components with hooks
+- Use shadcn/ui components
+- Example:
+```typescript
+interface MeetingBrief {
+  priorityTopics: PriorityTopic[];
+  followUps: FollowUp[];
+  questionsToAsk: string[];
+}
+
+export async function prepareBrief(id: number): Promise<MeetingBrief> {
+  // Implementation
+}
+```
+
+## AI Agent Development
+
+### Agent Structure
+Every agent must:
+1. Extend `BaseAgent`
+2. Have a dedicated `prompts.py` with system prompt and templates
+3. Implement `process()` method
+4. Return structured data (JSON)
+5. Handle errors gracefully
+
+### Prompt Engineering
+- Clear role definition in system prompt
+- Specific output format requirements
+- Include relevant context
+- Request step-by-step reasoning for complex tasks
+- Always specify response format (JSON schema)
+
+Example:
+```python
+SYSTEM_PROMPT = """You are an AI assistant helping Ziv, the Catering Services Manager at HP.
+
+Your role: [specific responsibilities]
+Your focus: [key priorities]
+Your constraints: [limitations]"""
+
+TASK_PROMPT = """[Task description]
+
+CONTEXT:
+{context}
+
+OUTPUT FORMAT (JSON):
+{schema}
+
+Be specific, actionable, and data-driven."""
+```
+
+## Database
+
+### Models
+- Use SQLAlchemy ORM with async
+- All timestamps: `DateTime(timezone=True)`
+- Soft deletes where appropriate (`is_deleted` flag)
+- Indexes on foreign keys and commonly queried fields
+
+### Migrations
+- Use Alembic for schema changes
+- Never edit migrations after commit
+- Test migrations both up and down
+
+## API Design
+
+### Endpoints
+- RESTful conventions
+- Consistent response formats
+- Proper HTTP status codes
+- Pagination for lists (limit/offset)
+- Authentication required (JWT)
+
+### Response Format
+```python
+{
+    "data": {...},  # or []
+    "meta": {
+        "total": 100,
+        "page": 1,
+        "per_page": 20
+    },
+    "error": null  # or error details
+}
+```
+
+## Security
+- Never commit secrets (.env not in git)
+- SQL injection: use parameterized queries (SQLAlchemy handles this)
+- XSS: sanitize user inputs
+- Authentication: JWT tokens
+- Authorization: role-based access control
+
+## Testing
+- Unit tests for agents (mock Claude API)
+- Integration tests for API endpoints
+- Test data in separate fixtures
+- Aim for 80% coverage minimum
+
+## Performance
+- Use async for I/O operations
+- Database: connection pooling, query optimization
+- Redis for caching frequently accessed data
+- Claude API: use prompt caching where possible
+
+## Error Handling
+- Specific exceptions (not generic `Exception`)
+- User-friendly error messages
+- Log all errors with context
+- Graceful degradation (show cached data if API fails)
+
+## Git Workflow
+- Branch: `dev` for development
+- Commits: descriptive messages ("Add meeting prep agent" not "updates")
+- PR before merging to main
+- No force pushes to shared branches
+
+## Phase 1 Focus (Current)
+Building Meeting Prep Agent:
+- Data gathering from database
+- Claude API integration for brief generation
+- API endpoints for meetings
+- Basic frontend to display briefs
+
+Priority: Get one agent working end-to-end before expanding.
+
+## Documentation
+- README.md for each major module
+- API documentation (auto-generated from FastAPI)
+- Agent documentation (purpose, inputs, outputs)
+- Deployment guide
+
+## Common Patterns
+
+### Calling Claude API
+```python
+from backend.services.claude_service import claude_service
+
+response = await claude_service.generate_structured_response(
+    prompt=prompt,
+    system_prompt=SYSTEM_PROMPT,
+    response_format=EXPECTED_SCHEMA
+)
+```
+
+### Database Queries
+```python
+from sqlalchemy import select
+
+result = await db.execute(
+    select(Meeting)
+    .where(Meeting.site_id == site_id)
+    .order_by(Meeting.scheduled_at.desc())
+)
+meetings = result.scalars().all()
+```
+
+### API Endpoints
+```python
+@router.post("/{id}/action", response_model=ResponseSchema)
+async def perform_action(
+    id: int,
+    data: RequestSchema,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Validate
+    # Process
+    # Return
+```
+
+## Questions to Ask Before Coding
+1. Is this AI-native or traditional CRUD? (We want AI-native)
+2. Can this be proactive instead of reactive?
+3. What context does Claude need to do this well?
+4. How do we handle errors gracefully?
+5. Is this the simplest solution that works?
+
+## When in Doubt
+- Start simple, iterate based on real usage
+- Prefer clear code over clever code
+- Ask "Does this help Ziv be more effective?"
+- Check existing code for patterns before inventing new ones

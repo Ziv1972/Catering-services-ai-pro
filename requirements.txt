@@ -1,0 +1,40 @@
+# FastAPI & Server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.25
+alembic==1.13.1
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+
+# AI & ML
+anthropic==0.18.1
+langchain==0.1.6
+langchain-anthropic==0.1.4
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.0
+
+# API Integrations
+google-auth==2.27.0
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.116.0
+slack-sdk==3.26.2
+
+# Utilities
+pydantic==2.5.3
+pydantic-settings==2.1.0
+redis==5.0.1
+celery==5.3.6
+httpx==0.26.0
+
+# Development
+pytest==7.4.4
+pytest-asyncio==0.23.3
+black==24.1.1
+ruff==0.1.14
