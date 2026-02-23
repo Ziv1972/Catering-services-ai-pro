@@ -51,7 +51,7 @@ export const authAPI = {
 // Meetings
 export const meetingsAPI = {
   list: async (upcomingOnly = true) => {
-    const response = await api.get('/api/meetings', {
+    const response = await api.get('/api/meetings/', {
       params: { upcoming_only: upcomingOnly },
     });
     return response.data;
@@ -63,7 +63,7 @@ export const meetingsAPI = {
   },
 
   create: async (data: any) => {
-    const response = await api.post('/api/meetings', data);
+    const response = await api.post('/api/meetings/', data);
     return response.data;
   },
 
