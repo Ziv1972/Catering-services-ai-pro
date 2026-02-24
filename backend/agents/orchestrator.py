@@ -3,6 +3,11 @@ Agent Orchestrator - Routes requests to specialist agents
 """
 from typing import Dict, Any
 from backend.agents.meeting_prep.agent import MeetingPrepAgent
+from backend.agents.complaint_intelligence.agent import ComplaintIntelligenceAgent
+from backend.agents.budget_intelligence.agent import BudgetIntelligenceAgent
+from backend.agents.event_coordination.agent import EventCoordinationAgent
+from backend.agents.dietary_compliance.agent import DietaryComplianceAgent
+from backend.agents.communication_hub.agent import CommunicationHubAgent
 
 
 class AgentOrchestrator:
@@ -13,12 +18,11 @@ class AgentOrchestrator:
     def __init__(self):
         self.agents = {
             "meeting_prep": MeetingPrepAgent(),
-            # Future agents:
-            # "complaint_intelligence": ComplaintIntelligenceAgent(),
-            # "budget_intelligence": BudgetIntelligenceAgent(),
-            # "event_coordination": EventCoordinationAgent(),
-            # "dietary_compliance": DietaryComplianceAgent(),
-            # "communication_hub": CommunicationHubAgent(),
+            "complaint_intelligence": ComplaintIntelligenceAgent(),
+            "budget_intelligence": BudgetIntelligenceAgent(),
+            "event_coordination": EventCoordinationAgent(),
+            "dietary_compliance": DietaryComplianceAgent(),
+            "communication_hub": CommunicationHubAgent(),
         }
 
     async def route(self, agent_name: str, context: Dict[str, Any]) -> Dict[str, Any]:

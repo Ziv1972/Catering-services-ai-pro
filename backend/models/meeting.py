@@ -25,6 +25,9 @@ class Meeting(Base):
     duration_minutes = Column(Integer, default=60)
     site_id = Column(Integer, ForeignKey("sites.id"), nullable=True)
 
+    # Power Automate integration
+    outlook_event_id = Column(String, unique=True, nullable=True, index=True)
+
     # AI-generated content
     ai_brief = Column(Text, nullable=True)  # Pre-meeting brief
     ai_agenda = Column(Text, nullable=True)  # Suggested agenda

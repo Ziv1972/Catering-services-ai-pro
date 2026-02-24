@@ -44,25 +44,20 @@ export default function CreateMeetingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b">
-        <div className="max-w-3xl mx-auto px-4 py-6">
-          <Button
-            variant="ghost"
-            onClick={() => router.push('/meetings')}
-            className="mb-4"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Meetings
-          </Button>
-          <h1 className="text-3xl font-bold text-gray-900">Schedule New Meeting</h1>
-          <p className="text-gray-500 mt-1">
-            Create a meeting and generate an AI-powered brief
-          </p>
-        </div>
-      </header>
-
+    <div>
       <main className="max-w-3xl mx-auto px-4 py-8">
+        <Button
+          variant="ghost"
+          onClick={() => router.push('/meetings')}
+          className="mb-4"
+        >
+          <ArrowLeft className="w-4 h-4 mr-2" />
+          Back to Meetings
+        </Button>
+        <h2 className="text-2xl font-bold text-gray-900 mb-1">Schedule New Meeting</h2>
+        <p className="text-gray-500 text-sm mb-6">
+          Create a meeting and generate an AI-powered brief
+        </p>
         <Card>
           <CardHeader>
             <CardTitle>Meeting Details</CardTitle>
@@ -169,3 +164,4 @@ export default function CreateMeetingPage() {
     </div>
   );
 }
+

@@ -58,64 +58,58 @@ export default function MeetingDetailPage() {
   const scheduledDate = new Date(meeting.scheduled_at);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b">
-        <div className="max-w-5xl mx-auto px-4 py-6">
-          <Button
-            variant="ghost"
-            onClick={() => router.push('/meetings')}
-            className="mb-4"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Meetings
-          </Button>
+    <div>
+      <main className="max-w-5xl mx-auto px-4 py-8">
+        <Button
+          variant="ghost"
+          onClick={() => router.push('/meetings')}
+          className="mb-4"
+        >
+          <ArrowLeft className="w-4 h-4 mr-2" />
+          Back to Meetings
+        </Button>
 
-          <div className="flex justify-between items-start">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                {meeting.title}
-              </h1>
+        <div className="flex justify-between items-start mb-6">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">
+              {meeting.title}
+            </h2>
 
-              <div className="flex items-center gap-4 mt-3 text-sm text-gray-600">
-                <div className="flex items-center">
-                  <Calendar className="w-4 h-4 mr-1.5" />
-                  {format(scheduledDate, 'EEEE, MMMM d, yyyy')}
-                </div>
-                <div className="flex items-center">
-                  <Clock className="w-4 h-4 mr-1.5" />
-                  {format(scheduledDate, 'h:mm a')} ({meeting.duration_minutes} min)
-                </div>
-                {meeting.site_id && (
-                  <div className="flex items-center">
-                    <MapPin className="w-4 h-4 mr-1.5" />
-                    Site {meeting.site_id}
-                  </div>
-                )}
+            <div className="flex items-center gap-4 mt-2 text-sm text-gray-600">
+              <div className="flex items-center">
+                <Calendar className="w-4 h-4 mr-1.5" />
+                {format(scheduledDate, 'EEEE, MMMM d, yyyy')}
               </div>
-
-              <div className="mt-3">
-                <Badge variant="secondary">
-                  {meeting.meeting_type.replace('_', ' ')}
-                </Badge>
+              <div className="flex items-center">
+                <Clock className="w-4 h-4 mr-1.5" />
+                {format(scheduledDate, 'h:mm a')} ({meeting.duration_minutes} min)
               </div>
+              {meeting.site_id && (
+                <div className="flex items-center">
+                  <MapPin className="w-4 h-4 mr-1.5" />
+                  Site {meeting.site_id}
+                </div>
+              )}
             </div>
 
-            {!hasBrief && (
-              <Button
-                onClick={handleGenerateBrief}
-                disabled={generating}
-                size="lg"
-              >
-                <Sparkles className="w-4 h-4 mr-2" />
-                {generating ? 'Generating...' : 'Prepare Brief'}
-              </Button>
-            )}
+            <div className="mt-2">
+              <Badge variant="secondary">
+                {meeting.meeting_type.replace('_', ' ')}
+              </Badge>
+            </div>
           </div>
-        </div>
-      </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-8">
+          {!hasBrief && (
+            <Button
+              onClick={handleGenerateBrief}
+              disabled={generating}
+              size="lg"
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              {generating ? 'Generating...' : 'Prepare Brief'}
+            </Button>
+          )}
+        </div>
         {!hasBrief ? (
           <Card className="p-12 text-center">
             <Sparkles className="w-16 h-16 text-gray-300 mx-auto mb-4" />
@@ -138,3 +132,4 @@ export default function MeetingDetailPage() {
     </div>
   );
 }
+

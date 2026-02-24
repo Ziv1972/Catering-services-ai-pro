@@ -5,13 +5,21 @@ menu checks, check results, proformas, quantity limits, anomalies.
 """
 import sqlite3
 import json
+import os
 import random
 from datetime import date, timedelta
 
 DB_PATH = "scripts/foodhouse_test.db"
 
+# Fixed seed for reproducible test data
+random.seed(42)
+
 
 def create_test_db():
+    # Remove old DB for clean start
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 

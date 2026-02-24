@@ -37,26 +37,20 @@ export default function MeetingsPage() {
   }, {});
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 py-6">
-          <div className="flex justify-between items-center">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Meetings</h1>
-              <p className="text-gray-500 mt-1">
-                {meetings.length} upcoming meetings
-              </p>
-            </div>
-
-            <Button onClick={() => router.push('/meetings/new')}>
-              <Plus className="w-4 h-4 mr-2" />
-              New Meeting
-            </Button>
-          </div>
-        </div>
-      </header>
-
+    <div>
       <main className="max-w-7xl mx-auto px-4 py-8">
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Meetings</h2>
+            <p className="text-gray-500 text-sm">
+              {meetings.length} upcoming meetings
+            </p>
+          </div>
+          <Button onClick={() => router.push('/meetings/new')}>
+            <Plus className="w-4 h-4 mr-2" />
+            New Meeting
+          </Button>
+        </div>
         {loading ? (
           <div className="text-center py-12">Loading meetings...</div>
         ) : meetings.length === 0 ? (
@@ -97,3 +91,4 @@ export default function MeetingsPage() {
     </div>
   );
 }
+

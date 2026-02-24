@@ -7,6 +7,20 @@ from sqlalchemy.orm import relationship
 from backend.database import Base
 
 
+class ComplianceRule(Base):
+    """Compliance rule definition"""
+    __tablename__ = "compliance_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+    rule_type = Column(String, nullable=False)  # mandatory, frequency
+    description = Column(Text, nullable=True)
+    category = Column(String, nullable=True)  # Dietary, Menu Variety, Daily Requirements
+    parameters = Column(JSON, nullable=True)  # {"frequency": "daily", "max_per_week": 2}
+    priority = Column(Integer, default=1)
+    is_active = Column(Boolean, default=True)
+
+
 class MenuCheck(Base):
     """Monthly menu compliance check"""
     __tablename__ = "menu_checks"

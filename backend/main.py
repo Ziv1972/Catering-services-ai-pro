@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.config import get_settings
 from backend.api import auth, meetings, chat, dashboard, complaints
+from backend.api import menu_compliance, proformas, historical, anomalies, webhooks, suppliers
 
 settings = get_settings()
 
@@ -17,7 +18,7 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Next.js dev server
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,6 +30,12 @@ app.include_router(meetings.router, prefix="/api/meetings", tags=["Meetings"])
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 app.include_router(complaints.router, prefix="/api/complaints", tags=["Complaints"])
+app.include_router(menu_compliance.router, prefix="/api/menu-compliance", tags=["Menu Compliance"])
+app.include_router(proformas.router, prefix="/api/proformas", tags=["Proformas"])
+app.include_router(historical.router, prefix="/api/historical", tags=["Historical"])
+app.include_router(anomalies.router, prefix="/api/anomalies", tags=["Anomalies"])
+app.include_router(webhooks.router, prefix="/api/webhooks", tags=["Webhooks"])
+app.include_router(suppliers.router, prefix="/api/suppliers", tags=["Suppliers"])
 
 
 @app.get("/")
