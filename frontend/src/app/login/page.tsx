@@ -25,8 +25,9 @@ export default function LoginPage() {
       const data = await authAPI.login(email, password);
       localStorage.setItem('access_token', data.access_token);
       router.push('/');
-    } catch (err) {
-      setError('Invalid email or password');
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || err?.message || 'Unknown error';
+      setError(`Login failed: ${msg}`);
     } finally {
       setLoading(false);
     }

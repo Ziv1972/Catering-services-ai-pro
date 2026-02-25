@@ -3,7 +3,7 @@
  */
 import axios from 'axios';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000');
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -39,13 +39,13 @@ api.interceptors.response.use(
 // Auth
 export const authAPI = {
   login: async (email: string, password: string) => {
-    const formData = new FormData();
-    formData.append('username', email);
-    formData.append('password', password);
-    const response = await api.post('/api/auth/login', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `username=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`,
     });
-    return response.data;
+    if (!response.ok) throw new Error('Login failed');
+    return response.json();
   },
 
   register: async (email: string, fullName: string, password: string) => {
@@ -306,6 +306,169 @@ export const anomaliesAPI = {
     const response = await api.post(`/api/anomalies/${id}/resolve`, {
       resolution_notes: notes,
     });
+    return response.data;
+  },
+};
+
+// Dashboard
+export const dashboardAPI = {
+  get: async () => {
+    const response = await api.get('/api/dashboard');
+    return response.data;
+  },
+};
+
+// Supplier Budgets
+export const supplierBudgetsAPI = {
+  list: async (params?: { supplier_id?: number; site_id?: number; year?: number }) => {
+    const response = await api.get('/api/supplier-budgets', { params });
+    return response.data;
+  },
+
+  create: async (data: any) => {
+    const response = await api.post('/api/supplier-budgets', data);
+    return response.data;
+  },
+
+  update: async (id: number, data: any) => {
+    const response = await api.put(`/api/supplier-budgets/${id}`, data);
+    return response.data;
+  },
+
+  delete: async (id: number) => {
+    const response = await api.delete(`/api/supplier-budgets/${id}`);
+    return response.data;
+  },
+
+  vsActual: async (params?: { year?: number; site_id?: number }) => {
+    const response = await api.get('/api/supplier-budgets/vs-actual', { params });
+    return response.data;
+  },
+
+  addProductLimit: async (budgetId: number, data: any) => {
+    const response = await api.post(`/api/supplier-budgets/${budgetId}/product-limits`, data);
+    return response.data;
+  },
+};
+
+// Projects
+export const projectsAPI = {
+  list: async (params?: { status?: string; site_id?: number }) => {
+    const response = await api.get('/api/projects', { params });
+    return response.data;
+  },
+
+  get: async (id: number) => {
+    const response = await api.get(`/api/projects/${id}`);
+    return response.data;
+  },
+
+  create: async (data: any) => {
+    const response = await api.post('/api/projects', data);
+    return response.data;
+  },
+
+  update: async (id: number, data: any) => {
+    const response = await api.put(`/api/projects/${id}`, data);
+    return response.data;
+  },
+
+  delete: async (id: number) => {
+    const response = await api.delete(`/api/projects/${id}`);
+    return response.data;
+  },
+
+  addTask: async (projectId: number, data: any) => {
+    const response = await api.post(`/api/projects/${projectId}/tasks`, data);
+    return response.data;
+  },
+
+  updateTask: async (projectId: number, taskId: number, data: any) => {
+    const response = await api.put(`/api/projects/${projectId}/tasks/${taskId}`, data);
+    return response.data;
+  },
+
+  deleteTask: async (projectId: number, taskId: number) => {
+    const response = await api.delete(`/api/projects/${projectId}/tasks/${taskId}`);
+    return response.data;
+  },
+};
+
+// Maintenance
+export const maintenanceAPI = {
+  listBudgets: async (params?: { site_id?: number; year?: number }) => {
+    const response = await api.get('/api/maintenance/budgets', { params });
+    return response.data;
+  },
+
+  createBudget: async (data: any) => {
+    const response = await api.post('/api/maintenance/budgets', data);
+    return response.data;
+  },
+
+  updateBudget: async (id: number, data: any) => {
+    const response = await api.put(`/api/maintenance/budgets/${id}`, data);
+    return response.data;
+  },
+
+  listExpenses: async (params?: { site_id?: number; year?: number; quarter?: number }) => {
+    const response = await api.get('/api/maintenance/expenses', { params });
+    return response.data;
+  },
+
+  createExpense: async (data: any) => {
+    const response = await api.post('/api/maintenance/expenses', data);
+    return response.data;
+  },
+
+  updateExpense: async (id: number, data: any) => {
+    const response = await api.put(`/api/maintenance/expenses/${id}`, data);
+    return response.data;
+  },
+
+  deleteExpense: async (id: number) => {
+    const response = await api.delete(`/api/maintenance/expenses/${id}`);
+    return response.data;
+  },
+
+  summary: async (year?: number) => {
+    const response = await api.get('/api/maintenance/summary', { params: { year } });
+    return response.data;
+  },
+};
+
+// Todos
+export const todosAPI = {
+  list: async (params?: { filter?: string; status?: string; priority?: string }) => {
+    const response = await api.get('/api/todos', { params });
+    return response.data;
+  },
+
+  create: async (data: any) => {
+    const response = await api.post('/api/todos', data);
+    return response.data;
+  },
+
+  update: async (id: number, data: any) => {
+    const response = await api.put(`/api/todos/${id}`, data);
+    return response.data;
+  },
+
+  complete: async (id: number) => {
+    const response = await api.put(`/api/todos/${id}/complete`);
+    return response.data;
+  },
+
+  delete: async (id: number) => {
+    const response = await api.delete(`/api/todos/${id}`);
+    return response.data;
+  },
+};
+
+// Chat
+export const chatAPI = {
+  send: async (message: string) => {
+    const response = await api.post('/api/chat', { message });
     return response.data;
   },
 };

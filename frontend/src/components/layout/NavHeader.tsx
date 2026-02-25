@@ -4,18 +4,22 @@ import { useRouter, usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import {
   CalendarDays, AlertTriangle, FileText, TrendingUp,
-  Utensils, Home, ClipboardCheck, Shield, Building2
+  Utensils, Home, ClipboardCheck, Shield, Building2,
+  FolderKanban, ListTodo, Wrench, DollarSign
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Dashboard', icon: Home },
+  { href: '/budget', label: 'Budget', icon: DollarSign },
+  { href: '/projects', label: 'Projects', icon: FolderKanban },
+  { href: '/maintenance', label: 'Maintenance', icon: Wrench },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays },
-  { href: '/complaints', label: 'Complaints', icon: AlertTriangle },
+  { href: '/todos', label: 'Tasks', icon: ListTodo },
   { href: '/menu-compliance', label: 'Menu Checks', icon: ClipboardCheck },
   { href: '/suppliers', label: 'Suppliers', icon: Building2 },
   { href: '/proformas', label: 'Proformas', icon: FileText },
-  { href: '/anomalies', label: 'Anomalies', icon: Shield },
+  { href: '/complaints', label: 'Complaints', icon: AlertTriangle },
   { href: '/analytics', label: 'Analytics', icon: TrendingUp },
 ];
 
