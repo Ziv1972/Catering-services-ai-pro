@@ -307,13 +307,19 @@ async def budget_drill_down(
     supplier_id: Optional[int] = None,
     site_id: Optional[int] = None,
     year: Optional[int] = None,
+    budget_year: Optional[int] = None,
+    proforma_year: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Drill-down: budget vs actual by month with category breakdown."""
     target_year = year or datetime.now().year
-    proforma_year = await _resolve_proforma_year(db, target_year)
-    budget_year = await _resolve_budget_year(db, target_year)
+
+    # Use explicit years from dashboard if provided, otherwise resolve
+    if not proforma_year:
+        proforma_year = await _resolve_proforma_year(db, target_year)
+    if not budget_year:
+        budget_year = await _resolve_budget_year(db, target_year)
 
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

@@ -596,7 +596,7 @@ export const fineRulesAPI = {
 
 // Dashboard drill-down
 export const drillDownAPI = {
-  budget: async (params?: { supplier_id?: number; site_id?: number; year?: number }) => {
+  budget: async (params?: { supplier_id?: number; site_id?: number; year?: number; budget_year?: number; proforma_year?: number }) => {
     const response = await api.get('/api/dashboard/drill-down/budget', { params });
     return response.data;
   },

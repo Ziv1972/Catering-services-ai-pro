@@ -91,8 +91,13 @@ export default function Dashboard() {
   const openBudgetDrillDown = async (supplier_id?: number, site_id?: number, label?: string) => {
     setDrillDown({ type: 'budget', level: 1, context: { supplier_id, site_id, label }, data: null, loading: true });
     try {
-      const year = data?.proforma_year || data?.budget_year || new Date().getFullYear();
-      const result = await drillDownAPI.budget({ supplier_id, site_id, year });
+      const result = await drillDownAPI.budget({
+        supplier_id,
+        site_id,
+        year: data?.proforma_year || data?.budget_year || new Date().getFullYear(),
+        budget_year: data?.budget_year,
+        proforma_year: data?.proforma_year,
+      });
       setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
@@ -110,12 +115,11 @@ export default function Dashboard() {
       loading: true,
     } : null);
     try {
-      const year = data?.proforma_year || data?.budget_year || new Date().getFullYear();
       const result = await drillDownAPI.products({
         supplier_id: ctx.supplier_id,
         site_id: ctx.site_id,
         month,
-        year,
+        year: data?.proforma_year || data?.budget_year || new Date().getFullYear(),
       });
       setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
