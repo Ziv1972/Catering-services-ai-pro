@@ -17,10 +17,12 @@ from backend.models.complaint import FineRule
 from backend.models.product import Product
 from backend.models.price_list import PriceList, PriceListItem
 from backend.models.menu_compliance import ComplianceRule
+from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping
 from backend.api.auth import get_password_hash
 from backend.api import auth, meetings, chat, dashboard, complaints
 from backend.api import menu_compliance, proformas, historical, anomalies, webhooks, suppliers
 from backend.api import supplier_budgets, projects, maintenance, todos, price_lists, fine_rules
+from backend.api import category_analysis
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -414,6 +416,111 @@ async def lifespan(app: FastAPI):
             await session.commit()
             logger.info(f"Seeded {len(default_compliance_rules)} default compliance rules")
 
+    # Seed product category groups and mappings
+    async with AsyncSessionLocal() as session:
+        existing = await session.execute(select(ProductCategoryGroup))
+        if not existing.scalars().first():
+            groups = [
+                ProductCategoryGroup(name="total_meals", display_name_he="ארוחות", display_name_en="Total Meals", sort_order=1),
+                ProductCategoryGroup(name="working_days", display_name_he="ימי עבודה", display_name_en="Working Days", sort_order=2),
+                ProductCategoryGroup(name="extras_lunch", display_name_he="תוספות לצהריים", display_name_en="Extras for Lunch", sort_order=3),
+                ProductCategoryGroup(name="kitchenette_fruit", display_name_he="מטבחון - פירות", display_name_en="Kitchenette - Fruit", sort_order=4),
+                ProductCategoryGroup(name="kitchenette_dry", display_name_he="מטבחון - יבשים", display_name_en="Kitchenette - Dry Goods", sort_order=5),
+                ProductCategoryGroup(name="kitchenette_dairy", display_name_he="מטבחון - חלבי", display_name_en="Kitchenette - Dairy", sort_order=6),
+                ProductCategoryGroup(name="coffee_tea", display_name_he="קפה/תה/לימון", display_name_en="Coffee/Tea/Lemon", sort_order=7),
+                ProductCategoryGroup(name="cut_veg", display_name_he="פלטות ירקות", display_name_en="Cut Veg Platters", sort_order=8),
+                ProductCategoryGroup(name="coffee_beans", display_name_he="פולי קפה", display_name_en="Coffee Beans", sort_order=9),
+            ]
+            for g in groups:
+                session.add(g)
+            await session.flush()
+
+            # Build group lookup by name
+            grp = {g.name: g.id for g in groups}
+
+            # Product name patterns → category group
+            # From user's Excel: קטגוריות חלוקת פריטים במטבחונים.xlsx
+            mappings_data = [
+                # Group 1: Total Meals
+                (grp["total_meals"], "%ארוחת צהריים%"),
+                (grp["total_meals"], "%ארוחת ערב%"),
+                (grp["total_meals"], "%ארחת ערב%"),
+                (grp["total_meals"], "%ארוחת לילה%"),
+                (grp["total_meals"], "%ארוחות לילה%"),
+                (grp["total_meals"], "%ארוחות שבת%"),
+                (grp["total_meals"], "%ארוזיות שומרים%"),
+                (grp["total_meals"], "%ארוחות שומרים%"),
+                (grp["total_meals"], "%תוספת למנה עיקרית%"),
+                (grp["total_meals"], "%תוספת מנה עיקרית%"),
+                (grp["total_meals"], "%כריך%"),
+                (grp["total_meals"], "%לחמניה%"),
+                (grp["total_meals"], "%השלמת ארוחות%"),
+                (grp["total_meals"], "%ארוחות צהריים%"),
+                # Group 3: Extras for lunch
+                (grp["extras_lunch"], "%תפוחים למכונת מיצים%"),
+                (grp["extras_lunch"], "%גזר קלוף למכונת מיצים%"),
+                (grp["extras_lunch"], "%סלק קלוף למכונת מיצים%"),
+                (grp["extras_lunch"], "%ארטיק%"),
+                (grp["extras_lunch"], "%תרכיז%"),
+                (grp["extras_lunch"], "%הפרש נוזל למדיח%"),
+                (grp["extras_lunch"], "%הפרש ממחיר נוזל%"),
+                # Group 4: Kitchenette - Fruit
+                (grp["kitchenette_fruit"], "%פירות%"),
+                # Group 5: Kitchenette - Dry Goods
+                (grp["kitchenette_dry"], "%סוכר%"),
+                (grp["kitchenette_dry"], "%עוגיות%"),
+                (grp["kitchenette_dry"], "%עוגיו%"),
+                (grp["kitchenette_dry"], "%וופלים%"),
+                (grp["kitchenette_dry"], "%בייגלה%"),
+                (grp["kitchenette_dry"], "%גרנולה%"),
+                (grp["kitchenette_dry"], "%דבש%"),
+                (grp["kitchenette_dry"], "%סילאן%"),
+                (grp["kitchenette_dry"], "%חוויאג%"),
+                (grp["kitchenette_dry"], "%ממתיק%"),
+                (grp["kitchenette_dry"], "%קסמי שיניים%"),
+                (grp["kitchenette_dry"], "%קיסמי שינים%"),
+                (grp["kitchenette_dry"], "%מלח לימון%"),
+                (grp["kitchenette_dry"], "%נוטלה%"),
+                # Group 6: Kitchenette - Dairy
+                (grp["kitchenette_dairy"], "%דנונה%"),
+                (grp["kitchenette_dairy"], "%יופלה%"),
+                (grp["kitchenette_dairy"], "%פרילי%"),
+                (grp["kitchenette_dairy"], "%מילקי%"),
+                (grp["kitchenette_dairy"], "%מעדן%"),
+                (grp["kitchenette_dairy"], "%שמנת%"),
+                (grp["kitchenette_dairy"], "%חלב%"),
+                (grp["kitchenette_dairy"], "%אשל%"),
+                (grp["kitchenette_dairy"], "%גיל,%"),
+                (grp["kitchenette_dairy"], "%גיל %"),
+                (grp["kitchenette_dairy"], "%שוקו%"),
+                (grp["kitchenette_dairy"], "%גבינ%"),
+                (grp["kitchenette_dairy"], "%משקה שקדים%"),
+                # Group 7: Coffee/Tea/Lemon
+                (grp["coffee_tea"], "%קפה שחור%"),
+                (grp["coffee_tea"], "%קפה נמס%"),
+                (grp["coffee_tea"], "%מגורען%"),
+                (grp["coffee_tea"], "%נטול קופאין%"),
+                (grp["coffee_tea"], "%שקיקי תה%"),
+                (grp["coffee_tea"], "%לימון שטוף%"),
+                (grp["coffee_tea"], "%נענע%"),
+                # Group 8: Cut Veg platters
+                (grp["cut_veg"], "%פלטות%ירקות%"),
+                (grp["cut_veg"], "%פלטת%ירקות%"),
+                # Group 9: Coffee Beans
+                (grp["coffee_beans"], "%קפה קדם%"),
+                (grp["coffee_beans"], "%שכירות%Eversys%"),
+                (grp["coffee_beans"], "%שכירות חודשית%"),
+            ]
+
+            for group_id, pattern in mappings_data:
+                session.add(ProductCategoryMapping(
+                    group_id=group_id,
+                    product_name_pattern=pattern,
+                ))
+
+            await session.commit()
+            logger.info(f"Seeded {len(groups)} product category groups with {len(mappings_data)} mappings")
+
     yield
 
     await engine.dispose()
@@ -453,6 +560,7 @@ app.include_router(maintenance.router, prefix="/api/maintenance", tags=["Mainten
 app.include_router(todos.router, prefix="/api/todos", tags=["Todos"])
 app.include_router(price_lists.router, prefix="/api/price-lists", tags=["Price Lists"])
 app.include_router(fine_rules.router, prefix="/api/fine-rules", tags=["Fine Rules"])
+app.include_router(category_analysis.router, prefix="/api/category-analysis", tags=["Category Analysis"])
 
 
 @app.get("/")
