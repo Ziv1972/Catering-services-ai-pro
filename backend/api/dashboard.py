@@ -487,3 +487,84 @@ async def maintenance_drill_down(
         ],
         "total": sum(e.amount for e in expenses),
     }
+
+
+@router.get("/debug-data")
+async def debug_data(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Temporary debug endpoint to check data state on production."""
+    from backend.models.supplier import Supplier
+
+    # Check proformas
+    proforma_result = await db.execute(
+        select(
+            Proforma.id,
+            Proforma.invoice_date,
+            Proforma.supplier_id,
+            Proforma.site_id,
+            Proforma.total_amount,
+        )
+        .order_by(Proforma.invoice_date.desc())
+        .limit(10)
+    )
+    proformas = [
+        {
+            "id": row.id,
+            "date": str(row.invoice_date),
+            "supplier_id": row.supplier_id,
+            "site_id": row.site_id,
+            "total_amount": row.total_amount,
+        }
+        for row in proforma_result
+    ]
+
+    # Check proforma items count and totals
+    items_result = await db.execute(
+        select(
+            ProformaItem.proforma_id,
+            func.count(ProformaItem.id).label("count"),
+            func.sum(ProformaItem.total_price).label("total"),
+        )
+        .group_by(ProformaItem.proforma_id)
+        .order_by(ProformaItem.proforma_id.desc())
+        .limit(10)
+    )
+    items_summary = [
+        {"proforma_id": row.proforma_id, "item_count": row.count, "items_total": row.total}
+        for row in items_result
+    ]
+
+    # Check suppliers
+    suppliers_result = await db.execute(select(Supplier))
+    suppliers = [{"id": s.id, "name": s.name} for s in suppliers_result.scalars().all()]
+
+    # Check budgets
+    budget_result = await db.execute(
+        select(SupplierBudget.id, SupplierBudget.supplier_id, SupplierBudget.site_id,
+               SupplierBudget.year, SupplierBudget.jan, SupplierBudget.yearly_amount,
+               SupplierBudget.is_active)
+        .order_by(SupplierBudget.year.desc())
+    )
+    budgets = [
+        {"id": r.id, "supplier_id": r.supplier_id, "site_id": r.site_id,
+         "year": r.year, "jan": r.jan, "yearly": r.yearly_amount, "active": r.is_active}
+        for r in budget_result
+    ]
+
+    # Resolve years
+    now = datetime.now()
+    budget_year = await _resolve_budget_year(db, now.year)
+    proforma_year = await _resolve_proforma_year(db, now.year)
+
+    return {
+        "current_time": now.isoformat(),
+        "budget_year": budget_year,
+        "proforma_year": proforma_year,
+        "display_month": now.month - 1 if now.month > 1 else 1,
+        "recent_proformas": proformas,
+        "proforma_items_summary": items_summary,
+        "suppliers": suppliers,
+        "budgets": budgets,
+    }
