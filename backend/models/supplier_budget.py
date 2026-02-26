@@ -29,6 +29,9 @@ class SupplierBudget(Base):
     nov = Column(Float, default=0)
     dec = Column(Float, default=0)
 
+    # Shift: "all" (default for existing), "day", "night"
+    shift = Column(String, default="all", nullable=False, server_default="all")
+
     notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
 

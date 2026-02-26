@@ -16,6 +16,7 @@ from backend.models.site import Site
 from backend.models.proforma import Proforma
 from backend.models.supplier_budget import SupplierBudget, SupplierProductBudget
 from backend.api.auth import get_current_user
+from backend.utils.db_compat import year_equals, extract_month
 
 router = APIRouter()
 
@@ -45,6 +46,7 @@ class SupplierBudgetResponse(BaseModel):
     site_name: Optional[str] = None
     year: int
     yearly_amount: float
+    shift: str = "all"
     jan: float
     feb: float
     mar: float
@@ -70,6 +72,7 @@ class SupplierBudgetCreate(BaseModel):
     site_id: int
     year: int
     yearly_amount: float
+    shift: str = "all"
     jan: float = 0
     feb: float = 0
     mar: float = 0
@@ -136,6 +139,7 @@ async def list_budgets(
     supplier_id: Optional[int] = None,
     site_id: Optional[int] = None,
     year: Optional[int] = None,
+    shift: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -156,6 +160,8 @@ async def list_budgets(
         query = query.where(SupplierBudget.site_id == site_id)
     if year:
         query = query.where(SupplierBudget.year == year)
+    if shift:
+        query = query.where(SupplierBudget.shift == shift)
 
     result = await db.execute(query)
     budgets = result.scalars().all()
@@ -169,6 +175,7 @@ async def list_budgets(
             site_name=b.site.name if b.site else None,
             year=b.year,
             yearly_amount=b.yearly_amount,
+            shift=b.shift or "all",
             jan=b.jan or 0, feb=b.feb or 0, mar=b.mar or 0,
             apr=b.apr or 0, may=b.may or 0, jun=b.jun or 0,
             jul=b.jul or 0, aug=b.aug or 0, sep=b.sep or 0,
@@ -212,6 +219,7 @@ async def create_budget(
         site_name=budget.site.name if budget.site else None,
         year=budget.year,
         yearly_amount=budget.yearly_amount,
+        shift=budget.shift or "all",
         jan=budget.jan or 0, feb=budget.feb or 0, mar=budget.mar or 0,
         apr=budget.apr or 0, may=budget.may or 0, jun=budget.jun or 0,
         jul=budget.jul or 0, aug=budget.aug or 0, sep=budget.sep or 0,
@@ -254,6 +262,7 @@ async def update_budget(
         site_name=budget.site.name if budget.site else None,
         year=budget.year,
         yearly_amount=budget.yearly_amount,
+        shift=budget.shift or "all",
         jan=budget.jan or 0, feb=budget.feb or 0, mar=budget.mar or 0,
         apr=budget.apr or 0, may=budget.may or 0, jun=budget.jun or 0,
         jul=budget.jul or 0, aug=budget.aug or 0, sep=budget.sep or 0,
@@ -306,15 +315,16 @@ async def budget_vs_actual(
     budgets = budget_result.scalars().all()
 
     # Get actual spending from proformas grouped by supplier, site, month
+    month_expr = extract_month(Proforma.invoice_date)
     actual_query = (
         select(
             Proforma.supplier_id,
             Proforma.site_id,
-            func.strftime("%m", Proforma.invoice_date).label("month"),
+            month_expr.label("month"),
             func.sum(Proforma.total_amount).label("total"),
         )
-        .where(func.strftime("%Y", Proforma.invoice_date) == str(target_year))
-        .group_by(Proforma.supplier_id, Proforma.site_id, func.strftime("%m", Proforma.invoice_date))
+        .where(year_equals(Proforma.invoice_date, target_year))
+        .group_by(Proforma.supplier_id, Proforma.site_id, month_expr)
     )
     if site_id:
         actual_query = actual_query.where(Proforma.site_id == site_id)

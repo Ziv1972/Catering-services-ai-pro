@@ -7,6 +7,8 @@ import {
   AlertTriangle, FileText, BarChart3
 } from 'lucide-react';
 import { historicalAPI } from '@/lib/api';
+import { X, ArrowLeft } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   ComposedChart,
@@ -15,10 +17,33 @@ import {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
+const MONTH_MAP: Record<string, number> = {
+  Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
+  Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12,
+};
+
+function parseMonthLabel(label: string): { month: number; year: number } | null {
+  const parts = label.split(' ');
+  if (parts.length === 2) {
+    const month = MONTH_MAP[parts[0]];
+    const year = parseInt(parts[1]);
+    if (month && year) return { month, year };
+  }
+  return null;
+}
+
 export default function AnalyticsPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Drill-down state
+  const [drillDown, setDrillDown] = useState<{
+    type: string;
+    label: string;
+    data: any;
+    loading: boolean;
+  } | null>(null);
 
   useEffect(() => {
     loadAnalytics();
@@ -34,6 +59,38 @@ export default function AnalyticsPage() {
       setLoading(false);
     }
   };
+
+  const handleCostClick = async (chartData: any) => {
+    if (!chartData?.activePayload?.[0]?.payload) return;
+    const monthLabel = chartData.activePayload[0].payload.month;
+    const parsed = parseMonthLabel(monthLabel);
+    if (!parsed) return;
+
+    setDrillDown({ type: 'cost', label: monthLabel, data: null, loading: true });
+    try {
+      const result = await historicalAPI.drillDownCost({ month: parsed.month, year: parsed.year });
+      setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
+    } catch {
+      setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
+    }
+  };
+
+  const handleMealClick = async (chartData: any) => {
+    if (!chartData?.activePayload?.[0]?.payload) return;
+    const monthLabel = chartData.activePayload[0].payload.month;
+    const parsed = parseMonthLabel(monthLabel);
+    if (!parsed) return;
+
+    setDrillDown({ type: 'meals', label: monthLabel, data: null, loading: true });
+    try {
+      const result = await historicalAPI.drillDownMeals({ month: parsed.month, year: parsed.year });
+      setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
+    } catch {
+      setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
+    }
+  };
+
+  const fmt = (v: number) => v.toLocaleString('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 });
 
   if (loading) {
     return <div className="flex items-center justify-center h-screen">Loading analytics...</div>;
@@ -154,7 +211,7 @@ export default function AnalyticsPage() {
             <CardContent>
               {data.mealTrends?.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={data.mealTrends}>
+                  <LineChart data={data.mealTrends} onClick={handleMealClick} style={{ cursor: 'pointer' }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" fontSize={12} />
                     <YAxis fontSize={12} />
@@ -189,7 +246,7 @@ export default function AnalyticsPage() {
             <CardContent>
               {data.costTrends?.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={data.costTrends}>
+                  <ComposedChart data={data.costTrends} onClick={handleCostClick} style={{ cursor: 'pointer' }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" fontSize={12} />
                     <YAxis fontSize={12} />
@@ -388,6 +445,96 @@ export default function AnalyticsPage() {
             </CardContent>
           </Card>
         </div>
+        {/* Drill-down Modal */}
+        {drillDown && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setDrillDown(null)}>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm md:max-w-2xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between rounded-t-xl">
+                <h3 className="text-lg font-semibold">
+                  {drillDown.type === 'cost' ? 'Cost Breakdown' : 'Meal Details'} — {drillDown.label}
+                </h3>
+                <button onClick={() => setDrillDown(null)} className="p-1 hover:bg-gray-100 rounded">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6">
+                {drillDown.loading ? (
+                  <p className="text-center text-gray-500 py-8">Loading...</p>
+                ) : drillDown.type === 'cost' ? (
+                  <div>
+                    {drillDown.data?.items?.length > 0 ? (
+                      <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b text-left">
+                            <th className="pb-2 font-medium text-gray-600">Product</th>
+                            <th className="pb-2 font-medium text-gray-600 text-right">Qty</th>
+                            <th className="pb-2 font-medium text-gray-600 text-right">Total Spent</th>
+                            <th className="pb-2 font-medium text-gray-600 text-right">Orders</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {drillDown.data.items.map((item: any, idx: number) => (
+                            <tr key={idx} className="border-b last:border-b-0">
+                              <td className="py-2">{item.product_name}</td>
+                              <td className="py-2 text-right">{item.total_quantity?.toLocaleString()}</td>
+                              <td className="py-2 text-right font-medium">{fmt(item.total_spent)}</td>
+                              <td className="py-2 text-right text-gray-500">{item.order_count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      </div>
+                    ) : (
+                      <p className="text-center text-gray-500 py-8">No cost data for this month</p>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    {drillDown.data?.items?.length > 0 ? (
+                      <>
+                        <div className="grid grid-cols-2 gap-4 mb-4">
+                          <div className="bg-blue-50 rounded-lg p-3 text-center">
+                            <p className="text-2xl font-bold text-blue-700">{drillDown.data.total_meals?.toLocaleString()}</p>
+                            <p className="text-xs text-blue-600">Total Meals</p>
+                          </div>
+                          <div className="bg-purple-50 rounded-lg p-3 text-center">
+                            <p className="text-2xl font-bold text-purple-700">{fmt(drillDown.data.total_cost)}</p>
+                            <p className="text-xs text-purple-600">Total Cost</p>
+                          </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b text-left">
+                              <th className="pb-2 font-medium text-gray-600">Date</th>
+                              <th className="pb-2 font-medium text-gray-600">Site</th>
+                              <th className="pb-2 font-medium text-gray-600 text-right">Meals</th>
+                              <th className="pb-2 font-medium text-gray-600 text-right">Cost</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {drillDown.data.items.map((item: any, idx: number) => (
+                              <tr key={idx} className="border-b last:border-b-0">
+                                <td className="py-2">{item.date}</td>
+                                <td className="py-2">{item.site_name}</td>
+                                <td className="py-2 text-right">{item.meal_count}</td>
+                                <td className="py-2 text-right">{item.cost ? fmt(item.cost) : '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-center text-gray-500 py-8">No meal data for this month</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

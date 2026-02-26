@@ -94,21 +94,22 @@ export default function TodosPage() {
 
   return (
     <main className="max-w-5xl mx-auto px-4 py-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4 sm:mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Tasks & Follow-ups</h1>
-          <p className="text-gray-500 text-sm">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Tasks & Follow-ups</h1>
+          <p className="text-gray-500 text-xs sm:text-sm">
             {myTodos.length + delegated.length} open · {done.length} completed
             {overdueCount > 0 && <span className="text-red-600"> · {overdueCount} overdue</span>}
           </p>
         </div>
         <Button onClick={() => setShowForm(!showForm)} className="bg-emerald-600 hover:bg-emerald-700">
-          <Plus className="w-4 h-4 mr-2" /> New Task
+          <Plus className="w-4 h-4 sm:mr-2" />
+          <span className="hidden sm:inline">New Task</span>
         </Button>
       </div>
 
       {/* Filters */}
-      <div className="flex gap-2 mb-6">
+      <div className="flex gap-2 mb-4 sm:mb-6 overflow-x-auto">
         {[
           { key: 'all', label: 'All' },
           { key: 'mine', label: 'My Tasks' },
@@ -153,7 +154,7 @@ export default function TodosPage() {
                 <input type="date" value={form.due_date} onChange={e => setForm({...form, due_date: e.target.value})}
                   className="w-full px-3 py-2 border rounded-md" />
               </div>
-              <div className="md:col-span-2 flex gap-2">
+              <div className="md:col-span-2 flex flex-col sm:flex-row gap-2">
                 <div className="flex-1">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Link to (optional)</label>
                   <select value={form.linked_entity_type} onChange={e => setForm({...form, linked_entity_type: e.target.value})}
@@ -193,18 +194,18 @@ export default function TodosPage() {
           <div className="space-y-2">
             {myTodos.map((t: any) => (
               <Card key={t.id} className={t.is_overdue ? 'border-red-200' : ''}>
-                <CardContent className="py-3">
-                  <div className="flex items-center gap-3">
-                    <button onClick={() => handleComplete(t.id)}>
+                <CardContent className="py-3 px-3 sm:px-6">
+                  <div className="flex items-start gap-2 sm:gap-3">
+                    <button onClick={() => handleComplete(t.id)} className="mt-0.5 shrink-0">
                       <Circle className="w-5 h-5 text-gray-300 hover:text-green-500 transition-colors" />
                     </button>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        {t.is_overdue && <AlertCircle className="w-4 h-4 text-red-500" />}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                        {t.is_overdue && <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />}
                         <span className={`font-medium text-sm ${t.is_overdue ? 'text-red-700' : ''}`}>{t.title}</span>
                         <Badge className={`text-xs ${getPriorityColor(t.priority)}`}>{t.priority}</Badge>
                         {t.linked_entity_type && (
-                          <Badge variant="outline" className="text-xs">
+                          <Badge variant="outline" className="text-xs hidden sm:inline-flex">
                             <Link2 className="w-3 h-3 mr-1" />{t.linked_entity_label || t.linked_entity_type}
                           </Badge>
                         )}
@@ -217,7 +218,7 @@ export default function TodosPage() {
                         </p>
                       )}
                     </div>
-                    <button onClick={() => handleDelete(t.id)} className="text-gray-400 hover:text-red-500">
+                    <button onClick={() => handleDelete(t.id)} className="text-gray-400 hover:text-red-500 shrink-0">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
@@ -235,15 +236,15 @@ export default function TodosPage() {
           <div className="space-y-2">
             {delegated.map((t: any) => (
               <Card key={t.id} className={t.is_overdue ? 'border-red-200' : ''}>
-                <CardContent className="py-3">
-                  <div className="flex items-center gap-3">
-                    <button onClick={() => handleComplete(t.id)}>
+                <CardContent className="py-3 px-3 sm:px-6">
+                  <div className="flex items-start gap-2 sm:gap-3">
+                    <button onClick={() => handleComplete(t.id)} className="mt-0.5 shrink-0">
                       <Circle className="w-5 h-5 text-gray-300 hover:text-green-500 transition-colors" />
                     </button>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        {t.is_overdue && <AlertCircle className="w-4 h-4 text-red-500" />}
-                        <Badge variant="outline" className="text-xs font-semibold">→ {t.assigned_to}</Badge>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                        {t.is_overdue && <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />}
+                        <Badge variant="outline" className="text-xs font-semibold shrink-0">{t.assigned_to}</Badge>
                         <span className={`font-medium text-sm ${t.is_overdue ? 'text-red-700' : ''}`}>{t.title}</span>
                         <Badge className={`text-xs ${getPriorityColor(t.priority)}`}>{t.priority}</Badge>
                       </div>
@@ -254,7 +255,7 @@ export default function TodosPage() {
                         </p>
                       )}
                     </div>
-                    <button onClick={() => handleDelete(t.id)} className="text-gray-400 hover:text-red-500">
+                    <button onClick={() => handleDelete(t.id)} className="text-gray-400 hover:text-red-500 shrink-0">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>

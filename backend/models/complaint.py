@@ -10,6 +10,7 @@ from enum import Enum
 
 class ComplaintSource(str, Enum):
     EMAIL = "email"
+    WHATSAPP = "whatsapp"
     SLACK = "slack"
     MANUAL = "manual"
     FORM = "form"
@@ -66,6 +67,10 @@ class Complaint(Base):
     ai_suggested_action = Column(Text, nullable=True)
     pattern_group_id = Column(String, nullable=True)  # Links related complaints
 
+    # Fine linkage
+    fine_rule_id = Column(Integer, ForeignKey("fine_rules.id"), nullable=True)
+    fine_amount = Column(Float, nullable=True)  # Actual fine amount applied (may override rule)
+
     # Complainant (optional, may be anonymous)
     employee_name = Column(String, nullable=True)
     employee_email = Column(String, nullable=True)
@@ -93,6 +98,20 @@ class Complaint(Base):
 
     # Relationships
     site = relationship("Site", backref="complaints")
+    fine_rule = relationship("FineRule")
+
+
+class FineRule(Base):
+    """Predefined fine catalog — maps violation types to fine amounts"""
+    __tablename__ = "fine_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    category = Column(SQLEnum(ComplaintCategory, native_enum=False), nullable=False)
+    amount = Column(Float, nullable=False)  # Fine amount in NIS
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class ComplaintPattern(Base):

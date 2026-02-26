@@ -4,6 +4,7 @@ Complaints API endpoints
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from datetime import datetime, timedelta
 from pydantic import BaseModel
@@ -11,8 +12,8 @@ from pydantic import BaseModel
 from backend.database import get_db
 from backend.models.user import User
 from backend.models.complaint import (
-    Complaint, ComplaintPattern, ComplaintSource,
-    ComplaintSeverity, ComplaintStatus
+    Complaint, ComplaintPattern, FineRule, ComplaintSource,
+    ComplaintSeverity, ComplaintStatus, ComplaintCategory
 )
 from backend.api.auth import get_current_user
 from backend.agents.complaint_intelligence.agent import ComplaintIntelligenceAgent
@@ -27,6 +28,10 @@ class ComplaintCreate(BaseModel):
     employee_email: Optional[str] = None
     is_anonymous: bool = False
     source: ComplaintSource = ComplaintSource.MANUAL
+    category: Optional[ComplaintCategory] = None
+    severity: Optional[ComplaintSeverity] = None
+    fine_rule_id: Optional[int] = None
+    fine_amount: Optional[float] = None
 
 
 class ComplaintResponse(BaseModel):
@@ -48,6 +53,9 @@ class ComplaintResponse(BaseModel):
     employee_name: Optional[str]
     is_anonymous: bool
     requires_vendor_action: bool
+    fine_rule_id: Optional[int]
+    fine_amount: Optional[float]
+    fine_rule_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -81,10 +89,20 @@ async def create_complaint(
 ):
     """Create a new complaint and analyze with AI"""
 
-    complaint = Complaint(
-        **complaint_data.model_dump(),
-        received_at=datetime.utcnow()
-    )
+    data = complaint_data.model_dump()
+
+    # If fine_rule_id given but no fine_amount, auto-fill from the rule
+    if data.get("fine_rule_id") and not data.get("fine_amount"):
+        rule_result = await db.execute(
+            select(FineRule).where(FineRule.id == data["fine_rule_id"])
+        )
+        rule = rule_result.scalar_one_or_none()
+        if rule:
+            data["fine_amount"] = rule.amount
+            if not data.get("category"):
+                data["category"] = rule.category
+
+    complaint = Complaint(**data, received_at=datetime.utcnow())
 
     db.add(complaint)
     await db.flush()
@@ -114,7 +132,11 @@ async def list_complaints(
 
     cutoff = datetime.utcnow() - timedelta(days=days)
 
-    query = select(Complaint).where(Complaint.received_at >= cutoff)
+    query = (
+        select(Complaint)
+        .options(selectinload(Complaint.fine_rule))
+        .where(Complaint.received_at >= cutoff)
+    )
 
     if severity:
         query = query.where(Complaint.severity == severity)
@@ -128,7 +150,13 @@ async def list_complaints(
     result = await db.execute(query)
     complaints = result.scalars().all()
 
-    return complaints
+    return [
+        {
+            **ComplaintResponse.model_validate(c).model_dump(),
+            "fine_rule_name": c.fine_rule.name if c.fine_rule else None,
+        }
+        for c in complaints
+    ]
 
 
 @router.get("/patterns/active", response_model=List[PatternResponse])
@@ -187,14 +215,18 @@ async def get_complaint(
     """Get single complaint"""
 
     result = await db.execute(
-        select(Complaint).where(Complaint.id == complaint_id)
+        select(Complaint)
+        .options(selectinload(Complaint.fine_rule))
+        .where(Complaint.id == complaint_id)
     )
     complaint = result.scalar_one_or_none()
 
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
 
-    return complaint
+    resp = ComplaintResponse.model_validate(complaint).model_dump()
+    resp["fine_rule_name"] = complaint.fine_rule.name if complaint.fine_rule else None
+    return resp
 
 
 @router.post("/{complaint_id}/acknowledge")

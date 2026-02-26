@@ -1,5 +1,8 @@
+[phases.setup]
+nixPkgs = ["nodejs_18"]
+
 [phases.build]
-cmds = ["npm run build"]
+cmds = ["npm ci", "npm run build"]
 
 [start]
-cmd = "npm start"
+cmd = "npm start -- -p ${PORT:-3000}"

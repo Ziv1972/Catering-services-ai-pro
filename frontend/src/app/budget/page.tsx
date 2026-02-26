@@ -23,7 +23,8 @@ export default function BudgetPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     supplier_id: '', site_id: '1', year: new Date().getFullYear().toString(),
-    yearly_amount: '', jan: '', feb: '', mar: '', apr: '', may: '', jun: '',
+    shift: 'all', yearly_amount: '',
+    jan: '', feb: '', mar: '', apr: '', may: '', jun: '',
     jul: '', aug: '', sep: '', oct: '', nov: '', dec: '',
   });
 
@@ -57,6 +58,7 @@ export default function BudgetPage() {
         supplier_id: parseInt(form.supplier_id),
         site_id: parseInt(form.site_id),
         year: parseInt(form.year),
+        shift: form.shift,
         yearly_amount: parseFloat(form.yearly_amount) || 0,
       };
       MONTHS.forEach(m => { payload[m] = parseFloat((form as any)[m]) || 0; });
@@ -77,6 +79,7 @@ export default function BudgetPage() {
       supplier_id: b.supplier_id.toString(),
       site_id: b.site_id.toString(),
       year: b.year.toString(),
+      shift: b.shift || 'all',
       yearly_amount: b.yearly_amount.toString(),
       jan: (b.jan || 0).toString(), feb: (b.feb || 0).toString(),
       mar: (b.mar || 0).toString(), apr: (b.apr || 0).toString(),
@@ -125,7 +128,7 @@ export default function BudgetPage() {
             <CardTitle>{editId ? 'Edit Budget' : 'New Supplier Budget'}</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 mb-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Supplier</label>
                 <select value={form.supplier_id} onChange={e => setForm({...form, supplier_id: e.target.value})}
@@ -140,6 +143,15 @@ export default function BudgetPage() {
                   className="w-full px-3 py-2 border rounded-md">
                   <option value="1">Nes Ziona</option>
                   <option value="2">Kiryat Gat</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Shift</label>
+                <select value={form.shift} onChange={e => setForm({...form, shift: e.target.value})}
+                  className="w-full px-3 py-2 border rounded-md">
+                  <option value="all">All</option>
+                  <option value="day">Day</option>
+                  <option value="night">Night</option>
                 </select>
               </div>
               <div>
@@ -160,7 +172,7 @@ export default function BudgetPage() {
             </div>
 
             <p className="text-sm font-medium text-gray-700 mb-2">Monthly Breakdown</p>
-            <div className="grid grid-cols-3 md:grid-cols-6 lg:grid-cols-12 gap-2 mb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 lg:grid-cols-12 gap-2 mb-4">
               {MONTHS.map((m, i) => (
                 <div key={m}>
                   <label className="block text-xs text-gray-500 mb-0.5">{MONTH_LABELS[i]}</label>
@@ -193,7 +205,7 @@ export default function BudgetPage() {
                 <BarChart data={chartData}>
                   <XAxis dataKey="month" />
                   <YAxis tickFormatter={(v: number) => `${(v/1000).toFixed(0)}K`} />
-                  <Tooltip formatter={(val: number) => fmt(val)} />
+                  <Tooltip formatter={(val: any) => fmt(Number(val))} />
                   <Legend />
                   <Bar dataKey="budget" fill="#93c5fd" name="Budget" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="actual" fill="#3b82f6" name="Actual" radius={[4, 4, 0, 0]} />
@@ -225,6 +237,11 @@ export default function BudgetPage() {
                         <h3 className="font-semibold">{b.supplier_name}</h3>
                         <Badge variant="outline">{b.site_name}</Badge>
                         <Badge className="bg-blue-100 text-blue-800">{b.year}</Badge>
+                        {b.shift && b.shift !== 'all' && (
+                          <Badge className={b.shift === 'night' ? 'bg-indigo-100 text-indigo-800' : 'bg-yellow-100 text-yellow-800'}>
+                            {b.shift === 'night' ? 'Night' : 'Day'}
+                          </Badge>
+                        )}
                       </div>
                       <p className="text-sm text-gray-600">
                         Yearly: {fmt(b.yearly_amount)} · Monthly avg: {fmt(ytdBudget / 12)}
@@ -255,7 +272,7 @@ export default function BudgetPage() {
       {vsActual?.totals && (
         <Card className="mt-6 bg-gray-50">
           <CardContent className="py-4">
-            <div className="grid grid-cols-4 gap-4 text-center">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
               <div>
                 <p className="text-xs text-gray-500">Total Budget</p>
                 <p className="text-lg font-bold text-gray-900">{fmt(vsActual.totals.budget)}</p>

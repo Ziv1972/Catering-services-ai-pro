@@ -1,7 +1,7 @@
 """
 Claude API service wrapper
 """
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 from backend.config import get_settings
 from typing import Optional, Dict, Any
 import json
@@ -11,7 +11,7 @@ settings = get_settings()
 
 class ClaudeService:
     def __init__(self):
-        self.client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self.client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
         self.model = settings.CLAUDE_MODEL
         self.max_tokens = settings.CLAUDE_MAX_TOKENS
 
@@ -27,7 +27,7 @@ class ClaudeService:
         """
         messages = [{"role": "user", "content": prompt}]
 
-        response = self.client.messages.create(
+        response = await self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens or self.max_tokens,
             temperature=temperature,

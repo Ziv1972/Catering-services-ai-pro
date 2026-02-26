@@ -3,7 +3,19 @@
  */
 import axios from 'axios';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8000` : 'http://localhost:8000');
+const RAILWAY_BACKEND = 'https://courteous-amazement-production-02e2.up.railway.app';
+
+function getApiBaseUrl(): string {
+  // Explicit env var takes priority
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window === 'undefined') return RAILWAY_BACKEND;
+  // On Railway (*.up.railway.app), use the known backend URL
+  if (window.location.hostname.endsWith('.up.railway.app')) return RAILWAY_BACKEND;
+  // Local dev
+  return `${window.location.protocol}//${window.location.hostname}:8000`;
+}
+
+const API_BASE_URL = getApiBaseUrl();
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -285,6 +297,16 @@ export const historicalAPI = {
     });
     return response.data;
   },
+
+  drillDownCost: async (params?: { month?: number; year?: number; site_id?: number }) => {
+    const response = await api.get('/api/historical/drill-down/cost', { params });
+    return response.data;
+  },
+
+  drillDownMeals: async (params?: { month?: number; year?: number; site_id?: number }) => {
+    const response = await api.get('/api/historical/drill-down/meals', { params });
+    return response.data;
+  },
 };
 
 // Anomalies
@@ -469,6 +491,99 @@ export const todosAPI = {
 export const chatAPI = {
   send: async (message: string) => {
     const response = await api.post('/api/chat', { message });
+    return response.data;
+  },
+};
+
+// Price Lists
+export const priceListsAPI = {
+  list: async (params?: { supplier_id?: number }) => {
+    const response = await api.get('/api/price-lists', { params });
+    return response.data;
+  },
+
+  get: async (id: number) => {
+    const response = await api.get(`/api/price-lists/${id}`);
+    return response.data;
+  },
+
+  create: async (data: { supplier_id: number; effective_date: string; notes?: string }) => {
+    const response = await api.post('/api/price-lists', data);
+    return response.data;
+  },
+
+  addItems: async (priceListId: number, items: Array<{ product_id: number; price: number; unit?: string }>) => {
+    const response = await api.post(`/api/price-lists/${priceListId}/items`, { items });
+    return response.data;
+  },
+
+  delete: async (id: number) => {
+    const response = await api.delete(`/api/price-lists/${id}`);
+    return response.data;
+  },
+
+  getProducts: async (category?: string) => {
+    const response = await api.get('/api/price-lists/products/catalog', {
+      params: category ? { category } : {},
+    });
+    return response.data;
+  },
+
+  getCategories: async () => {
+    const response = await api.get('/api/price-lists/products/categories');
+    return response.data;
+  },
+
+  compare: async (id1: number, id2: number) => {
+    const response = await api.get('/api/price-lists/compare', {
+      params: { price_list_id_1: id1, price_list_id_2: id2 },
+    });
+    return response.data;
+  },
+};
+
+// Fine Rules
+export const fineRulesAPI = {
+  list: async (params?: { category?: string; active_only?: boolean }) => {
+    const response = await api.get('/api/fine-rules', { params });
+    return response.data;
+  },
+
+  create: async (data: { name: string; category: string; amount: number; description?: string }) => {
+    const response = await api.post('/api/fine-rules', data);
+    return response.data;
+  },
+
+  update: async (id: number, data: any) => {
+    const response = await api.put(`/api/fine-rules/${id}`, data);
+    return response.data;
+  },
+
+  delete: async (id: number) => {
+    const response = await api.delete(`/api/fine-rules/${id}`);
+    return response.data;
+  },
+};
+
+// Dashboard drill-down
+export const drillDownAPI = {
+  budget: async (params?: { supplier_id?: number; site_id?: number; year?: number }) => {
+    const response = await api.get('/api/dashboard/drill-down/budget', { params });
+    return response.data;
+  },
+
+  products: async (params?: { supplier_id?: number; site_id?: number; month?: number; year?: number }) => {
+    const response = await api.get('/api/dashboard/drill-down/products', { params });
+    return response.data;
+  },
+
+  project: async (project_id: number) => {
+    const response = await api.get('/api/dashboard/drill-down/project', { params: { project_id } });
+    return response.data;
+  },
+
+  maintenance: async (params?: { site_id?: number; quarter?: number; year?: number }) => {
+    const response = await api.get('/api/dashboard/drill-down/maintenance', { params });
     return response.data;
   },
 };

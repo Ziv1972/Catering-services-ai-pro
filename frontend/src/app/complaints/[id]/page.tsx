@@ -143,11 +143,19 @@ export default function ComplaintDetailPage() {
               </CardHeader>
               <CardContent>
                 <p className="text-gray-700 whitespace-pre-wrap">{complaint.complaint_text}</p>
-                <div className="flex items-center gap-4 mt-4 pt-4 border-t text-sm text-gray-500">
-                  <span className="capitalize">Source: {complaint.source}</span>
+                <div className="flex items-center gap-4 mt-4 pt-4 border-t text-sm text-gray-500 flex-wrap">
+                  <span className="capitalize">Source: {complaint.source === 'whatsapp' ? 'WhatsApp' : complaint.source}</span>
                   {complaint.site_id && <span>Site ID: {complaint.site_id}</span>}
                   {complaint.employee_name && <span>From: {complaint.employee_name}</span>}
                   {complaint.is_anonymous && <Badge variant="secondary">Anonymous</Badge>}
+                  {complaint.fine_amount > 0 && (
+                    <Badge className="bg-purple-100 text-purple-800">
+                      Fine: {complaint.fine_amount.toLocaleString()} NIS
+                    </Badge>
+                  )}
+                  {complaint.fine_rule_name && (
+                    <span className="text-purple-600">Rule: {complaint.fine_rule_name}</span>
+                  )}
                 </div>
               </CardContent>
             </Card>

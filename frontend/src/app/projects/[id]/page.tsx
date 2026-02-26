@@ -232,10 +232,10 @@ export default function ProjectDetailPage() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 flex-wrap justify-end">
                     {TASK_STATUSES.filter(s => s !== t.status).map(s => (
                       <button key={s} onClick={() => handleUpdateTaskStatus(t.id, s)}
-                        className="text-xs px-2 py-1 rounded hover:bg-gray-100 text-gray-500">
+                        className="text-xs px-2 py-1 rounded hover:bg-gray-100 text-gray-500 hidden sm:inline-block">
                         {s === 'in_progress' ? 'start' : s}
                       </button>
                     ))}

@@ -217,8 +217,9 @@ async def upload_menu(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Upload a menu file for compliance checking"""
+    """Upload a menu file and run compliance analysis"""
     import os
+    from backend.services.menu_analysis_service import run_compliance_check
 
     upload_dir = "uploads/menus"
     os.makedirs(upload_dir, exist_ok=True)
@@ -243,10 +244,54 @@ async def upload_menu(
     await db.commit()
     await db.refresh(check)
 
+    # Run compliance analysis
+    try:
+        analysis = await run_compliance_check(check.id, db)
+        return {
+            "id": check.id,
+            "message": "Menu uploaded and compliance check completed.",
+            "file_path": file_path,
+            "analysis": analysis,
+        }
+    except Exception as e:
+        return {
+            "id": check.id,
+            "message": f"Menu uploaded. Compliance check failed: {str(e)}",
+            "file_path": file_path,
+        }
+
+
+@router.post("/checks/{check_id}/run")
+async def rerun_check(
+    check_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Re-run compliance analysis on an existing menu check"""
+    from backend.services.menu_analysis_service import run_compliance_check
+
+    result = await db.execute(
+        select(MenuCheck).where(MenuCheck.id == check_id)
+    )
+    check = result.scalar_one_or_none()
+    if not check:
+        raise HTTPException(status_code=404, detail="Menu check not found")
+
+    # Clear old results
+    from sqlalchemy import delete
+    await db.execute(
+        delete(CheckResult).where(CheckResult.menu_check_id == check_id)
+    )
+    await db.execute(
+        delete(MenuDay).where(MenuDay.menu_check_id == check_id)
+    )
+    await db.commit()
+
+    analysis = await run_compliance_check(check_id, db)
     return {
-        "id": check.id,
-        "message": "Menu uploaded successfully. Run compliance check to analyze.",
-        "file_path": file_path,
+        "id": check_id,
+        "message": "Compliance check re-run completed.",
+        "analysis": analysis,
     }
 
 

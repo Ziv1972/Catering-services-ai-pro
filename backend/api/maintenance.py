@@ -13,6 +13,7 @@ from backend.database import get_db
 from backend.models.user import User
 from backend.models.maintenance import MaintenanceBudget, MaintenanceExpense
 from backend.api.auth import get_current_user
+from backend.utils.db_compat import year_equals, month_between
 
 router = APIRouter()
 
@@ -210,14 +211,11 @@ async def list_expenses(
     if site_id:
         query = query.where(MaintenanceExpense.site_id == site_id)
     if year:
-        query = query.where(func.strftime("%Y", MaintenanceExpense.date) == str(year))
+        query = query.where(year_equals(MaintenanceExpense.date, year))
     if quarter and year:
         q_start_month = (quarter - 1) * 3 + 1
         q_end_month = quarter * 3
-        query = query.where(
-            func.cast(func.strftime("%m", MaintenanceExpense.date), type_=None) >= q_start_month,
-            func.cast(func.strftime("%m", MaintenanceExpense.date), type_=None) <= q_end_month,
-        )
+        query = query.where(month_between(MaintenanceExpense.date, q_start_month, q_end_month))
     if category:
         query = query.where(MaintenanceExpense.category == category)
 
