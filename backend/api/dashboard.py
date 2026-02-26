@@ -492,7 +492,6 @@ async def maintenance_drill_down(
 @router.get("/debug-data")
 async def debug_data(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
 ):
     """Temporary debug endpoint to check data state on production."""
     from backend.models.supplier import Supplier

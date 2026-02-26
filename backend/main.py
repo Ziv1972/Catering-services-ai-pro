@@ -33,6 +33,27 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created")
 
+    # Run column migrations for existing tables (create_all doesn't ALTER tables)
+    async with AsyncSessionLocal() as session:
+        from backend.database import is_sqlite
+        migrations = [
+            ("supplier_budgets", "shift", "VARCHAR DEFAULT 'all'"),
+            ("complaints", "fine_rule_id", "INTEGER"),
+            ("complaints", "fine_amount", "FLOAT DEFAULT 0"),
+        ]
+        for table, column, col_type in migrations:
+            try:
+                await session.execute(text(f"SELECT {column} FROM {table} LIMIT 1"))
+            except Exception:
+                await session.rollback()
+                try:
+                    await session.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+                    await session.commit()
+                    logger.info(f"Added column {table}.{column}")
+                except Exception as e:
+                    await session.rollback()
+                    logger.warning(f"Could not add column {table}.{column}: {e}")
+
     # Seed default user and sites
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User).where(User.email == "ziv@hp.com"))
@@ -59,16 +80,38 @@ async def lifespan(app: FastAPI):
 
     # Recalculate proforma totals from line items (fixes migrated data)
     async with AsyncSessionLocal() as session:
-        result = await session.execute(text("""
-            UPDATE proformas SET total_amount = (
-                SELECT COALESCE(SUM(total_price), 0)
-                FROM proforma_items
-                WHERE proforma_items.proforma_id = proformas.id
-            )
-            WHERE total_amount = 0 OR total_amount IS NULL
-        """))
-        await session.commit()
-        logger.info("Recalculated proforma totals from line items")
+        # First check how many need recalculation
+        check = await session.execute(text(
+            "SELECT COUNT(*) FROM proformas WHERE total_amount = 0 OR total_amount IS NULL"
+        ))
+        zero_count = check.scalar() or 0
+        logger.info(f"Proformas with zero/null totals: {zero_count}")
+
+        if zero_count > 0:
+            # Check if line items have data
+            items_check = await session.execute(text(
+                "SELECT COUNT(*), COALESCE(SUM(total_price), 0) FROM proforma_items"
+            ))
+            items_row = items_check.fetchone()
+            logger.info(f"Proforma items: count={items_row[0]}, sum={items_row[1]}")
+
+            result = await session.execute(text("""
+                UPDATE proformas SET total_amount = (
+                    SELECT COALESCE(SUM(total_price), 0)
+                    FROM proforma_items
+                    WHERE proforma_items.proforma_id = proformas.id
+                )
+                WHERE total_amount = 0 OR total_amount IS NULL
+            """))
+            await session.commit()
+            logger.info(f"Recalculated {zero_count} proforma totals from line items")
+        else:
+            # Log current totals for verification
+            totals_check = await session.execute(text(
+                "SELECT COUNT(*), SUM(total_amount) FROM proformas"
+            ))
+            totals_row = totals_check.fetchone()
+            logger.info(f"All proforma totals OK: count={totals_row[0]}, sum={totals_row[1]}")
 
     # Seed FoodHouse supplier and budgets if missing
     async with AsyncSessionLocal() as session:
