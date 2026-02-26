@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
-  DollarSign, FileText, TrendingUp, Package,
-  ArrowRight, AlertTriangle, Plus, X, Check, Trash2
+  FileText, TrendingUp, Package,
+  ArrowRight, AlertTriangle, Plus, X, Check, Trash2, Receipt
 } from 'lucide-react';
 import { proformasAPI, suppliersAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -288,10 +288,10 @@ export default function ProformasPage() {
               <div>
                 <p className="text-sm text-gray-600">Total Amount</p>
                 <p className="text-4xl font-bold text-green-600 mt-1">
-                  {totalAmount.toLocaleString('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })}
+                  ₪{totalAmount.toLocaleString('en-US', { maximumFractionDigits: 0 })}
                 </p>
               </div>
-              <DollarSign className="w-7 h-7 text-green-500" />
+              <Receipt className="w-7 h-7 text-green-500" />
             </div>
           </Card>
 
@@ -338,7 +338,7 @@ export default function ProformasPage() {
                         <p className="text-sm text-gray-500">{pct}% of total spend</p>
                       </div>
                       <p className="text-lg font-bold text-gray-900">
-                        {vendor.total.toLocaleString('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })}
+                        ₪{vendor.total.toLocaleString('en-US', { maximumFractionDigits: 0 })}
                       </p>
                     </div>
                   );
@@ -346,7 +346,7 @@ export default function ProformasPage() {
                 <div className="flex items-center justify-between p-3 border-t-2 pt-4">
                   <p className="font-semibold text-gray-900">Grand Total</p>
                   <p className="text-xl font-bold text-blue-600">
-                    {spending.grand_total.toLocaleString('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })}
+                    ₪{spending.grand_total.toLocaleString('en-US', { maximumFractionDigits: 0 })}
                   </p>
                 </div>
               </div>
@@ -388,7 +388,7 @@ export default function ProformasPage() {
                       <div className="flex items-center gap-4 text-sm text-gray-600">
                         <span>{format(new Date(proforma.invoice_date), 'MMM d, yyyy')}</span>
                         <span className="font-semibold text-gray-900">
-                          {proforma.total_amount.toLocaleString('he-IL', { style: 'currency', currency: proforma.currency })}
+                          {proforma.currency === 'ILS' ? '₪' : '$'}{proforma.total_amount.toLocaleString('en-US', { maximumFractionDigits: 0 })}
                         </span>
                       </div>
                     </div>

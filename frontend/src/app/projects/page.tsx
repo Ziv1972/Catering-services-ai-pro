@@ -158,7 +158,7 @@ export default function ProjectsPage() {
                       <div className="flex items-center gap-2 flex-1 max-w-xs">
                         <div className="flex-1 h-2.5 bg-gray-200 rounded-full">
                           <div className="h-2.5 bg-purple-500 rounded-full transition-all"
-                            style={{ width: `${p.progress}%` }} />
+                            style={{ width: `${p.task_count > 0 ? Math.round((p.done_count / p.task_count) * 100) : 0}%` }} />
                         </div>
                         <span className="text-sm text-gray-600 font-medium">
                           {p.done_count}/{p.task_count} tasks

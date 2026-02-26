@@ -92,7 +92,7 @@ export default function BudgetPage() {
     setShowForm(true);
   };
 
-  const fmt = (v: number) => v.toLocaleString('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 });
+  const fmt = (v: number) => `₪${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
   // Build chart data from vs-actual
   const chartData = vsActual ? MONTH_LABELS.map((label, idx) => {
@@ -201,7 +201,7 @@ export default function BudgetPage() {
           </CardHeader>
           <CardContent>
             <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                 <BarChart data={chartData}>
                   <XAxis dataKey="month" />
                   <YAxis tickFormatter={(v: number) => `${(v/1000).toFixed(0)}K`} />
@@ -228,6 +228,7 @@ export default function BudgetPage() {
         <div className="space-y-4">
           {budgets.map((b: any) => {
             const ytdBudget = MONTHS.reduce((s, m) => s + ((b as any)[m] || 0), 0);
+            const displayYearly = b.yearly_amount > 0 ? b.yearly_amount : ytdBudget;
             return (
               <Card key={b.id}>
                 <CardContent className="py-4">
@@ -244,7 +245,7 @@ export default function BudgetPage() {
                         )}
                       </div>
                       <p className="text-sm text-gray-600">
-                        Yearly: {fmt(b.yearly_amount)} · Monthly avg: {fmt(ytdBudget / 12)}
+                        Yearly: {fmt(displayYearly)} · Monthly avg: {fmt(ytdBudget / 12)}
                       </p>
                       {b.product_budgets?.length > 0 && (
                         <div className="flex gap-2 mt-2">

@@ -36,7 +36,7 @@ export function NavHeader() {
   };
 
   return (
-    <header className="bg-white border-b sticky top-0 z-20 overflow-x-clip">
+    <header className="bg-white border-b sticky top-0 z-20">
       <div className="max-w-7xl mx-auto px-4">
         {/* Top row */}
         <div className="flex justify-between items-center py-3">
@@ -64,7 +64,7 @@ export function NavHeader() {
         </div>
 
         {/* Desktop navigation tabs */}
-        <nav className="hidden md:flex gap-1 -mb-px overflow-x-auto pb-px scrollbar-thin">
+        <nav className="hidden md:flex gap-0.5 -mb-px overflow-x-auto pb-px scrollbar-thin">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href ||
@@ -75,7 +75,7 @@ export function NavHeader() {
                 key={item.href}
                 onClick={() => navigate(item.href)}
                 className={cn(
-                  'flex items-center gap-2 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap shrink-0',
+                  'flex items-center gap-1.5 px-2.5 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap shrink-0',
                   isActive
                     ? 'border-blue-600 text-blue-600'
                     : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'

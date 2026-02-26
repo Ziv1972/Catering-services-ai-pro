@@ -188,7 +188,18 @@ export default function AnalyticsPage() {
     return '';
   };
 
-  const fmt = (v: number) => v.toLocaleString('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 });
+  const fmt = (v: number) => `₪${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+
+  // Sort chart data chronologically by month label (e.g. "Jan 2025")
+  const sortByMonth = (arr: any[] | undefined): any[] => {
+    if (!arr?.length) return [];
+    return [...arr].sort((a, b) => {
+      const pa = parseMonthLabel(a.month);
+      const pb = parseMonthLabel(b.month);
+      if (!pa || !pb) return 0;
+      return pa.year !== pb.year ? pa.year - pb.year : pa.month - pb.month;
+    });
+  };
 
   if (loading) {
     return <div className="flex items-center justify-center h-screen">Loading analytics...</div>;
@@ -211,14 +222,20 @@ export default function AnalyticsPage() {
   const counts = data.counts || {};
   const totalRecords = Object.values(counts).reduce((sum: number, c: any) => sum + (c || 0), 0);
 
+  // Sort all chart data chronologically
+  const sortedMealTrends = sortByMonth(data.mealTrends);
+  const sortedCostTrends = sortByMonth(data.costTrends);
+  const sortedVendorSeries = sortByMonth(data.vendorSeries);
+  const sortedMenuFindings = sortByMonth(data.menuFindings);
+
   // Extract dynamic site keys from meal trends for the chart
-  const siteKeys = data.mealTrends?.length > 0
-    ? Object.keys(data.mealTrends[0]).filter((k: string) => k !== 'month')
+  const siteKeys = sortedMealTrends.length > 0
+    ? Object.keys(sortedMealTrends[0]).filter((k: string) => k !== 'month')
     : [];
 
   // Extract dynamic vendor keys from vendor series
-  const vendorKeys = data.vendorSeries?.length > 0
-    ? Object.keys(data.vendorSeries[0]).filter(
+  const vendorKeys = sortedVendorSeries.length > 0
+    ? Object.keys(sortedVendorSeries[0]).filter(
         (k: string) => !['month', 'total', 'ma_3m'].includes(k)
       )
     : [];
@@ -307,9 +324,9 @@ export default function AnalyticsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {data.mealTrends?.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={data.mealTrends} onClick={handleMealClick} style={{ cursor: 'pointer' }}>
+              {sortedMealTrends?.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300} minWidth={1}>
+                  <LineChart data={sortedMealTrends} onClick={handleMealClick} style={{ cursor: 'pointer' }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" fontSize={12} />
                     <YAxis fontSize={12} />
@@ -342,9 +359,9 @@ export default function AnalyticsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {data.costTrends?.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={data.costTrends} onClick={handleCostClick} style={{ cursor: 'pointer' }}>
+              {sortedCostTrends?.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300} minWidth={1}>
+                  <ComposedChart data={sortedCostTrends} onClick={handleCostClick} style={{ cursor: 'pointer' }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" fontSize={12} />
                     <YAxis fontSize={12} />
@@ -380,7 +397,7 @@ export default function AnalyticsPage() {
             </CardHeader>
             <CardContent>
               {data.complaintCategories?.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
+                <ResponsiveContainer width="100%" height={300} minWidth={1}>
                   <PieChart>
                     <Pie
                       data={data.complaintCategories}
@@ -414,9 +431,9 @@ export default function AnalyticsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {data.menuFindings?.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={data.menuFindings}>
+              {sortedMenuFindings?.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300} minWidth={1}>
+                  <BarChart data={sortedMenuFindings}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" fontSize={12} />
                     <YAxis fontSize={12} />
@@ -443,9 +460,9 @@ export default function AnalyticsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {data.vendorSeries?.length > 0 ? (
-              <ResponsiveContainer width="100%" height={400}>
-                <ComposedChart data={data.vendorSeries}>
+            {sortedVendorSeries?.length > 0 ? (
+              <ResponsiveContainer width="100%" height={400} minWidth={1}>
+                <ComposedChart data={sortedVendorSeries}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="month" fontSize={12} />
                   <YAxis fontSize={12} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
@@ -488,7 +505,7 @@ export default function AnalyticsPage() {
             </CardHeader>
             <CardContent>
               {data.vendorTotals?.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
+                <ResponsiveContainer width="100%" height={300} minWidth={1}>
                   <PieChart>
                     <Pie
                       data={data.vendorTotals}
@@ -599,7 +616,7 @@ export default function AnalyticsPage() {
                     ) : (
                       <>
                         <div className="h-56 mb-4">
-                          <ResponsiveContainer width="100%" height="100%">
+                          <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                             <BarChart data={catDrill.data?.items || []}>
                               <CartesianGrid strokeDasharray="3 3" />
                               <XAxis dataKey="month_name" tick={{ fontSize: 12 }} />
@@ -664,7 +681,7 @@ export default function AnalyticsPage() {
                     ) : (
                       <>
                         <div className="h-56 mb-4">
-                          <ResponsiveContainer width="100%" height="100%">
+                          <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                             <BarChart data={catDrill.data?.items || []} layout="vertical">
                               <CartesianGrid strokeDasharray="3 3" />
                               <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} />

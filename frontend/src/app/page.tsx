@@ -285,7 +285,7 @@ export default function Dashboard() {
   }));
 
   const formatCurrency = (val: number) =>
-    val.toLocaleString('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 });
+    `₪${val.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
   const getPriorityColor = (p: string) => {
     const colors: Record<string, string> = {
@@ -396,7 +396,7 @@ export default function Dashboard() {
 
                       {/* Budget vs Actual grouped bar chart */}
                       <div className="h-56 mb-4">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                           <BarChart data={visibleItems}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="month_name" tick={{ fontSize: 12 }} />
@@ -414,7 +414,7 @@ export default function Dashboard() {
                         <div className="mb-4">
                           <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Cost by Category per Month</p>
                           <div className="h-48">
-                            <ResponsiveContainer width="100%" height="100%">
+                            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                               <BarChart data={visibleItems}>
                                 <CartesianGrid strokeDasharray="3 3" />
                                 <XAxis dataKey="month_name" tick={{ fontSize: 11 }} />
@@ -638,7 +638,7 @@ export default function Dashboard() {
                   ) : (
                     <>
                       <div className="h-56 mb-4">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                           <BarChart data={drillDown.data?.items || []}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="month_name" tick={{ fontSize: 12 }} />
@@ -703,7 +703,7 @@ export default function Dashboard() {
                   ) : (
                     <>
                       <div className="h-56 mb-4">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                           <BarChart data={drillDown.data?.items || []} layout="vertical">
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
@@ -915,7 +915,7 @@ export default function Dashboard() {
 
               {chartData.length > 0 && (
                 <div className="h-48">
-                  <ResponsiveContainer width="100%" height="100%">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                     <BarChart data={chartData}>
                       <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                       <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
