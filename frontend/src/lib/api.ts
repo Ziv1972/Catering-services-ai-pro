@@ -414,6 +414,35 @@ export const projectsAPI = {
     const response = await api.delete(`/api/projects/${projectId}/tasks/${taskId}`);
     return response.data;
   },
+
+  uploadDocument: async (projectId: number, file: File, taskId?: number) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (taskId) formData.append('task_id', taskId.toString());
+    const response = await api.post(`/api/projects/${projectId}/documents`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+
+  listDocuments: async (projectId: number, taskId?: number) => {
+    const params: any = {};
+    if (taskId) params.task_id = taskId;
+    const response = await api.get(`/api/projects/${projectId}/documents`, { params });
+    return response.data;
+  },
+
+  downloadDocument: async (projectId: number, docId: number) => {
+    const response = await api.get(`/api/projects/${projectId}/documents/${docId}/download`, {
+      responseType: 'blob',
+    });
+    return response;
+  },
+
+  deleteDocument: async (projectId: number, docId: number) => {
+    const response = await api.delete(`/api/projects/${projectId}/documents/${docId}`);
+    return response.data;
+  },
 };
 
 // Maintenance

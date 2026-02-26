@@ -11,7 +11,7 @@ from backend.models.proforma import Proforma, ProformaItem
 from backend.models.operations import QuantityLimit, Anomaly
 from backend.models.complaint import Complaint, ComplaintPattern, FineRule
 from backend.models.supplier_budget import SupplierBudget, SupplierProductBudget
-from backend.models.project import Project, ProjectTask
+from backend.models.project import Project, ProjectTask, ProjectDocument
 from backend.models.maintenance import MaintenanceBudget, MaintenanceExpense
 from backend.models.todo import TodoItem
 
@@ -40,6 +40,7 @@ __all__ = [
     "SupplierProductBudget",
     "Project",
     "ProjectTask",
+    "ProjectDocument",
     "MaintenanceBudget",
     "MaintenanceExpense",
     "TodoItem",

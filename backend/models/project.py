@@ -1,7 +1,7 @@
 """
 Project models - multi-phase project management with linkable tasks
 """
-from sqlalchemy import Column, Integer, String, Text, Date, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Text, Date, DateTime, Float, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from backend.database import Base
@@ -26,6 +26,7 @@ class Project(Base):
     # Relationships
     site = relationship("Site")
     tasks = relationship("ProjectTask", back_populates="project", order_by="ProjectTask.order")
+    documents = relationship("ProjectDocument", back_populates="project")
     creator = relationship("User")
 
 
@@ -52,3 +53,24 @@ class ProjectTask(Base):
 
     # Relationships
     project = relationship("Project", back_populates="tasks")
+    documents = relationship("ProjectDocument", back_populates="task", foreign_keys="ProjectDocument.task_id")
+
+
+class ProjectDocument(Base):
+    __tablename__ = "project_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    task_id = Column(Integer, ForeignKey("project_tasks.id"), nullable=True)
+    filename = Column(String, nullable=False)
+    original_filename = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    file_size = Column(Integer, nullable=True)
+    content_type = Column(String, nullable=True)
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    project = relationship("Project", back_populates="documents")
+    task = relationship("ProjectTask", back_populates="documents", foreign_keys=[task_id])
+    uploader = relationship("User")

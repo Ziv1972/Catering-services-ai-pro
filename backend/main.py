@@ -16,6 +16,7 @@ from backend.models.supplier_budget import SupplierBudget
 from backend.models.complaint import FineRule
 from backend.models.product import Product
 from backend.models.price_list import PriceList, PriceListItem
+from backend.models.menu_compliance import ComplianceRule
 from backend.api.auth import get_password_hash
 from backend.api import auth, meetings, chat, dashboard, complaints
 from backend.api import menu_compliance, proformas, historical, anomalies, webhooks, suppliers
@@ -248,6 +249,127 @@ async def lifespan(app: FastAPI):
 
             await session.commit()
             logger.info("Product catalog and price lists seeded")
+
+    # Seed default menu compliance rules if none exist
+    async with AsyncSessionLocal() as session:
+        existing_rules = await session.execute(select(ComplianceRule))
+        if not existing_rules.scalars().first():
+            default_compliance_rules = [
+                # Daily mandatory categories (priority 1 = critical)
+                ComplianceRule(
+                    name="Daily main course required",
+                    rule_type="mandatory",
+                    category="Daily Requirements",
+                    description="Every day must include a main course (עיקרית)",
+                    parameters={"required_category": "עיקרית"},
+                    priority=1,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Daily salad bar required",
+                    rule_type="mandatory",
+                    category="Daily Requirements",
+                    description="Every day must include salads (סלטים)",
+                    parameters={"required_category": "סלטים"},
+                    priority=1,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Daily soup required",
+                    rule_type="mandatory",
+                    category="Daily Requirements",
+                    description="Every day must include soup (מרק)",
+                    parameters={"required_category": "מרק"},
+                    priority=2,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Daily side dishes required",
+                    rule_type="mandatory",
+                    category="Daily Requirements",
+                    description="Every day must include side dishes (תוספות)",
+                    parameters={"required_category": "תוספות"},
+                    priority=1,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Daily bread required",
+                    rule_type="mandatory",
+                    category="Daily Requirements",
+                    description="Every day must include bread (לחם)",
+                    parameters={"required_category": "לחם"},
+                    priority=2,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Daily drinks required",
+                    rule_type="mandatory",
+                    category="Daily Requirements",
+                    description="Every day must include beverages (שתיה)",
+                    parameters={"required_category": "שתיה"},
+                    priority=2,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Daily dessert required",
+                    rule_type="mandatory",
+                    category="Daily Requirements",
+                    description="Every day must include dessert (קינוח)",
+                    parameters={"required_category": "קינוח"},
+                    priority=2,
+                    is_active=True,
+                ),
+                # Dietary variety rules
+                ComplianceRule(
+                    name="Fish served at least once per week",
+                    rule_type="frequency",
+                    category="Menu Variety",
+                    description="Fish must appear at least once per week",
+                    parameters={"item": "דג", "min_per_week": 1},
+                    priority=2,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Vegetarian option available",
+                    rule_type="mandatory",
+                    category="Dietary",
+                    description="Vegetarian option must be available in the menu",
+                    parameters={"required_item": "צמחוני"},
+                    priority=1,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Chicken not more than 3 times per week",
+                    rule_type="frequency",
+                    category="Menu Variety",
+                    description="Chicken should not be served more than 3 times per week",
+                    parameters={"item": "עוף", "max_per_week": 3},
+                    priority=2,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Schnitzel not more than 2 times per week",
+                    rule_type="frequency",
+                    category="Menu Variety",
+                    description="Schnitzel should not be served more than 2 times per week",
+                    parameters={"item": "שניצל", "max_per_week": 2},
+                    priority=2,
+                    is_active=True,
+                ),
+                ComplianceRule(
+                    name="Fresh fruit available daily",
+                    rule_type="mandatory",
+                    category="Daily Requirements",
+                    description="Fresh fruit must be available (פירות)",
+                    parameters={"required_category": "פירות"},
+                    priority=2,
+                    is_active=True,
+                ),
+            ]
+            for rule in default_compliance_rules:
+                session.add(rule)
+            await session.commit()
+            logger.info(f"Seeded {len(default_compliance_rules)} default compliance rules")
 
     yield
 
