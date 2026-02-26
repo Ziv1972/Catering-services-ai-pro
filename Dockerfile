@@ -16,8 +16,8 @@ RUN pip install --no-cache-dir aiosqlite
 COPY backend/ ./backend/
 COPY scripts/ ./scripts/
 
-# Create uploads directory
-RUN mkdir -p uploads/menus
+# Create uploads directories
+RUN mkdir -p uploads/menus uploads/attachments
 
 # Expose port (Railway sets PORT env var)
 EXPOSE 8000

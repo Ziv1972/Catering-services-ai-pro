@@ -28,6 +28,10 @@ google-auth-httplib2==0.2.0
 google-api-python-client==2.116.0
 slack-sdk==3.26.2
 
+# File Processing
+pdfplumber>=0.10.0
+openpyxl>=3.1.0
+
 # Utilities
 pydantic[email]==2.5.3
 pydantic-settings==2.1.0

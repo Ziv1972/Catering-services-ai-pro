@@ -15,6 +15,7 @@ from backend.models.project import Project, ProjectTask, ProjectDocument
 from backend.models.maintenance import MaintenanceBudget, MaintenanceExpense
 from backend.models.todo import TodoItem
 from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping, WorkingDaysEntry
+from backend.models.attachment import Attachment
 
 __all__ = [
     "User",
@@ -48,4 +49,5 @@ __all__ = [
     "ProductCategoryGroup",
     "ProductCategoryMapping",
     "WorkingDaysEntry",
+    "Attachment",
 ]

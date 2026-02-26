@@ -670,3 +670,33 @@ export const categoryAnalysisAPI = {
     return response.data;
   },
 };
+
+// Attachments (polymorphic file upload for any entity)
+export const attachmentsAPI = {
+  upload: async (entityType: string, entityId: number, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('entity_type', entityType);
+    formData.append('entity_id', String(entityId));
+    const response = await api.post('/api/attachments/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+  list: async (entityType: string, entityId: number) => {
+    const response = await api.get('/api/attachments', { params: { entity_type: entityType, entity_id: entityId } });
+    return response.data;
+  },
+  download: async (attachmentId: number) => {
+    const response = await api.get(`/api/attachments/${attachmentId}/download`, { responseType: 'blob' });
+    return response.data;
+  },
+  delete: async (attachmentId: number) => {
+    const response = await api.delete(`/api/attachments/${attachmentId}`);
+    return response.data;
+  },
+  process: async (attachmentId: number, mode: 'summarize' | 'extract' | 'both') => {
+    const response = await api.post(`/api/attachments/${attachmentId}/process`, { mode });
+    return response.data;
+  },
+};

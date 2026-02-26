@@ -338,7 +338,7 @@ export default function AnalyticsPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <DollarSign className="w-5 h-5 text-purple-600" />
-                Cost per Meal (Trend)
+                Spending Trends
               </CardTitle>
             </CardHeader>
             <CardContent>
