@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Q
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from backend.database import get_db
 from backend.models.user import User
@@ -23,6 +23,13 @@ from backend.api.auth import get_current_user
 logger = logging.getLogger(__name__)
 
 UPLOAD_DIR = "uploads/attachments"
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+
+ALLOWED_EXTENSIONS = {
+    ".txt", ".csv", ".json", ".md", ".log", ".xml", ".html",
+    ".pdf", ".xlsx", ".xls", ".docx", ".doc",
+    ".jpg", ".jpeg", ".png", ".gif", ".webp",
+}
 
 router = APIRouter()
 
@@ -47,13 +54,24 @@ class AttachmentResponse(BaseModel):
         from_attributes = True
 
 
+class ProcessRequest(BaseModel):
+    mode: str = "summarize"
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        if v not in ("summarize", "extract", "both"):
+            raise ValueError("mode must be 'summarize', 'extract', or 'both'")
+        return v
+
+
 # ─── File content extraction helpers ───
 
 def _read_text_file(file_path: str) -> str:
     """Read plain text / CSV / JSON files."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
-            return f.read(50_000)  # Limit to ~50K chars
+            return f.read(50_000)
     except UnicodeDecodeError:
         with open(file_path, "r", encoding="latin-1") as f:
             return f.read(50_000)
@@ -65,7 +83,7 @@ def _read_pdf_file(file_path: str) -> str:
         import pdfplumber
         text_parts = []
         with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages[:20]:  # Limit to 20 pages
+            for page in pdf.pages[:20]:
                 page_text = page.extract_text()
                 if page_text:
                     text_parts.append(page_text)
@@ -82,7 +100,7 @@ def _read_excel_file(file_path: str) -> str:
         from openpyxl import load_workbook
         wb = load_workbook(file_path, read_only=True, data_only=True)
         lines = []
-        for sheet_name in wb.sheetnames[:3]:  # Limit to 3 sheets
+        for sheet_name in wb.sheetnames[:3]:
             ws = wb[sheet_name]
             lines.append(f"=== Sheet: {sheet_name} ===")
             row_count = 0
@@ -114,7 +132,15 @@ def extract_file_content(file_path: str, content_type: Optional[str], filename: 
     if content_type and content_type.startswith("text/"):
         return _read_text_file(file_path)
 
-    return None  # Binary / image — can't extract text
+    return None
+
+
+def _validate_file_path(file_path: str) -> None:
+    """Prevent path traversal — ensure file is within UPLOAD_DIR."""
+    real_path = os.path.realpath(file_path)
+    upload_base = os.path.realpath(UPLOAD_DIR)
+    if not real_path.startswith(upload_base):
+        raise HTTPException(403, "Access denied")
 
 
 # ─── Endpoints ───
@@ -132,19 +158,29 @@ async def upload_attachment(
     if entity_type not in allowed_types:
         raise HTTPException(400, f"Invalid entity_type. Allowed: {', '.join(sorted(allowed_types))}")
 
+    # Validate file extension
+    ext = os.path.splitext(file.filename or "file")[1].lower()
+    if ext and ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"File type '{ext}' not allowed.")
+
+    # Read and validate file size
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(413, f"File too large. Maximum size: {MAX_FILE_SIZE // (1024 * 1024)}MB")
+
     # Create upload directory
     entity_dir = f"{UPLOAD_DIR}/{entity_type}/{entity_id}"
     os.makedirs(entity_dir, exist_ok=True)
 
     # Generate unique filename
-    ext = os.path.splitext(file.filename or "file")[1]
     unique_name = f"{uuid.uuid4().hex}{ext}"
     file_path = f"{entity_dir}/{unique_name}"
 
     # Save file to disk
-    content = await file.read()
     with open(file_path, "wb") as f:
         f.write(content)
+
+    logger.info(f"User {current_user.id} uploaded '{file.filename}' for {entity_type}:{entity_id} ({len(content)} bytes)")
 
     attachment = Attachment(
         entity_type=entity_type,
@@ -196,6 +232,8 @@ async def download_attachment(
     if not os.path.exists(att.file_path):
         raise HTTPException(404, "File not found on disk")
 
+    _validate_file_path(att.file_path)
+
     return FileResponse(
         path=att.file_path,
         filename=att.original_filename,
@@ -217,18 +255,25 @@ async def delete_attachment(
     if not att:
         raise HTTPException(404, "Attachment not found")
 
-    if os.path.exists(att.file_path):
-        os.remove(att.file_path)
+    try:
+        if os.path.exists(att.file_path):
+            os.remove(att.file_path)
+    except FileNotFoundError:
+        logger.warning(f"File already deleted: {att.file_path}")
+    except Exception as e:
+        logger.error(f"Failed to delete file {att.file_path}: {e}")
+
+    logger.info(f"User {current_user.id} deleted attachment {attachment_id} ({att.original_filename})")
 
     await db.delete(att)
     await db.commit()
-    return {"message": "Attachment deleted"}
+    return {"success": True, "message": "Attachment deleted"}
 
 
 @router.post("/{attachment_id}/process", response_model=AttachmentResponse)
 async def process_attachment(
     attachment_id: int,
-    body: dict,
+    body: ProcessRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -236,10 +281,6 @@ async def process_attachment(
     AI-process an attachment.
     Body: { "mode": "summarize" | "extract" | "both" }
     """
-    mode = body.get("mode", "summarize")
-    if mode not in ("summarize", "extract", "both"):
-        raise HTTPException(400, "mode must be 'summarize', 'extract', or 'both'")
-
     result = await db.execute(
         select(Attachment).where(Attachment.id == attachment_id)
     )
@@ -249,7 +290,7 @@ async def process_attachment(
 
     # Read file content
     file_text = extract_file_content(att.file_path, att.content_type, att.original_filename)
-    if not file_text:
+    if not file_text or not file_text.strip():
         raise HTTPException(
             400,
             f"Cannot read content from '{att.original_filename}'. "
@@ -265,7 +306,7 @@ async def process_attachment(
         truncated = file_text[:30_000]
         file_context = f"File: {att.original_filename} ({att.content_type or 'unknown'})\n\nContent:\n{truncated}"
 
-        if mode in ("summarize", "both"):
+        if body.mode in ("summarize", "both"):
             summary_prompt = (
                 f"Analyze this document and provide a clear, structured summary in the same language as the document. "
                 f"Include key points, important numbers/dates, and any action items.\n\n{file_context}"
@@ -276,7 +317,7 @@ async def process_attachment(
                 max_tokens=2000,
             )
 
-        if mode in ("extract", "both"):
+        if body.mode in ("extract", "both"):
             extract_prompt = (
                 f"Extract structured data from this document. Return a JSON object with relevant fields. "
                 f"Identify: dates, amounts, names, quantities, categories, action items, and any key-value pairs.\n\n{file_context}"
