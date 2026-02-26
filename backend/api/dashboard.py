@@ -310,46 +310,136 @@ async def budget_drill_down(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Drill-down: budget vs actual by month, then by product category."""
+    """Drill-down: budget vs actual by month with category breakdown."""
     target_year = year or datetime.now().year
     proforma_year = await _resolve_proforma_year(db, target_year)
-    month_expr = extract_month(Proforma.invoice_date)
+    budget_year = await _resolve_budget_year(db, target_year)
 
-    query = (
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    # ── Budget per month from SupplierBudget ──
+    budget_query = (
+        select(SupplierBudget)
+        .where(SupplierBudget.year == budget_year, SupplierBudget.is_active == True)
+    )
+    if supplier_id:
+        budget_query = budget_query.where(SupplierBudget.supplier_id == supplier_id)
+    if site_id:
+        budget_query = budget_query.where(SupplierBudget.site_id == site_id)
+
+    budget_result = await db.execute(budget_query)
+    budgets = budget_result.scalars().all()
+
+    monthly_budgets: dict[int, float] = {}
+    for b in budgets:
+        for m_idx, col in enumerate(MONTH_COLS):
+            val = getattr(b, col) or 0
+            monthly_budgets[m_idx + 1] = monthly_budgets.get(m_idx + 1, 0) + val
+
+    # ── Actual per month from Proformas ──
+    month_expr = extract_month(Proforma.invoice_date)
+    actual_query = (
         select(
-            Proforma.supplier_id,
-            Proforma.site_id,
             month_expr.label("month"),
             func.sum(Proforma.total_amount).label("total"),
             func.count(Proforma.id).label("count"),
         )
         .where(year_equals(Proforma.invoice_date, proforma_year))
-        .group_by(Proforma.supplier_id, Proforma.site_id, month_expr)
+        .group_by(month_expr)
         .order_by(month_expr)
     )
     if supplier_id:
-        query = query.where(Proforma.supplier_id == supplier_id)
+        actual_query = actual_query.where(Proforma.supplier_id == supplier_id)
     if site_id:
-        query = query.where(Proforma.site_id == site_id)
+        actual_query = actual_query.where(Proforma.site_id == site_id)
 
-    result = await db.execute(query)
-
-    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-    items = []
+    result = await db.execute(actual_query)
+    monthly_actuals: dict[int, dict] = {}
     for row in result:
-        m_idx = int(row.month) - 1
+        monthly_actuals[int(row.month)] = {"total": row.total or 0, "count": row.count}
+
+    # ── Build monthly items (all 12 months) ──
+    items = []
+    for m in range(1, 13):
+        actual_data = monthly_actuals.get(m, {"total": 0, "count": 0})
+        budget_val = monthly_budgets.get(m, 0)
         items.append({
-            "supplier_id": row.supplier_id,
-            "site_id": row.site_id,
-            "month": int(row.month),
-            "month_name": month_names[m_idx] if 0 <= m_idx < 12 else "?",
-            "total": row.total or 0,
-            "invoice_count": row.count,
+            "month": m,
+            "month_name": month_names[m - 1],
+            "budget": round(budget_val, 0),
+            "actual": round(actual_data["total"], 0),
+            "invoice_count": actual_data["count"],
         })
 
-    return {"year": proforma_year, "items": items}
+    # ── Category breakdown (aggregate for year) ──
+    from backend.api.category_analysis import (
+        _load_category_mappings, _match_product_to_category, _get_proforma_items_grouped,
+    )
+    mappings = await _load_category_mappings(db)
+    prod_items = await _get_proforma_items_grouped(
+        db, proforma_year, site_id=site_id, supplier_id=supplier_id,
+    )
+
+    category_totals: dict[str, dict] = {}
+    for row in prod_items:
+        group_name, display_he, display_en = _match_product_to_category(
+            row.product_name, mappings,
+        )
+        if group_name not in category_totals:
+            category_totals[group_name] = {
+                "category_name": group_name,
+                "display_name_he": display_he,
+                "display_name_en": display_en,
+                "total_cost": 0,
+                "total_qty": 0,
+            }
+        category_totals[group_name]["total_cost"] += row.total_cost or 0
+        category_totals[group_name]["total_qty"] += row.total_qty or 0
+
+    categories = sorted(category_totals.values(), key=lambda x: x["total_cost"], reverse=True)
+    for cat in categories:
+        cat["total_cost"] = round(cat["total_cost"], 0)
+        cat["total_qty"] = round(cat["total_qty"], 1)
+
+    # ── Per-month category breakdown ──
+    month_cat_query = (
+        select(
+            extract_month(Proforma.invoice_date).label("month"),
+            ProformaItem.product_name,
+            func.sum(ProformaItem.total_price).label("cost"),
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .where(year_equals(Proforma.invoice_date, proforma_year))
+        .group_by(extract_month(Proforma.invoice_date), ProformaItem.product_name)
+    )
+    if supplier_id:
+        month_cat_query = month_cat_query.where(Proforma.supplier_id == supplier_id)
+    if site_id:
+        month_cat_query = month_cat_query.where(Proforma.site_id == site_id)
+
+    month_cat_result = await db.execute(month_cat_query)
+    monthly_categories: dict[int, dict[str, float]] = {}
+    for row in month_cat_result:
+        m = int(row.month)
+        if m not in monthly_categories:
+            monthly_categories[m] = {}
+        gname, _, _ = _match_product_to_category(row.product_name, mappings)
+        monthly_categories[m][gname] = monthly_categories[m].get(gname, 0) + (row.cost or 0)
+
+    # Attach category breakdown to each month item
+    all_cat_names = sorted({c["category_name"] for c in categories})
+    for item in items:
+        m_cats = monthly_categories.get(item["month"], {})
+        item["categories"] = {cn: round(m_cats.get(cn, 0), 0) for cn in all_cat_names}
+
+    return {
+        "year": proforma_year,
+        "budget_year": budget_year,
+        "items": items,
+        "categories": categories,
+        "category_names": all_cat_names,
+    }
 
 
 @router.get("/drill-down/products")
