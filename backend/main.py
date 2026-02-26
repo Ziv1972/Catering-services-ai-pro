@@ -30,6 +30,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Log database connection info
+    from backend.database import database_url, is_sqlite
+    db_type = "SQLite" if is_sqlite else "PostgreSQL"
+    db_prefix = database_url[:40] if len(database_url) > 40 else database_url
+    logger.warning(f"[DB-DIAG] Connecting to {db_type}: {db_prefix}...")
+    if is_sqlite:
+        logger.warning("[DB-DIAG] WARNING: Using SQLite — data will NOT persist on Railway!")
+
     # Create all tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -575,6 +583,33 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/db-diagnostic")
+async def db_diagnostic():
+    """Diagnostic endpoint to check database connection status."""
+    from backend.database import database_url, is_sqlite
+    from sqlalchemy import text as sa_text
+
+    info = {
+        "database_type": "SQLite" if is_sqlite else "PostgreSQL",
+        "database_url_prefix": database_url[:30] + "..." if len(database_url) > 30 else database_url,
+        "is_sqlite": is_sqlite,
+    }
+
+    try:
+        async with AsyncSessionLocal() as session:
+            # Count records in key tables
+            for table in ["users", "sites", "proformas", "proforma_items", "projects", "meetings", "complaints", "supplier_budgets"]:
+                try:
+                    result = await session.execute(sa_text(f"SELECT COUNT(*) FROM {table}"))
+                    info[f"count_{table}"] = result.scalar()
+                except Exception as e:
+                    info[f"count_{table}"] = f"error: {str(e)[:50]}"
+    except Exception as e:
+        info["connection_error"] = str(e)[:200]
+
+    return info
 
 
 if __name__ == "__main__":
