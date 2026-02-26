@@ -8,14 +8,14 @@ import { Button } from '@/components/ui/button';
 import {
   DollarSign, FolderKanban, Wrench, CalendarDays,
   ListTodo, ArrowRight, MessageSquare, Send,
-  AlertCircle, CheckCircle2, Clock,
+  AlertCircle, CheckCircle2, Clock, BarChart3,
   ChevronRight, ChevronDown, ArrowLeft, X,
 } from 'lucide-react';
-import { dashboardAPI, chatAPI, drillDownAPI } from '@/lib/api';
+import { dashboardAPI, chatAPI, drillDownAPI, categoryAnalysisAPI } from '@/lib/api';
 import { format } from 'date-fns';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  LineChart, Line, CartesianGrid, Legend,
+  LineChart, Line, CartesianGrid, Legend, Cell,
 } from 'recharts';
 
 export default function Dashboard() {
@@ -34,6 +34,11 @@ export default function Dashboard() {
     data: any;
     loading: boolean;
   } | null>(null);
+
+  // Working days state (for category cost Level 3)
+  const [workingDays, setWorkingDays] = useState<number | null>(null);
+  const [workingDaysInput, setWorkingDaysInput] = useState('');
+  const [workingDaysSaving, setWorkingDaysSaving] = useState(false);
 
   useEffect(() => {
     loadDashboard();
@@ -113,11 +118,23 @@ export default function Dashboard() {
   };
 
   const goBackDrillDown = () => {
-    if (drillDown && drillDown.level > 1) {
-      openBudgetDrillDown(drillDown.context.supplier_id, drillDown.context.site_id, drillDown.context.label);
-    } else {
+    if (!drillDown || drillDown.level <= 1) {
       setDrillDown(null);
+      return;
     }
+    if (drillDown.type === 'category_cost') {
+      const ctx = drillDown.context;
+      if (drillDown.level === 4) {
+        drillIntoCostCategories(ctx.site_id, ctx.siteName);
+      } else if (drillDown.level === 3) {
+        drillIntoCostSites(ctx.month, ctx.monthName);
+      } else if (drillDown.level === 2) {
+        openCategoryCostDrillDown();
+      }
+      return;
+    }
+    // Default: budget drill-down back to level 1
+    openBudgetDrillDown(drillDown.context.supplier_id, drillDown.context.site_id, drillDown.context.label);
   };
 
   const openProjectDrillDown = async (projectId: number, projectName: string) => {
@@ -137,6 +154,97 @@ export default function Dashboard() {
       setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setDrillDown((prev) => prev ? { ...prev, data: null, loading: false } : null);
+    }
+  };
+
+  // ─── Category Cost Drill-Down (4 levels) ───
+  const CATEGORY_COLORS: Record<string, string> = {
+    total_meals: '#3b82f6', extras_lunch: '#f59e0b', kitchenette_fruit: '#10b981',
+    kitchenette_dry: '#8b5cf6', kitchenette_dairy: '#06b6d4', coffee_tea: '#78716c',
+    cut_veg: '#22c55e', coffee_beans: '#a16207', uncategorized: '#d1d5db',
+  };
+
+  const openCategoryCostDrillDown = async () => {
+    setDrillDown({ type: 'category_cost', level: 1, context: {}, data: null, loading: true });
+    try {
+      const result = await categoryAnalysisAPI.costMonthly({ year: displayYear });
+      setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
+    } catch {
+      setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
+    }
+  };
+
+  const drillIntoCostSites = async (month: number, monthName: string) => {
+    if (!drillDown) return;
+    setDrillDown((prev) => prev ? {
+      ...prev, level: 2, context: { ...prev.context, month, monthName, year: displayYear },
+      data: null, loading: true,
+    } : null);
+    try {
+      const result = await categoryAnalysisAPI.costBySite({ year: displayYear, month });
+      setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
+    } catch {
+      setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
+    }
+  };
+
+  const drillIntoCostCategories = async (siteId: number, siteName: string) => {
+    if (!drillDown) return;
+    const ctx = drillDown.context;
+    setDrillDown((prev) => prev ? {
+      ...prev, level: 3, context: { ...ctx, site_id: siteId, siteName },
+      data: null, loading: true,
+    } : null);
+    setWorkingDays(null);
+    setWorkingDaysInput('');
+    try {
+      const [result, wdResult] = await Promise.all([
+        categoryAnalysisAPI.costByCategory({ year: ctx.year, month: ctx.month, site_id: siteId }),
+        categoryAnalysisAPI.getWorkingDays({ site_id: siteId, year: ctx.year }),
+      ]);
+      const wdEntry = (wdResult?.items || []).find((e: any) => e.month === ctx.month);
+      if (wdEntry) {
+        setWorkingDays(wdEntry.working_days);
+        setWorkingDaysInput(String(wdEntry.working_days));
+      }
+      setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
+    } catch {
+      setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
+    }
+  };
+
+  const saveWorkingDays = async () => {
+    if (!drillDown || !workingDaysInput.trim()) return;
+    const ctx = drillDown.context;
+    const days = parseInt(workingDaysInput);
+    if (isNaN(days) || days < 0 || days > 31) return;
+    setWorkingDaysSaving(true);
+    try {
+      await categoryAnalysisAPI.setWorkingDays({
+        site_id: ctx.site_id, year: ctx.year, month: ctx.month, working_days: days,
+      });
+      setWorkingDays(days);
+    } catch {
+      // silent
+    } finally {
+      setWorkingDaysSaving(false);
+    }
+  };
+
+  const drillIntoCostProducts = async (categoryName: string, displayHe: string) => {
+    if (!drillDown) return;
+    const ctx = drillDown.context;
+    setDrillDown((prev) => prev ? {
+      ...prev, level: 4, context: { ...ctx, categoryName, categoryDisplayHe: displayHe },
+      data: null, loading: true,
+    } : null);
+    try {
+      const result = await categoryAnalysisAPI.costProducts({
+        year: ctx.year, month: ctx.month, site_id: ctx.site_id, category_name: categoryName,
+      });
+      setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
+    } catch {
+      setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
     }
   };
 
@@ -213,6 +321,14 @@ export default function Dashboard() {
                         ? `Project: ${drillDown.context.label}`
                         : drillDown.type === 'maintenance'
                         ? `Maintenance: ${drillDown.context.label}`
+                        : drillDown.type === 'category_cost' && drillDown.level === 1
+                        ? `Category Analysis - Cost by Month (${displayYear})`
+                        : drillDown.type === 'category_cost' && drillDown.level === 2
+                        ? `${drillDown.context.monthName} - Cost by Site`
+                        : drillDown.type === 'category_cost' && drillDown.level === 3
+                        ? `${drillDown.context.monthName} - ${drillDown.context.siteName} - Categories`
+                        : drillDown.type === 'category_cost' && drillDown.level === 4
+                        ? `${drillDown.context.siteName} - ${drillDown.context.categoryDisplayHe}`
                         : 'Details'}
                     </CardTitle>
                     <p className="text-sm text-gray-500">
@@ -220,6 +336,10 @@ export default function Dashboard() {
                         : drillDown.type === 'budget' ? 'Product-level spending detail'
                         : drillDown.type === 'project' ? 'Tasks and progress'
                         : drillDown.type === 'maintenance' ? 'Expense breakdown'
+                        : drillDown.type === 'category_cost' && drillDown.level === 1 ? 'Click a month to drill down'
+                        : drillDown.type === 'category_cost' && drillDown.level === 2 ? 'Click a site to see categories'
+                        : drillDown.type === 'category_cost' && drillDown.level === 3 ? 'Click a category to see products'
+                        : drillDown.type === 'category_cost' && drillDown.level === 4 ? 'Product breakdown'
                         : ''}
                     </p>
                   </div>
@@ -411,6 +531,203 @@ export default function Dashboard() {
                     </>
                   )}
                 </div>
+              ) : drillDown.type === 'category_cost' && drillDown.level === 1 ? (
+                /* Category Cost Level 1: Monthly totals */
+                <>
+                  {(drillDown.data?.items || []).length === 0 ? (
+                    <p className="text-center py-8 text-gray-400">No proforma data for {displayYear}</p>
+                  ) : (
+                    <>
+                      <div className="h-56 mb-4">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={drillDown.data?.items || []}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="month_name" tick={{ fontSize: 12 }} />
+                            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
+                            <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
+                            <Bar dataKey="total_cost" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Cost" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="space-y-1">
+                        {(drillDown.data?.items || []).map((item: any) => (
+                          <div
+                            key={item.month}
+                            onClick={() => drillIntoCostSites(item.month, item.month_name)}
+                            className="flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-blue-50 transition-colors"
+                          >
+                            <div>
+                              <span className="font-medium">{item.month_name}</span>
+                              <span className="text-xs text-gray-500 ml-2">{item.invoice_count} invoices</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="font-semibold">{formatCurrency(item.total_cost)}</span>
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : drillDown.type === 'category_cost' && drillDown.level === 2 ? (
+                /* Category Cost Level 2: Sites for a month */
+                <>
+                  {(drillDown.data?.items || []).length === 0 ? (
+                    <p className="text-center py-8 text-gray-400">No site data for this month</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {(drillDown.data?.items || []).map((item: any) => (
+                        <div
+                          key={item.site_id}
+                          onClick={() => drillIntoCostCategories(item.site_id, item.site_name)}
+                          className="flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-blue-50 transition-colors"
+                        >
+                          <div>
+                            <span className="font-medium">{item.site_name}</span>
+                            <span className="text-xs text-gray-500 ml-2">{item.invoice_count} invoices</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="font-semibold">{formatCurrency(item.total_cost)}</span>
+                            <ChevronRight className="w-4 h-4 text-gray-400" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : drillDown.type === 'category_cost' && drillDown.level === 3 ? (
+                /* Category Cost Level 3: Categories for a site */
+                <>
+                  {(drillDown.data?.items || []).length === 0 ? (
+                    <p className="text-center py-8 text-gray-400">No category data for this site</p>
+                  ) : (
+                    <>
+                      <div className="h-56 mb-4">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={drillDown.data?.items || []} layout="vertical">
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
+                            <YAxis type="category" dataKey="display_name_he" tick={{ fontSize: 12 }} width={100} />
+                            <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
+                            <Bar dataKey="total_cost" name="Cost" radius={[0, 4, 4, 0]}>
+                              {(drillDown.data?.items || []).map((item: any, idx: number) => (
+                                <Cell key={idx} fill={CATEGORY_COLORS[item.category_name] || '#94a3b8'} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="space-y-1">
+                        {(drillDown.data?.items || []).map((item: any) => (
+                          <div
+                            key={item.category_name}
+                            onClick={() => drillIntoCostProducts(item.category_name, item.display_name_he)}
+                            className="flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-blue-50 transition-colors"
+                          >
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="w-3 h-3 rounded-full shrink-0"
+                                style={{ backgroundColor: CATEGORY_COLORS[item.category_name] || '#94a3b8' }}
+                              />
+                              <span className="font-medium">{item.display_name_he}</span>
+                              <span className="text-xs text-gray-400">{item.item_count} items</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="font-semibold">{formatCurrency(item.total_cost)}</span>
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Total line */}
+                      {(() => {
+                        const totalCost = (drillDown.data?.items || []).reduce((s: number, i: any) => s + (i.total_cost || 0), 0);
+                        return (
+                          <>
+                            <div className="flex items-center justify-between p-3 mt-2 bg-blue-50 rounded-lg font-semibold">
+                              <span>סה&quot;כ</span>
+                              <span>{formatCurrency(totalCost)}</span>
+                            </div>
+                            {/* Working Days + Cost per working day */}
+                            <div className="mt-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2">
+                                  <CalendarDays className="w-4 h-4 text-gray-500" />
+                                  <span className="text-sm font-medium text-gray-700">Working Days</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="31"
+                                    value={workingDaysInput}
+                                    onChange={(e) => setWorkingDaysInput(e.target.value)}
+                                    placeholder="--"
+                                    className="w-16 px-2 py-1 text-center text-sm border rounded focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+                                  />
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={workingDaysSaving || !workingDaysInput.trim()}
+                                    onClick={saveWorkingDays}
+                                    className="text-xs"
+                                  >
+                                    {workingDaysSaving ? '...' : 'Save'}
+                                  </Button>
+                                </div>
+                              </div>
+                              {workingDays && workingDays > 0 && (
+                                <div className="mt-2 text-sm text-gray-600 flex justify-between">
+                                  <span>Cost per working day:</span>
+                                  <span className="font-semibold">{formatCurrency(totalCost / workingDays)}</span>
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </>
+                  )}
+                </>
+              ) : drillDown.type === 'category_cost' && drillDown.level === 4 ? (
+                /* Category Cost Level 4: Products in a category */
+                <div>
+                  {(drillDown.data?.items || []).length === 0 ? (
+                    <p className="text-center py-8 text-gray-400">No products in this category</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b text-left text-gray-500">
+                            <th className="pb-2 font-medium">Product</th>
+                            <th className="pb-2 font-medium text-right">Qty</th>
+                            <th className="pb-2 font-medium text-right">Avg Price</th>
+                            <th className="pb-2 font-medium text-right">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(drillDown.data?.items || []).map((item: any, i: number) => (
+                            <tr key={i} className="border-b last:border-0">
+                              <td className="py-2 font-medium">{item.product_name}</td>
+                              <td className="py-2 text-right text-gray-600">{item.total_quantity?.toLocaleString()}</td>
+                              <td className="py-2 text-right text-gray-600">{formatCurrency(item.avg_unit_price)}</td>
+                              <td className="py-2 text-right font-mono">{formatCurrency(item.total_cost)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="border-t-2 font-semibold">
+                            <td className="py-2">סה&quot;כ</td>
+                            <td className="py-2 text-right">{(drillDown.data?.items || []).reduce((s: number, i: any) => s + (i.total_quantity || 0), 0).toLocaleString()}</td>
+                            <td className="py-2" />
+                            <td className="py-2 text-right font-mono">{formatCurrency((drillDown.data?.items || []).reduce((s: number, i: any) => s + (i.total_cost || 0), 0))}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
               ) : null}
             </CardContent>
           </Card>
@@ -513,6 +830,29 @@ export default function Dashboard() {
             </div>
           )}
         </CardContent>
+      </Card>
+
+      {/* ═══════ Category Analysis Entry Point ═══════ */}
+      <Card
+        className="mb-6 border-l-4 border-l-teal-500 hover:shadow-lg transition-shadow cursor-pointer"
+        onClick={openCategoryCostDrillDown}
+      >
+        <CardHeader className="pb-2">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-teal-50 rounded-lg">
+                <BarChart3 className="w-5 h-5 text-teal-600" />
+              </div>
+              <div>
+                <CardTitle className="text-lg">Category Analysis ({displayYear})</CardTitle>
+                <p className="text-sm text-gray-500">
+                  FoodHouse proforma costs by product category &middot; 4-level drill-down
+                </p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-gray-400" />
+          </div>
+        </CardHeader>
       </Card>
 
       {/* ═══════ ROW 2: Projects + Maintenance ═══════ */}

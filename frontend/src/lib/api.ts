@@ -616,3 +616,57 @@ export const drillDownAPI = {
     return response.data;
   },
 };
+
+// Category Analysis (product category drill-down)
+export const categoryAnalysisAPI = {
+  groups: async () => {
+    const response = await api.get('/api/category-analysis/groups');
+    return response.data;
+  },
+
+  // Cost drill-down (4 levels)
+  costMonthly: async (params?: { year?: number; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/cost/monthly', { params });
+    return response.data;
+  },
+  costBySite: async (params: { year: number; month: number; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/cost/by-site', { params });
+    return response.data;
+  },
+  costByCategory: async (params: { year: number; month: number; site_id: number; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/cost/by-category', { params });
+    return response.data;
+  },
+  costProducts: async (params: { year: number; month: number; site_id: number; category_name: string; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/cost/products', { params });
+    return response.data;
+  },
+
+  // Quantity drill-down (4 levels)
+  quantityMonthly: async (params?: { year?: number; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/quantity/monthly', { params });
+    return response.data;
+  },
+  quantityBySite: async (params: { year: number; month: number; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/quantity/by-site', { params });
+    return response.data;
+  },
+  quantityByCategory: async (params: { year: number; month: number; site_id: number; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/quantity/by-category', { params });
+    return response.data;
+  },
+  quantityProducts: async (params: { year: number; month: number; site_id: number; category_name: string; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/quantity/products', { params });
+    return response.data;
+  },
+
+  // Working days
+  getWorkingDays: async (params?: { site_id?: number; year?: number }) => {
+    const response = await api.get('/api/category-analysis/working-days', { params });
+    return response.data;
+  },
+  setWorkingDays: async (data: { site_id: number; year: number; month: number; working_days: number; notes?: string }) => {
+    const response = await api.post('/api/category-analysis/working-days', data);
+    return response.data;
+  },
+};
