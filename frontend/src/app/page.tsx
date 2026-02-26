@@ -40,6 +40,9 @@ export default function Dashboard() {
   const [workingDaysInput, setWorkingDaysInput] = useState('');
   const [workingDaysSaving, setWorkingDaysSaving] = useState(false);
 
+  // Budget drill-down range
+  const [budgetRange, setBudgetRange] = useState<number>(12);
+
   useEffect(() => {
     loadDashboard();
   }, []);
@@ -314,7 +317,7 @@ export default function Dashboard() {
                   <div>
                     <CardTitle className="text-lg">
                       {drillDown.type === 'budget' && drillDown.level === 1
-                        ? `Monthly Spending ${drillDown.context.label ? `- ${drillDown.context.label}` : ''}`
+                        ? `Budget vs Actual ${drillDown.context.label ? `- ${drillDown.context.label}` : ''}`
                         : drillDown.type === 'budget' && drillDown.level === 2
                         ? `Products - ${drillDown.context.monthName}`
                         : drillDown.type === 'project'
@@ -332,7 +335,7 @@ export default function Dashboard() {
                         : 'Details'}
                     </CardTitle>
                     <p className="text-sm text-gray-500">
-                      {drillDown.type === 'budget' && drillDown.level === 1 ? 'Click a month to see product breakdown'
+                      {drillDown.type === 'budget' && drillDown.level === 1 ? 'Categories over months · click a month for products'
                         : drillDown.type === 'budget' ? 'Product-level spending detail'
                         : drillDown.type === 'project' ? 'Tasks and progress'
                         : drillDown.type === 'maintenance' ? 'Expense breakdown'
@@ -353,39 +356,128 @@ export default function Dashboard() {
               {drillDown.loading ? (
                 <div className="text-center py-12 text-gray-400">Loading...</div>
               ) : drillDown.type === 'budget' && drillDown.level === 1 ? (
-                <>
-                  {/* Monthly spending chart */}
-                  <div className="h-64 mb-4">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={drillDown.data?.items || []}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="month_name" tick={{ fontSize: 12 }} />
-                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
-                        <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
-                        <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Spending" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                  {/* Monthly table */}
-                  <div className="space-y-1">
-                    {(drillDown.data?.items || []).map((item: any) => (
-                      <div
-                        key={item.month}
-                        onClick={() => drillIntoProducts(item.month, item.month_name)}
-                        className="flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-blue-50 transition-colors"
-                      >
-                        <div>
-                          <span className="font-medium">{item.month_name}</span>
-                          <span className="text-xs text-gray-500 ml-2">{item.invoice_count} invoices</span>
+                (() => {
+                  const allItems = drillDown.data?.items || [];
+                  const catNames: string[] = drillDown.data?.category_names || [];
+                  const visibleItems = allItems.filter((i: any) => i.budget > 0 || i.actual > 0).slice(-budgetRange);
+                  const totalBudget = visibleItems.reduce((s: number, i: any) => s + (i.budget || 0), 0);
+                  const totalActual = visibleItems.reduce((s: number, i: any) => s + (i.actual || 0), 0);
+                  return (
+                    <>
+                      {/* Range selector */}
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex gap-1">
+                          {[3, 6, 12].map((r) => (
+                            <button
+                              key={r}
+                              onClick={() => setBudgetRange(r)}
+                              className={`px-3 py-1 text-xs rounded-full font-medium transition-colors ${
+                                budgetRange === r ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                            >
+                              {r}M
+                            </button>
+                          ))}
                         </div>
-                        <div className="flex items-center gap-3">
-                          <span className="font-semibold">{formatCurrency(item.total)}</span>
-                          <ChevronRight className="w-4 h-4 text-gray-400" />
+                        <div className="text-xs text-gray-500">
+                          Budget: {formatCurrency(totalBudget)} · Actual: {formatCurrency(totalActual)}
+                          {totalBudget > 0 && <span className={`ml-1 font-semibold ${totalActual / totalBudget > 0.9 ? 'text-red-600' : 'text-green-600'}`}>
+                            ({Math.round(totalActual / totalBudget * 100)}%)
+                          </span>}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </>
+
+                      {/* Budget vs Actual grouped bar chart */}
+                      <div className="h-56 mb-4">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={visibleItems}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="month_name" tick={{ fontSize: 12 }} />
+                            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
+                            <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
+                            <Legend />
+                            <Bar dataKey="budget" fill="#93c5fd" name="Budget" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="actual" fill="#3b82f6" name="Actual" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      {/* Stacked category chart per month */}
+                      {catNames.length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Cost by Category per Month</p>
+                          <div className="h-48">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={visibleItems}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="month_name" tick={{ fontSize: 11 }} />
+                                <YAxis tick={{ fontSize: 10 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
+                                <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
+                                <Legend wrapperStyle={{ fontSize: 10 }} />
+                                {catNames.map((cn: string) => (
+                                  <Bar
+                                    key={cn}
+                                    dataKey={`categories.${cn}`}
+                                    stackId="cats"
+                                    fill={CATEGORY_COLORS[cn] || '#94a3b8'}
+                                    name={
+                                      (drillDown.data?.categories || []).find((c: any) => c.category_name === cn)?.display_name_he || cn
+                                    }
+                                  />
+                                ))}
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Category totals summary */}
+                      {(drillDown.data?.categories || []).length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Category Totals (Year)</p>
+                          <div className="space-y-1">
+                            {(drillDown.data?.categories || []).map((cat: any) => (
+                              <div key={cat.category_name} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: CATEGORY_COLORS[cat.category_name] || '#94a3b8' }} />
+                                  <span className="text-sm">{cat.display_name_he}</span>
+                                </div>
+                                <span className="text-sm font-semibold">{formatCurrency(cat.total_cost)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Monthly rows - clickable */}
+                      <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Monthly Detail</p>
+                      <div className="space-y-1">
+                        {visibleItems.filter((i: any) => i.actual > 0).map((item: any) => (
+                          <div
+                            key={item.month}
+                            onClick={() => drillIntoProducts(item.month, item.month_name)}
+                            className="flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-blue-50 transition-colors"
+                          >
+                            <div>
+                              <span className="font-medium">{item.month_name}</span>
+                              <span className="text-xs text-gray-500 ml-2">{item.invoice_count} inv</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="text-right text-sm">
+                                <span className="text-gray-500">{formatCurrency(item.budget)}</span>
+                                <span className="mx-1">/</span>
+                                <span className={`font-semibold ${item.budget > 0 && item.actual / item.budget > 0.9 ? 'text-red-600' : ''}`}>
+                                  {formatCurrency(item.actual)}
+                                </span>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  );
+                })()
               ) : drillDown.type === 'budget' && drillDown.level === 2 ? (
                 /* Product breakdown */
                 <div className="space-y-1">
