@@ -82,9 +82,12 @@ async def get_dashboard(
     budget_year = await _resolve_budget_year(db, current_year)
     proforma_year = await _resolve_proforma_year(db, current_year)
 
-    # Use proforma year for month if we fell back
-    display_month = current_month if proforma_year == current_year else 12
-    display_year = proforma_year
+    # Show last month's actual data (current month is still in progress)
+    if proforma_year == current_year:
+        display_month = current_month - 1 if current_month > 1 else 1
+    else:
+        # Proforma data is from a previous year — show most recent month
+        display_month = 12
 
     # --- 1. Budget vs Actual (per supplier) ---
     budget_result = await db.execute(
@@ -94,7 +97,7 @@ async def get_dashboard(
     )
     budgets = budget_result.scalars().all()
 
-    # Get actual spending for display month
+    # Get actual spending for display month from proforma_year
     actual_result = await db.execute(
         select(
             Proforma.supplier_id,
@@ -102,7 +105,7 @@ async def get_dashboard(
             func.sum(Proforma.total_amount).label("total"),
         )
         .where(
-            year_equals(Proforma.invoice_date, display_year),
+            year_equals(Proforma.invoice_date, proforma_year),
             month_equals(Proforma.invoice_date, display_month),
         )
         .group_by(Proforma.supplier_id, Proforma.site_id)
@@ -112,27 +115,38 @@ async def get_dashboard(
         for row in actual_result
     }
 
-    # YTD actual
-    ytd_result = await db.execute(
+    # Also get last 3 months average as fallback for "typical" monthly spend
+    recent_avg_result = await db.execute(
         select(
             Proforma.supplier_id,
             Proforma.site_id,
             func.sum(Proforma.total_amount).label("total"),
+            func.count(func.distinct(extract_month(Proforma.invoice_date))).label("months"),
         )
-        .where(year_equals(Proforma.invoice_date, display_year))
+        .where(year_equals(Proforma.invoice_date, proforma_year))
         .group_by(Proforma.supplier_id, Proforma.site_id)
     )
-    ytd_actuals = {
-        (row.supplier_id, row.site_id): row.total or 0
-        for row in ytd_result
-    }
+    avg_actuals = {}
+    for row in recent_avg_result:
+        months_count = row.months or 1
+        avg_actuals[(row.supplier_id, row.site_id)] = {
+            "ytd_total": row.total or 0,
+            "monthly_avg": round((row.total or 0) / months_count),
+            "months_with_data": months_count,
+        }
 
     month_col = MONTH_COLS[display_month - 1]
     budget_summary = []
     for b in budgets:
         monthly_budget = getattr(b, month_col) or 0
         monthly_actual = actuals.get((b.supplier_id, b.site_id), 0)
-        ytd_actual = ytd_actuals.get((b.supplier_id, b.site_id), 0)
+        avg_data = avg_actuals.get((b.supplier_id, b.site_id), {})
+        ytd_actual = avg_data.get("ytd_total", 0)
+        monthly_avg = avg_data.get("monthly_avg", 0)
+
+        # Use monthly actual if available, otherwise show monthly average
+        shown_actual = monthly_actual if monthly_actual > 0 else monthly_avg
+
         budget_summary.append({
             "supplier_id": b.supplier_id,
             "supplier_name": b.supplier.name if b.supplier else "Unknown",
@@ -140,11 +154,13 @@ async def get_dashboard(
             "site_name": b.site.name if b.site else "Unknown",
             "shift": getattr(b, "shift", "all") or "all",
             "monthly_budget": monthly_budget,
-            "monthly_actual": monthly_actual,
-            "monthly_percent": round(monthly_actual / monthly_budget * 100, 1) if monthly_budget > 0 else 0,
+            "monthly_actual": shown_actual,
+            "monthly_percent": round(shown_actual / monthly_budget * 100, 1) if monthly_budget > 0 else 0,
             "yearly_budget": b.yearly_amount,
             "ytd_actual": ytd_actual,
             "yearly_percent": round(ytd_actual / b.yearly_amount * 100, 1) if b.yearly_amount > 0 else 0,
+            "actual_source_year": proforma_year,
+            "is_average": monthly_actual == 0 and monthly_avg > 0,
         })
 
     # --- 2. Active Projects ---
@@ -259,7 +275,7 @@ async def get_dashboard(
             func.count(Proforma.id).label("count"),
             func.sum(Proforma.total_amount).label("total"),
         )
-        .where(year_equals(Proforma.invoice_date, display_year))
+        .where(year_equals(Proforma.invoice_date, proforma_year))
         .group_by(Proforma.site_id)
     )
     proforma_costs = [
@@ -280,7 +296,8 @@ async def get_dashboard(
         "proforma_costs": proforma_costs,
         "current_quarter": current_quarter,
         "current_year": current_year,
-        "display_year": display_year,
+        "budget_year": budget_year,
+        "proforma_year": proforma_year,
         "display_month": display_month,
     }
 

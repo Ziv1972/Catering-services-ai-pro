@@ -157,7 +157,7 @@ export default function Dashboard() {
   const meetings = data?.meetings || [];
   const todos = data?.todos || { mine: [], delegated: [], overdue_count: 0 };
   const proformaCosts = data?.proforma_costs || [];
-  const displayYear = data?.display_year || new Date().getFullYear();
+  const displayYear = data?.budget_year || new Date().getFullYear();
   const displayMonth = data?.display_month;
 
   const chartData = budgetSummary.map((b: any) => ({
