@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -23,8 +23,17 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
   const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<Array<{ role: string; text: string }>>([]);
+  const [chatMessages, setChatMessages] = useState<Array<{ role: string; text: string }>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = sessionStorage.getItem('chat_history');
+        return saved ? JSON.parse(saved) : [];
+      } catch { return []; }
+    }
+    return [];
+  });
   const [chatLoading, setChatLoading] = useState(false);
+  const chatAbortRef = useRef<AbortController | null>(null);
 
   // Drill-down state
   const [drillDown, setDrillDown] = useState<{
@@ -47,6 +56,13 @@ export default function Dashboard() {
     loadDashboard();
   }, []);
 
+  // Persist chat messages to sessionStorage
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('chat_history', JSON.stringify(chatMessages));
+    } catch { /* sessionStorage full or unavailable */ }
+  }, [chatMessages]);
+
   const loadDashboard = async () => {
     try {
       const result = await dashboardAPI.get();
@@ -58,33 +74,60 @@ export default function Dashboard() {
     }
   };
 
-  const handleChat = async () => {
-    if (!chatInput.trim()) return;
-    const userMsg = chatInput;
-    setChatMessages((prev) => [...prev, { role: 'user', text: userMsg }]);
-    setChatInput('');
+  const getChatErrorMessage = (error: unknown): string => {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return 'Request timed out. The AI service is taking too long to respond. Please try again.';
+    }
+    const axiosError = error as any;
+    const status = axiosError?.response?.status;
+    const detail = axiosError?.response?.data?.detail;
+    if (status === 503) {
+      return detail || 'The AI service is temporarily unavailable. Please try again later.';
+    }
+    if (status === 401) {
+      return 'Your session has expired. Please refresh the page and log in again.';
+    }
+    if (status === 500) {
+      return 'The AI service encountered an internal error. Please try again later.';
+    }
+    if (!axiosError?.response) {
+      return 'Network error — could not reach the server. Check your connection and try again.';
+    }
+    return 'An unexpected error occurred. Please try again.';
+  };
+
+  const sendChatMessage = useCallback(async (message: string) => {
+    if (chatAbortRef.current) chatAbortRef.current.abort();
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
     setChatLoading(true);
     try {
-      const result = await chatAPI.send(userMsg);
+      const result = await chatAPI.send(message, controller.signal);
       setChatMessages((prev) => [...prev, { role: 'ai', text: result.response }]);
-    } catch {
-      setChatMessages((prev) => [...prev, { role: 'ai', text: 'Sorry, could not process your request.' }]);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'ai', text: getChatErrorMessage(error) },
+      ]);
     } finally {
       setChatLoading(false);
+      chatAbortRef.current = null;
     }
+  }, []);
+
+  const handleChat = async () => {
+    if (!chatInput.trim() || chatLoading) return;
+    const userMsg = chatInput.trim();
+    setChatMessages((prev) => [...prev, { role: 'user', text: userMsg }]);
+    setChatInput('');
+    await sendChatMessage(userMsg);
   };
 
   const quickChat = async (prompt: string) => {
+    if (chatLoading) return;
     setChatMessages((prev) => [...prev, { role: 'user', text: prompt }]);
-    setChatLoading(true);
-    try {
-      const result = await chatAPI.send(prompt);
-      setChatMessages((prev) => [...prev, { role: 'ai', text: result.response }]);
-    } catch {
-      setChatMessages((prev) => [...prev, { role: 'ai', text: 'Sorry, could not process your request.' }]);
-    } finally {
-      setChatLoading(false);
-    }
+    await sendChatMessage(prompt);
   };
 
   // Drill-down handlers
@@ -177,7 +220,7 @@ export default function Dashboard() {
   const openCategoryCostDrillDown = async () => {
     setDrillDown({ type: 'category_cost', level: 1, context: {}, data: null, loading: true });
     try {
-      const result = await categoryAnalysisAPI.costMonthly({ year: displayYear });
+      const result = await categoryAnalysisAPI.costMonthly({ year: proformaYear });
       setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
@@ -187,11 +230,11 @@ export default function Dashboard() {
   const drillIntoCostSites = async (month: number, monthName: string) => {
     if (!drillDown) return;
     setDrillDown((prev) => prev ? {
-      ...prev, level: 2, context: { ...prev.context, month, monthName, year: displayYear },
+      ...prev, level: 2, context: { ...prev.context, month, monthName, year: proformaYear },
       data: null, loading: true,
     } : null);
     try {
-      const result = await categoryAnalysisAPI.costBySite({ year: displayYear, month });
+      const result = await categoryAnalysisAPI.costBySite({ year: proformaYear, month });
       setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
@@ -276,6 +319,7 @@ export default function Dashboard() {
   const todos = data?.todos || { mine: [], delegated: [], overdue_count: 0 };
   const proformaCosts = data?.proforma_costs || [];
   const displayYear = data?.budget_year || new Date().getFullYear();
+  const proformaYear = data?.proforma_year || displayYear;
   const displayMonth = data?.display_month;
 
   const chartData = budgetSummary.map((b: any) => ({
@@ -332,7 +376,7 @@ export default function Dashboard() {
                         : drillDown.type === 'maintenance'
                         ? `Maintenance: ${drillDown.context.label}`
                         : drillDown.type === 'category_cost' && drillDown.level === 1
-                        ? `Category Analysis - Cost by Month (${displayYear})`
+                        ? `Category Analysis - Cost by Month (${proformaYear})`
                         : drillDown.type === 'category_cost' && drillDown.level === 2
                         ? `${drillDown.context.monthName} - Cost by Site`
                         : drillDown.type === 'category_cost' && drillDown.level === 3
@@ -369,8 +413,15 @@ export default function Dashboard() {
                   const visibleItems = allItems.filter((i: any) => i.budget > 0 || i.actual > 0).slice(-budgetRange);
                   const totalBudget = visibleItems.reduce((s: number, i: any) => s + (i.budget || 0), 0);
                   const totalActual = visibleItems.reduce((s: number, i: any) => s + (i.actual || 0), 0);
+                  const isEmpty = totalBudget === 0 && totalActual === 0;
                   return (
                     <>
+                      {isEmpty && (
+                        <div className="text-center py-8 mb-4 bg-gray-50 rounded-lg">
+                          <p className="text-gray-400 text-sm">No budget or proforma data found for this supplier/site combination.</p>
+                          <p className="text-gray-400 text-xs mt-1">Configure monthly budget amounts or add proformas to see data here.</p>
+                        </div>
+                      )}
                       {/* Range selector */}
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex gap-1">
@@ -634,7 +685,7 @@ export default function Dashboard() {
                 /* Category Cost Level 1: Monthly totals */
                 <>
                   {(drillDown.data?.items || []).length === 0 ? (
-                    <p className="text-center py-8 text-gray-400">No proforma data for {displayYear}</p>
+                    <p className="text-center py-8 text-gray-400">No proforma data for {proformaYear}</p>
                   ) : (
                     <>
                       <div className="h-56 mb-4">
@@ -902,7 +953,7 @@ export default function Dashboard() {
                 {/* Proforma actual costs from FoodHouse */}
                 {proformaCosts.length > 0 && budgetSummary.length === 0 && (
                   <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
-                    <p className="text-sm font-medium text-amber-800 mb-2">FoodHouse Actual Costs ({displayYear})</p>
+                    <p className="text-sm font-medium text-amber-800 mb-2">FoodHouse Actual Costs ({proformaYear})</p>
                     {proformaCosts.map((pc: any, i: number) => (
                       <div key={i} className="flex justify-between text-sm">
                         <span>Site {pc.site_id} ({pc.count} invoices)</span>
@@ -943,7 +994,7 @@ export default function Dashboard() {
                 <BarChart3 className="w-5 h-5 text-teal-600" />
               </div>
               <div>
-                <CardTitle className="text-lg">Category Analysis ({displayYear})</CardTitle>
+                <CardTitle className="text-lg">Category Analysis ({proformaYear})</CardTitle>
                 <p className="text-sm text-gray-500">
                   FoodHouse proforma costs by product category &middot; 4-level drill-down
                 </p>
@@ -1236,6 +1287,7 @@ export default function Dashboard() {
               onClick={handleChat}
               disabled={chatLoading || !chatInput.trim()}
               className="bg-indigo-600 hover:bg-indigo-700"
+              aria-label="Send message"
             >
               {chatLoading ? (
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />

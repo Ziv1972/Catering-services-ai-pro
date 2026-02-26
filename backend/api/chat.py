@@ -131,12 +131,19 @@ async def _build_context(db: AsyncSession, user: User) -> str:
 
 
 @router.post("/", response_model=ChatResponse)
+@router.post("", response_model=ChatResponse, include_in_schema=False)
 async def chat(
     chat_message: ChatMessage,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Send a message to the AI assistant"""
+    if not claude_service.is_available:
+        raise HTTPException(
+            status_code=503,
+            detail="AI service is not configured. Please set the ANTHROPIC_API_KEY environment variable."
+        )
+
     try:
         context = await _build_context(db, current_user)
         prompt = chat_message.message
@@ -155,5 +162,7 @@ async def chat(
         ]
 
         return ChatResponse(response=response, suggestions=suggestions)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+        raise HTTPException(status_code=500, detail="AI service temporarily unavailable. Please try again later.")

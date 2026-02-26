@@ -11,9 +11,18 @@ settings = get_settings()
 
 class ClaudeService:
     def __init__(self):
-        self.client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        api_key = settings.ANTHROPIC_API_KEY or None
         self.model = settings.CLAUDE_MODEL
         self.max_tokens = settings.CLAUDE_MAX_TOKENS
+        self._available = bool(api_key)
+        if self._available:
+            self.client = AsyncAnthropic(api_key=api_key)
+        else:
+            self.client = None
+
+    @property
+    def is_available(self) -> bool:
+        return self._available
 
     async def generate_response(
         self,
@@ -25,6 +34,9 @@ class ClaudeService:
         """
         Generate a response from Claude
         """
+        if not self._available or self.client is None:
+            raise RuntimeError("AI service not configured: ANTHROPIC_API_KEY is not set")
+
         messages = [{"role": "user", "content": prompt}]
 
         response = await self.client.messages.create(

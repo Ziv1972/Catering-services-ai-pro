@@ -518,8 +518,8 @@ export const todosAPI = {
 
 // Chat
 export const chatAPI = {
-  send: async (message: string) => {
-    const response = await api.post('/api/chat', { message });
+  send: async (message: string, signal?: AbortSignal) => {
+    const response = await api.post('/api/chat/', { message }, { signal, timeout: 30000 });
     return response.data;
   },
 };
