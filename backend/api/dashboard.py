@@ -364,11 +364,13 @@ async def budget_drill_down(
     for m in range(1, 13):
         actual_data = monthly_actuals.get(m, {"total": 0, "count": 0})
         budget_val = monthly_budgets.get(m, 0)
+        actual_val = round(actual_data["total"], 0)
         items.append({
             "month": m,
             "month_name": month_names[m - 1],
             "budget": round(budget_val, 0),
-            "actual": round(actual_data["total"], 0),
+            "actual": actual_val,
+            "total": actual_val,
             "invoice_count": actual_data["count"],
         })
 
