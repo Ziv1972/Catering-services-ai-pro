@@ -25,44 +25,76 @@ MONTH_COLS = ["jan", "feb", "mar", "apr", "may", "jun",
               "jul", "aug", "sep", "oct", "nov", "dec"]
 
 
-async def _resolve_budget_year(db: AsyncSession, preferred_year: int) -> int:
-    """Find the best year with budget data. Falls back to most recent year."""
-    result = await db.execute(
+async def _resolve_budget_year(
+    db: AsyncSession,
+    preferred_year: int,
+    supplier_id: Optional[int] = None,
+    site_id: Optional[int] = None,
+) -> int:
+    """Find the best year with budget data, optionally for a specific supplier/site."""
+    query = (
         select(func.count(SupplierBudget.id))
         .where(SupplierBudget.year == preferred_year, SupplierBudget.is_active == True)
     )
+    if supplier_id:
+        query = query.where(SupplierBudget.supplier_id == supplier_id)
+    if site_id:
+        query = query.where(SupplierBudget.site_id == site_id)
+
+    result = await db.execute(query)
     if (result.scalar() or 0) > 0:
         return preferred_year
 
-    result = await db.execute(
+    # Fallback: most recent year with budget data for this supplier/site
+    fallback_query = (
         select(SupplierBudget.year)
         .where(SupplierBudget.is_active == True)
-        .order_by(SupplierBudget.year.desc())
-        .limit(1)
     )
+    if supplier_id:
+        fallback_query = fallback_query.where(SupplierBudget.supplier_id == supplier_id)
+    if site_id:
+        fallback_query = fallback_query.where(SupplierBudget.site_id == site_id)
+    fallback_query = fallback_query.order_by(SupplierBudget.year.desc()).limit(1)
+
+    result = await db.execute(fallback_query)
     row = result.scalar_one_or_none()
     return row if row else preferred_year
 
 
-async def _resolve_proforma_year(db: AsyncSession, preferred_year: int) -> int:
-    """Find the best year with proforma data."""
-    result = await db.execute(
+async def _resolve_proforma_year(
+    db: AsyncSession,
+    preferred_year: int,
+    supplier_id: Optional[int] = None,
+    site_id: Optional[int] = None,
+) -> int:
+    """Find the best year with proforma data, optionally for a specific supplier/site."""
+    query = (
         select(func.count(Proforma.id))
         .where(year_equals(Proforma.invoice_date, preferred_year))
     )
+    if supplier_id:
+        query = query.where(Proforma.supplier_id == supplier_id)
+    if site_id:
+        query = query.where(Proforma.site_id == site_id)
+
+    result = await db.execute(query)
     if (result.scalar() or 0) > 0:
         return preferred_year
 
+    # Fallback: most recent year with proforma data for this supplier/site
     from backend.database import is_sqlite
     if is_sqlite:
-        result = await db.execute(
-            select(func.strftime("%Y", func.max(Proforma.invoice_date)))
-        )
+        fallback_query = select(func.strftime("%Y", func.max(Proforma.invoice_date)))
     else:
         from sqlalchemy import extract, cast, String
-        result = await db.execute(
-            select(cast(extract("year", func.max(Proforma.invoice_date)), String))
-        )
+        fallback_query = select(cast(extract("year", func.max(Proforma.invoice_date)), String))
+
+    if supplier_id:
+        fallback_query = fallback_query.where(Proforma.supplier_id == supplier_id)
+    if site_id:
+        fallback_query = fallback_query.where(Proforma.site_id == site_id)
+
+    result = await db.execute(fallback_query)
     row = result.scalar_one_or_none()
     return int(row) if row else preferred_year
 
@@ -315,11 +347,11 @@ async def budget_drill_down(
     """Drill-down: budget vs actual by month with category breakdown."""
     target_year = year or datetime.now().year
 
-    # Use explicit years from dashboard if provided, otherwise resolve
+    # Resolve years for the specific supplier/site (not globally)
     if not proforma_year:
-        proforma_year = await _resolve_proforma_year(db, target_year)
+        proforma_year = await _resolve_proforma_year(db, target_year, supplier_id, site_id)
     if not budget_year:
-        budget_year = await _resolve_budget_year(db, target_year)
+        budget_year = await _resolve_budget_year(db, target_year, supplier_id, site_id)
 
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -461,7 +493,7 @@ async def product_drill_down(
 ):
     """Drill-down: spending by product category, then by item."""
     target_year = year or datetime.now().year
-    proforma_year = await _resolve_proforma_year(db, target_year)
+    proforma_year = await _resolve_proforma_year(db, target_year, supplier_id, site_id)
 
     # Get item-level spending
     query = (
@@ -508,7 +540,7 @@ async def product_history_drill_down(
 ):
     """Drill-down: monthly breakdown for a specific product."""
     target_year = year or datetime.now().year
-    proforma_year = await _resolve_proforma_year(db, target_year)
+    proforma_year = await _resolve_proforma_year(db, target_year, supplier_id, site_id)
 
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

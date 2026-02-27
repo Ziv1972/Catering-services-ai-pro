@@ -422,12 +422,17 @@ export default function Dashboard() {
                   const totalBudget = visibleItems.reduce((s: number, i: any) => s + (i.budget || 0), 0);
                   const totalActual = visibleItems.reduce((s: number, i: any) => s + (i.actual || 0), 0);
                   const isEmpty = totalBudget === 0 && totalActual === 0;
+                  const budgetYearLabel = drillDown.data?.budget_year;
+                  const proformaYearLabel = drillDown.data?.year;
                   return (
                     <>
                       {isEmpty && (
                         <div className="text-center py-8 mb-4 bg-gray-50 rounded-lg">
-                          <p className="text-gray-400 text-sm">No budget or proforma data found for this supplier/site combination.</p>
-                          <p className="text-gray-400 text-xs mt-1">Configure monthly budget amounts or add proformas to see data here.</p>
+                          <p className="text-gray-400 text-sm">No budget or proforma data found for this supplier/site.</p>
+                          <p className="text-gray-400 text-xs mt-1">
+                            Budget year: {budgetYearLabel || 'N/A'} · Proforma year: {proformaYearLabel || 'N/A'}
+                          </p>
+                          <p className="text-gray-400 text-xs mt-1">Try selecting a different year from the dropdown.</p>
                         </div>
                       )}
                       {/* Year + Range selector */}
@@ -438,10 +443,14 @@ export default function Dashboard() {
                             onChange={(e) => changeDrillDownYear(Number(e.target.value))}
                             className="px-2 py-1 text-xs border rounded-md bg-white focus:ring-2 focus:ring-blue-400"
                           >
-                            {[0, 1, 2, 3].map((offset) => {
-                              const y = new Date().getFullYear() - offset;
-                              return <option key={y} value={y}>{y}</option>;
-                            })}
+                            {(() => {
+                              const currentY = new Date().getFullYear();
+                              const years = new Set([currentY, currentY - 1, currentY - 2, currentY - 3]);
+                              if (drillDownYear) years.add(drillDownYear);
+                              return Array.from(years).sort((a, b) => b - a).map((y) => (
+                                <option key={y} value={y}>{y}</option>
+                              ));
+                            })()}
                           </select>
                           <div className="flex gap-1">
                             {[3, 6, 12].map((r) => (
@@ -909,7 +918,7 @@ export default function Dashboard() {
                     className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-blue-50 cursor-pointer transition-colors"
                     onClick={(e) => {
                       e.stopPropagation();
-                      openBudgetDrillDown(b.supplier_id, b.site_id, `${b.supplier_name} (${b.site_name})`);
+                      openBudgetDrillDown(b.supplier_id, b.site_id, `${b.supplier_name} (${b.site_name})`, data?.proforma_year);
                     }}
                   >
                     <div className="flex-1">
