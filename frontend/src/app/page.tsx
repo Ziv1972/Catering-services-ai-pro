@@ -148,8 +148,9 @@ export default function Dashboard() {
       // Use the resolved proforma_year from backend for subsequent calls
       if (result?.year) setDrillDownYear(result.year);
       setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
-    } catch {
-      setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.detail || err?.message || 'Unknown error';
+      setDrillDown((prev) => prev ? { ...prev, data: { items: [], error: errMsg }, loading: false } : null);
     }
   };
 
@@ -428,11 +429,20 @@ export default function Dashboard() {
                     <>
                       {isEmpty && (
                         <div className="text-center py-8 mb-4 bg-gray-50 rounded-lg">
-                          <p className="text-gray-400 text-sm">No budget or proforma data found for this supplier/site.</p>
-                          <p className="text-gray-400 text-xs mt-1">
-                            Budget year: {budgetYearLabel || 'N/A'} · Proforma year: {proformaYearLabel || 'N/A'}
-                          </p>
-                          <p className="text-gray-400 text-xs mt-1">Try selecting a different year from the dropdown.</p>
+                          {drillDown.data?.error ? (
+                            <>
+                              <p className="text-red-400 text-sm">Error loading data</p>
+                              <p className="text-red-300 text-xs mt-1 font-mono">{drillDown.data.error}</p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-gray-400 text-sm">No budget or proforma data found for this supplier/site.</p>
+                              <p className="text-gray-400 text-xs mt-1">
+                                Budget year: {budgetYearLabel || 'N/A'} · Proforma year: {proformaYearLabel || 'N/A'}
+                              </p>
+                              <p className="text-gray-400 text-xs mt-1">Try selecting a different year from the dropdown.</p>
+                            </>
+                          )}
                         </div>
                       )}
                       {/* Year + Range selector */}

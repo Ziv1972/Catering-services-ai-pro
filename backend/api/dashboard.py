@@ -345,13 +345,21 @@ async def budget_drill_down(
     current_user: User = Depends(get_current_user)
 ):
     """Drill-down: budget vs actual by month with category breakdown."""
+    import logging
+    logger = logging.getLogger(__name__)
+
     target_year = year or datetime.now().year
 
-    # Resolve years for the specific supplier/site (not globally)
-    if not proforma_year:
-        proforma_year = await _resolve_proforma_year(db, target_year, supplier_id, site_id)
-    if not budget_year:
-        budget_year = await _resolve_budget_year(db, target_year, supplier_id, site_id)
+    try:
+        # Resolve years for the specific supplier/site (not globally)
+        if not proforma_year:
+            proforma_year = await _resolve_proforma_year(db, target_year, supplier_id, site_id)
+        if not budget_year:
+            budget_year = await _resolve_budget_year(db, target_year, supplier_id, site_id)
+    except Exception as e:
+        logger.error(f"Year resolution failed: {e}", exc_info=True)
+        proforma_year = proforma_year or target_year
+        budget_year = budget_year or target_year
 
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
