@@ -158,7 +158,7 @@ async def cost_monthly(
         items.append({
             "month": m,
             "month_name": MONTH_NAMES.get(m, str(m)),
-            "total_cost": round(row.total_cost or 0, 0),
+            "total_cost": round(row.total_cost or 0, 2),
             "invoice_count": row.invoice_count or 0,
         })
 
@@ -198,7 +198,7 @@ async def cost_by_site(
         {
             "site_id": row.site_id,
             "site_name": row.site_name,
-            "total_cost": round(row.total_cost or 0, 0),
+            "total_cost": round(row.total_cost or 0, 2),
             "invoice_count": row.invoice_count or 0,
         }
         for row in result
@@ -246,7 +246,7 @@ async def cost_by_category(
         key=lambda x: group_order.get(x["category_name"], 999),
     )
     for item in sorted_items:
-        item["total_cost"] = round(item["total_cost"], 0)
+        item["total_cost"] = round(item["total_cost"], 2)
         item["total_qty"] = round(item["total_qty"], 1)
 
     return {
@@ -278,7 +278,7 @@ async def cost_products(
         if group_name == category_name:
             products.append({
                 "product_name": row.product_name,
-                "total_cost": round(row.total_cost or 0, 0),
+                "total_cost": round(row.total_cost or 0, 2),
                 "total_quantity": round(row.total_qty or 0, 1),
                 "avg_unit_price": round(row.avg_price or 0, 2),
                 "order_count": row.item_count or 0,
@@ -415,9 +415,75 @@ async def quantity_by_category(
     )
     for item in sorted_items:
         item["total_quantity"] = round(item["total_quantity"], 0)
-        item["total_cost"] = round(item["total_cost"], 0)
+        item["total_cost"] = round(item["total_cost"], 2)
 
     return {"year": year, "month": month, "site_id": site_id, "items": sorted_items}
+
+
+@router.get("/quantity/category-monthly")
+async def quantity_category_monthly(
+    year: int = Query(...),
+    site_id: int = Query(...),
+    category_name: str = Query(...),
+    supplier_id: Optional[int] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Monthly breakdown for a specific category at a site (between Level 3 and Level 4)."""
+    mappings = await _load_category_mappings(db)
+
+    m_expr = extract_month(Proforma.invoice_date)
+    query = (
+        select(
+            m_expr.label("month_str"),
+            ProformaItem.product_name,
+            func.sum(ProformaItem.total_price).label("total_cost"),
+            func.sum(ProformaItem.quantity).label("total_qty"),
+            func.count(ProformaItem.id).label("item_count"),
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .where(
+            year_equals(Proforma.invoice_date, year),
+            Proforma.site_id == site_id,
+        )
+        .group_by(m_expr, ProformaItem.product_name)
+        .order_by(m_expr)
+    )
+    if supplier_id:
+        query = query.where(Proforma.supplier_id == supplier_id)
+
+    result = await db.execute(query)
+
+    # Aggregate by month, filtering to requested category
+    monthly: dict[int, dict] = {}
+    for row in result:
+        group_name, _, _ = _match_product_to_category(row.product_name, mappings)
+        if group_name != category_name:
+            continue
+        m = int(row.month_str)
+        if m not in monthly:
+            monthly[m] = {
+                "month": m,
+                "month_name": MONTH_NAMES.get(m, str(m)),
+                "total_quantity": 0,
+                "total_cost": 0,
+                "product_count": 0,
+            }
+        monthly[m]["total_quantity"] += row.total_qty or 0
+        monthly[m]["total_cost"] += row.total_cost or 0
+        monthly[m]["product_count"] += 1
+
+    items = sorted(monthly.values(), key=lambda x: x["month"])
+    for item in items:
+        item["total_quantity"] = round(item["total_quantity"], 0)
+        item["total_cost"] = round(item["total_cost"], 2)
+
+    return {
+        "year": year,
+        "site_id": site_id,
+        "category_name": category_name,
+        "items": items,
+    }
 
 
 @router.get("/quantity/products")
@@ -441,7 +507,7 @@ async def quantity_products(
             products.append({
                 "product_name": row.product_name,
                 "total_quantity": round(row.total_qty or 0, 1),
-                "total_cost": round(row.total_cost or 0, 0),
+                "total_cost": round(row.total_cost or 0, 2),
                 "avg_unit_price": round(row.avg_price or 0, 2),
                 "order_count": row.item_count or 0,
             })

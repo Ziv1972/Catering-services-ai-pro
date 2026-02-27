@@ -384,12 +384,21 @@ export default function ProformasPage() {
                         {proforma.proforma_number && (
                           <span className="text-sm text-gray-500">#{proforma.proforma_number}</span>
                         )}
+                        {proforma.flagged_count > 0 && (
+                          <Badge className="bg-red-100 text-red-700 border-red-200">
+                            <AlertTriangle className="w-3 h-3 mr-1" />
+                            {proforma.flagged_count} price {proforma.flagged_count === 1 ? 'flag' : 'flags'}
+                          </Badge>
+                        )}
                       </div>
                       <div className="flex items-center gap-4 text-sm text-gray-600">
                         <span>{format(new Date(proforma.invoice_date), 'MMM d, yyyy')}</span>
                         <span className="font-semibold text-gray-900">
-                          {proforma.currency === 'ILS' ? '₪' : '$'}{proforma.total_amount.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                          {proforma.currency === 'ILS' ? '₪' : '$'}{proforma.total_amount.toLocaleString('en-US', { maximumFractionDigits: 2 })}
                         </span>
+                        {proforma.item_count > 0 && (
+                          <span className="text-gray-400">{proforma.item_count} items</span>
+                        )}
                       </div>
                     </div>
                     <ArrowRight className="w-5 h-5 text-gray-400" />

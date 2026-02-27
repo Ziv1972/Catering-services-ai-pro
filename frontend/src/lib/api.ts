@@ -248,6 +248,11 @@ export const proformasAPI = {
     const response = await api.post('/api/proformas', data);
     return response.data;
   },
+
+  comparePrices: async (proformaId: number) => {
+    const response = await api.post(`/api/proformas/${proformaId}/compare-prices`);
+    return response.data;
+  },
 };
 
 // Suppliers
@@ -663,6 +668,10 @@ export const categoryAnalysisAPI = {
   },
   quantityByCategory: async (params: { year: number; month: number; site_id: number; supplier_id?: number }) => {
     const response = await api.get('/api/category-analysis/quantity/by-category', { params });
+    return response.data;
+  },
+  quantityCategoryMonthly: async (params: { year: number; site_id: number; category_name: string; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/quantity/category-monthly', { params });
     return response.data;
   },
   quantityProducts: async (params: { year: number; month: number; site_id: number; category_name: string; supplier_id?: number }) => {

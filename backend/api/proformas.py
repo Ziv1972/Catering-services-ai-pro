@@ -13,6 +13,8 @@ from backend.database import get_db
 from backend.models.user import User
 from backend.models.proforma import Proforma, ProformaItem
 from backend.models.supplier import Supplier
+from backend.models.price_list import PriceList, PriceListItem
+from backend.models.product import Product
 from backend.api.auth import get_current_user
 
 router = APIRouter()
@@ -62,7 +64,7 @@ async def list_proformas(
 
     query = (
         select(Proforma)
-        .options(selectinload(Proforma.supplier))
+        .options(selectinload(Proforma.supplier), selectinload(Proforma.items))
         .where(Proforma.invoice_date >= cutoff)
     )
 
@@ -76,22 +78,28 @@ async def list_proformas(
     result = await db.execute(query)
     proformas = result.scalars().all()
 
-    return [
-        ProformaResponse(
-            id=p.id,
-            supplier_id=p.supplier_id,
-            supplier_name=p.supplier.name if p.supplier else None,
-            site_id=p.site_id,
-            proforma_number=p.proforma_number,
-            invoice_date=p.invoice_date,
-            delivery_date=p.delivery_date,
-            total_amount=p.total_amount,
-            currency=p.currency,
-            status=p.status,
-            notes=p.notes,
-        )
-        for p in proformas
-    ]
+    response = []
+    for p in proformas:
+        flagged_count = sum(1 for item in (p.items or []) if item.flagged)
+        item_count = len(p.items or [])
+        resp = {
+            "id": p.id,
+            "supplier_id": p.supplier_id,
+            "supplier_name": p.supplier.name if p.supplier else None,
+            "site_id": p.site_id,
+            "proforma_number": p.proforma_number,
+            "invoice_date": p.invoice_date.isoformat(),
+            "delivery_date": p.delivery_date.isoformat() if p.delivery_date else None,
+            "total_amount": p.total_amount,
+            "currency": p.currency,
+            "status": p.status,
+            "notes": p.notes,
+            "item_count": item_count,
+            "flagged_count": flagged_count,
+        }
+        response.append(resp)
+
+    return response
 
 
 @router.get("/{proforma_id}")
@@ -303,4 +311,165 @@ async def get_vendor_spending(
         "monthly_series": monthly_series,
         "vendor_totals": vendor_totals,
         "grand_total": round(sum(monthly_totals.values()), 2),
+    }
+
+
+def _normalize_product_name(name: str) -> str:
+    """Normalize product name for matching (lowercase, stripped)."""
+    return name.strip().lower()
+
+
+@router.post("/{proforma_id}/compare-prices")
+async def compare_proforma_prices(
+    proforma_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Compare proforma items against the supplier's latest price list.
+    Updates price_variance and flagged fields on each ProformaItem.
+    Returns the comparison results.
+    """
+    # Load the proforma with items
+    result = await db.execute(
+        select(Proforma)
+        .options(selectinload(Proforma.items), selectinload(Proforma.supplier))
+        .where(Proforma.id == proforma_id)
+    )
+    proforma = result.scalar_one_or_none()
+    if not proforma:
+        raise HTTPException(status_code=404, detail="Proforma not found")
+
+    # Find the latest price list for this supplier (effective_date <= proforma date)
+    pl_result = await db.execute(
+        select(PriceList)
+        .options(selectinload(PriceList.items).selectinload(PriceListItem.product))
+        .where(
+            PriceList.supplier_id == proforma.supplier_id,
+            PriceList.effective_date <= proforma.invoice_date,
+        )
+        .order_by(PriceList.effective_date.desc())
+        .limit(1)
+    )
+    price_list = pl_result.scalar_one_or_none()
+
+    # If no price list before invoice date, try the latest one for this supplier
+    if not price_list:
+        pl_result = await db.execute(
+            select(PriceList)
+            .options(selectinload(PriceList.items).selectinload(PriceListItem.product))
+            .where(PriceList.supplier_id == proforma.supplier_id)
+            .order_by(PriceList.effective_date.desc())
+            .limit(1)
+        )
+        price_list = pl_result.scalar_one_or_none()
+
+    if not price_list:
+        return {
+            "proforma_id": proforma_id,
+            "price_list_id": None,
+            "price_list_date": None,
+            "message": "No price list found for this supplier",
+            "items": [
+                {
+                    "id": item.id,
+                    "product_name": item.product_name,
+                    "quantity": item.quantity,
+                    "unit": item.unit,
+                    "unit_price": item.unit_price,
+                    "total_price": item.total_price,
+                    "expected_price": None,
+                    "price_variance": None,
+                    "flagged": False,
+                    "match_status": "no_price_list",
+                }
+                for item in proforma.items
+            ],
+            "summary": {"total_items": len(proforma.items), "matched": 0, "flagged": 0, "unmatched": len(proforma.items)},
+        }
+
+    # Build lookup: product name (normalized) → expected price
+    price_lookup: dict[str, float] = {}
+    for pl_item in price_list.items:
+        if pl_item.product:
+            price_lookup[_normalize_product_name(pl_item.product.name)] = pl_item.price
+            if pl_item.product.hebrew_name:
+                price_lookup[_normalize_product_name(pl_item.product.hebrew_name)] = pl_item.price
+
+    # Compare each proforma item
+    comparison_items = []
+    matched_count = 0
+    flagged_count = 0
+    variance_threshold = 5.0  # flag if > 5% variance
+
+    for item in proforma.items:
+        normalized_name = _normalize_product_name(item.product_name)
+        expected_price = price_lookup.get(normalized_name)
+
+        if expected_price is not None:
+            matched_count += 1
+            variance_pct = round(
+                ((item.unit_price - expected_price) / expected_price) * 100, 1
+            ) if expected_price > 0 else 0.0
+
+            is_flagged = abs(variance_pct) > variance_threshold
+
+            # Update the item in DB
+            item.price_variance = variance_pct
+            item.flagged = is_flagged
+
+            if is_flagged:
+                flagged_count += 1
+
+            comparison_items.append({
+                "id": item.id,
+                "product_name": item.product_name,
+                "quantity": item.quantity,
+                "unit": item.unit,
+                "unit_price": round(item.unit_price, 2),
+                "total_price": round(item.total_price, 2),
+                "expected_price": round(expected_price, 2),
+                "price_variance": variance_pct,
+                "flagged": is_flagged,
+                "match_status": "matched",
+            })
+        else:
+            # No match found in price list
+            item.price_variance = None
+            item.flagged = False
+            comparison_items.append({
+                "id": item.id,
+                "product_name": item.product_name,
+                "quantity": item.quantity,
+                "unit": item.unit,
+                "unit_price": round(item.unit_price, 2),
+                "total_price": round(item.total_price, 2),
+                "expected_price": None,
+                "price_variance": None,
+                "flagged": False,
+                "match_status": "unmatched",
+            })
+
+    await db.commit()
+
+    # Sort: flagged first, then by absolute variance
+    comparison_items.sort(
+        key=lambda x: (
+            0 if x["flagged"] else 1,
+            -(abs(x["price_variance"]) if x["price_variance"] is not None else 0),
+        )
+    )
+
+    return {
+        "proforma_id": proforma_id,
+        "price_list_id": price_list.id,
+        "price_list_date": price_list.effective_date.isoformat(),
+        "supplier_name": proforma.supplier.name if proforma.supplier else None,
+        "items": comparison_items,
+        "summary": {
+            "total_items": len(comparison_items),
+            "matched": matched_count,
+            "flagged": flagged_count,
+            "unmatched": len(comparison_items) - matched_count,
+        },
     }
