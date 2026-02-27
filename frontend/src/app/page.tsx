@@ -383,17 +383,17 @@ export default function Dashboard() {
                   <div>
                     <CardTitle className="text-lg">
                       {drillDown.type === 'budget' && drillDown.level === 1
-                        ? `Budget vs Actual ${drillDown.context.label ? `- ${drillDown.context.label}` : ''}`
+                        ? `Budget vs Actual ${drillDown.context.label ? `— ${drillDown.context.label}` : ''}`
                         : drillDown.type === 'budget' && drillDown.level === 2
-                        ? `${drillDown.context.monthName} - Categories`
+                        ? [drillDown.context.monthName, 'Categories'].filter(Boolean).join(' — ')
                         : drillDown.type === 'budget' && drillDown.level === 3
-                        ? `${drillDown.context.monthName} - ${drillDown.context.categoryDisplayHe}`
+                        ? [drillDown.context.monthName, drillDown.context.categoryDisplayHe].filter(Boolean).join(' — ')
                         : drillDown.type === 'budget' && drillDown.level === 4
-                        ? `${drillDown.context.productName}`
+                        ? drillDown.context.productName || 'Product Details'
                         : drillDown.type === 'project'
-                        ? `Project: ${drillDown.context.label}`
+                        ? `Project: ${drillDown.context.label || ''}`
                         : drillDown.type === 'maintenance'
-                        ? `Maintenance: ${drillDown.context.label}`
+                        ? `Maintenance: ${drillDown.context.label || ''}`
                         : 'Details'}
                     </CardTitle>
                     <p className="text-sm text-gray-500">
@@ -704,11 +704,11 @@ export default function Dashboard() {
                           ))}
                         </tbody>
                         <tfoot>
-                          <tr className="border-t-2 font-semibold">
-                            <td className="py-2">Total</td>
-                            <td className="py-2 text-right">{(drillDown.data?.items || []).reduce((s: number, i: any) => s + (i.total_quantity || 0), 0).toLocaleString()}</td>
+                          <tr className="border-t-2 bg-teal-50">
+                            <td className="py-2 text-sm text-teal-700">סה&quot;כ</td>
+                            <td className="py-2 text-right text-sm text-teal-700 tabular-nums">{(drillDown.data?.items || []).reduce((s: number, i: any) => s + (i.total_quantity || 0), 0).toLocaleString()}</td>
                             <td className="py-2" />
-                            <td className="py-2 text-right font-mono">{formatCurrency((drillDown.data?.items || []).reduce((s: number, i: any) => s + (i.total_cost || 0), 0))}</td>
+                            <td className="py-2 text-right text-sm text-teal-700 tabular-nums">{formatCurrency((drillDown.data?.items || []).reduce((s: number, i: any) => s + (i.total_cost || 0), 0))}</td>
                           </tr>
                         </tfoot>
                       </table>
@@ -718,6 +718,30 @@ export default function Dashboard() {
               ) : drillDown.type === 'budget' && drillDown.level === 4 ? (
                 /* Level 4: Product monthly breakdown */
                 <div>
+                  {/* Year selector for product history */}
+                  <div className="flex items-center gap-3 mb-4 p-3 bg-gray-50 rounded-lg">
+                    <span className="text-sm text-gray-500 font-medium">Year:</span>
+                    <select
+                      value={drillDownYear}
+                      onChange={(e) => {
+                        const newYear = Number(e.target.value);
+                        setDrillDownYear(newYear);
+                        if (drillDown.context.productName) {
+                          drillIntoProductDetail(drillDown.context.productName);
+                        }
+                      }}
+                      className="border rounded px-2 py-1 text-sm bg-white"
+                    >
+                      {(() => {
+                        const cy = new Date().getFullYear();
+                        const years = new Set([cy, cy - 1, cy - 2, cy - 3]);
+                        if (drillDownYear) years.add(drillDownYear);
+                        return Array.from(years).sort((a, b) => b - a).map((y) => (
+                          <option key={y} value={y}>{y}</option>
+                        ));
+                      })()}
+                    </select>
+                  </div>
                   {(drillDown.data?.monthly || []).length === 0 ? (
                     <p className="text-center py-8 text-gray-400">No monthly data for this product</p>
                   ) : (
@@ -751,21 +775,21 @@ export default function Dashboard() {
                           <tbody>
                             {drillDown.data.monthly.map((m: any, i: number) => (
                               <tr key={i} className="border-b last:border-0">
-                                <td className="py-2 font-medium">{m.month_name}</td>
-                                <td className="py-2 text-right text-gray-600">{m.quantity?.toLocaleString()}</td>
-                                <td className="py-2 text-right text-gray-600">₪{m.avg_price?.toFixed(2)}</td>
-                                <td className="py-2 text-right font-mono">{formatCurrency(m.total)}</td>
+                                <td className="py-2">{m.month_name}</td>
+                                <td className="py-2 text-right text-gray-600 tabular-nums">{m.quantity?.toLocaleString()}</td>
+                                <td className="py-2 text-right text-gray-600 tabular-nums">₪{m.avg_price?.toFixed(2)}</td>
+                                <td className="py-2 text-right tabular-nums">{formatCurrency(m.total)}</td>
                                 <td className="py-2 text-right text-gray-500">{m.orders}</td>
                               </tr>
                             ))}
                           </tbody>
                           <tfoot>
-                            <tr className="border-t-2 font-semibold">
-                              <td className="py-2">Total</td>
-                              <td className="py-2 text-right">{drillDown.data.monthly.reduce((s: number, m: any) => s + (m.quantity || 0), 0).toLocaleString()}</td>
+                            <tr className="border-t-2 bg-teal-50">
+                              <td className="py-2 text-sm text-teal-700">סה&quot;כ</td>
+                              <td className="py-2 text-right text-sm text-teal-700 tabular-nums">{drillDown.data.monthly.reduce((s: number, m: any) => s + (m.quantity || 0), 0).toLocaleString()}</td>
                               <td className="py-2" />
-                              <td className="py-2 text-right font-mono">{formatCurrency(drillDown.data.monthly.reduce((s: number, m: any) => s + (m.total || 0), 0))}</td>
-                              <td className="py-2 text-right">{drillDown.data.monthly.reduce((s: number, m: any) => s + (m.orders || 0), 0)}</td>
+                              <td className="py-2 text-right text-sm text-teal-700 tabular-nums">{formatCurrency(drillDown.data.monthly.reduce((s: number, m: any) => s + (m.total || 0), 0))}</td>
+                              <td className="py-2 text-right text-sm text-teal-700">{drillDown.data.monthly.reduce((s: number, m: any) => s + (m.orders || 0), 0)}</td>
                             </tr>
                           </tfoot>
                         </table>

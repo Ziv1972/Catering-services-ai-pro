@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import {
   TrendingUp, Calendar, DollarSign, Utensils,
-  AlertTriangle, FileText, BarChart3, X, ArrowLeft, ChevronRight
+  AlertTriangle, FileText, BarChart3, X, ArrowLeft, ChevronRight, Check
 } from 'lucide-react';
 import { historicalAPI, categoryAnalysisAPI } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -41,6 +41,8 @@ const CATEGORY_COLORS: Record<string, string> = {
   kitchenette_dry: '#8b5cf6', kitchenette_dairy: '#06b6d4', coffee_tea: '#78716c',
   cut_veg: '#22c55e', coffee_beans: '#a16207', uncategorized: '#d1d5db',
 };
+
+const PRODUCT_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#78716c'];
 
 // Format currency with 2 decimal places, safely handles undefined/null
 const fmt = (v: number | null | undefined) =>
@@ -125,6 +127,7 @@ interface CatDrillState {
     siteName?: string;
     categoryName?: string;
     categoryDisplayHe?: string;
+    productNames?: string[];
   };
   data: any;
   loading: boolean;
@@ -145,10 +148,12 @@ export default function AnalyticsPage() {
     context?: any;
   } | null>(null);
 
-  // Category quantity drill-down (5 levels now)
+  // Category quantity drill-down (6 levels now)
   const [catDrill, setCatDrill] = useState<CatDrillState | null>(null);
   // History stack for back navigation without re-fetching
   const catHistoryRef = useRef<CatDrillState[]>([]);
+  // Multi-product selection at Level 4
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
 
   const currentYear = new Date().getFullYear();
 
@@ -226,17 +231,23 @@ export default function AnalyticsPage() {
     }
   };
 
-  // ─── Category Quantity Drill-Down (5 levels: months → sites → categories → category-monthly → products) ───
+  // ─── Category Quantity Drill-Down (6 levels: months → sites → categories → category-monthly → products → product-monthly) ───
+
+  // Deep copy to preserve history correctly
+  const deepCopyCatDrill = (state: CatDrillState): CatDrillState => {
+    return JSON.parse(JSON.stringify(state));
+  };
 
   const pushHistory = useCallback(() => {
     if (catDrill) {
-      catHistoryRef.current = [...catHistoryRef.current, { ...catDrill }];
+      catHistoryRef.current = [...catHistoryRef.current, deepCopyCatDrill(catDrill)];
     }
   }, [catDrill]);
 
   const openCategoryQtyDrillDown = async (year?: number) => {
     const y = year ?? currentYear;
     catHistoryRef.current = [];
+    setSelectedProducts([]);
     setCatDrill({ level: 1, context: { year: y, fromMonth: 1, toMonth: 12 }, data: null, loading: true });
     try {
       const result = await categoryAnalysisAPI.quantityMonthly({ year: y });
@@ -248,10 +259,10 @@ export default function AnalyticsPage() {
 
   const refreshLevel1 = async (year: number, fromMonth: number, toMonth: number) => {
     catHistoryRef.current = [];
+    setSelectedProducts([]);
     setCatDrill({ level: 1, context: { year, fromMonth, toMonth }, data: null, loading: true });
     try {
       const result = await categoryAnalysisAPI.quantityMonthly({ year });
-      // Filter to the selected month range
       const filtered = {
         ...result,
         items: (result.items || []).filter((item: any) => item.month >= fromMonth && item.month <= toMonth),
@@ -294,7 +305,7 @@ export default function AnalyticsPage() {
     }
   };
 
-  // NEW: Level 3.5 — Monthly breakdown for a specific category
+  // Level 3.5 — Monthly breakdown for a specific category
   const drillIntoCategoryMonthly = async (categoryName: string, displayHe: string) => {
     if (!catDrill) return;
     pushHistory();
@@ -307,7 +318,6 @@ export default function AnalyticsPage() {
       const result = await categoryAnalysisAPI.quantityCategoryMonthly({
         year: ctx.year, site_id: ctx.site_id!, category_name: categoryName,
       });
-      // Filter to selected month range
       const filtered = {
         ...result,
         items: (result.items || []).filter((item: any) =>
@@ -323,6 +333,7 @@ export default function AnalyticsPage() {
   const drillIntoQtyProducts = async (month: number, monthName: string) => {
     if (!catDrill) return;
     pushHistory();
+    setSelectedProducts([]);
     const ctx = catDrill.context;
     setCatDrill((prev) => prev ? {
       ...prev, level: 4, context: { ...ctx, month, monthName },
@@ -338,12 +349,46 @@ export default function AnalyticsPage() {
     }
   };
 
+  // Level 5 — Multi-product monthly comparison
+  const drillIntoProductMonthly = async (productNames: string[]) => {
+    if (!catDrill || productNames.length === 0) return;
+    pushHistory();
+    const ctx = catDrill.context;
+    setCatDrill((prev) => prev ? {
+      ...prev, level: 5, context: { ...ctx, productNames },
+      data: null, loading: true,
+    } : null);
+    try {
+      const result = await categoryAnalysisAPI.quantityProductMonthly({
+        year: ctx.year,
+        site_id: ctx.site_id!,
+        category_name: ctx.categoryName!,
+        product_names: productNames.join(','),
+      });
+      setCatDrill((prev) => prev ? { ...prev, data: result, loading: false } : null);
+    } catch {
+      setCatDrill((prev) => prev ? { ...prev, data: { series: [] }, loading: false } : null);
+    }
+  };
+
+  // Toggle product selection for multi-select
+  const toggleProductSelection = (productName: string) => {
+    setSelectedProducts((prev) =>
+      prev.includes(productName)
+        ? prev.filter((p) => p !== productName)
+        : prev.length < 8
+          ? [...prev, productName]
+          : prev
+    );
+  };
+
   // Back navigation using history stack — no re-fetching
   const goBackCatDrill = () => {
     if (!catDrill) return;
     if (catDrill.level <= 1) {
       setCatDrill(null);
       catHistoryRef.current = [];
+      setSelectedProducts([]);
       return;
     }
     const history = [...catHistoryRef.current];
@@ -351,8 +396,13 @@ export default function AnalyticsPage() {
     catHistoryRef.current = history;
     if (prevState) {
       setCatDrill(prevState);
+      // Restore selected products only for Level 4
+      if (prevState.level !== 4) {
+        setSelectedProducts([]);
+      }
     } else {
       setCatDrill(null);
+      setSelectedProducts([]);
     }
   };
 
@@ -361,10 +411,27 @@ export default function AnalyticsPage() {
     const ctx = catDrill.context;
     const levelNum = catDrill.level;
     if (levelNum === 1) return `Product Quantities by Month (${ctx.year})`;
-    if (levelNum === 2) return `${ctx.monthName ?? ''} - Quantities by Site`;
-    if (levelNum === 3) return `${ctx.monthName ?? ''} - ${ctx.siteName ?? ''} - Categories`;
-    if (levelNum === 3.5) return `${ctx.siteName ?? ''} - ${ctx.categoryDisplayHe ?? ''} - Monthly`;
-    if (levelNum === 4) return `${ctx.siteName ?? ''} - ${ctx.categoryDisplayHe ?? ''} - ${ctx.monthName ?? ''}`;
+    if (levelNum === 2) {
+      const parts = [ctx.monthName, 'Quantities by Site'].filter(Boolean);
+      return parts.join(' — ');
+    }
+    if (levelNum === 3) {
+      const parts = [ctx.monthName, ctx.siteName, 'Categories'].filter(Boolean);
+      return parts.join(' — ');
+    }
+    if (levelNum === 3.5) {
+      const parts = [ctx.siteName, ctx.categoryDisplayHe, 'Monthly'].filter(Boolean);
+      return parts.join(' — ');
+    }
+    if (levelNum === 4) {
+      const parts = [ctx.siteName, ctx.categoryDisplayHe, ctx.monthName].filter(Boolean);
+      return parts.join(' — ');
+    }
+    if (levelNum === 5) {
+      const count = ctx.productNames?.length ?? 0;
+      const parts = [ctx.siteName, ctx.categoryDisplayHe, `${count} product${count !== 1 ? 's' : ''}`].filter(Boolean);
+      return parts.join(' — ');
+    }
     return '';
   };
 
@@ -375,16 +442,16 @@ export default function AnalyticsPage() {
     if (levelNum === 2) return 'Click a site to see categories';
     if (levelNum === 3) return 'Click a category to see monthly breakdown';
     if (levelNum === 3.5) return 'Click a month to see products';
-    if (levelNum === 4) return 'Product quantity breakdown';
+    if (levelNum === 4) return 'Select products to compare monthly trends';
+    if (levelNum === 5) return 'Monthly comparison for selected products';
     return '';
   };
 
-  // Period change handler for the drill-down
+  // Period change handler — always resets to Level 1
   const handlePeriodChange = (field: 'year' | 'fromMonth' | 'toMonth', value: number) => {
     if (!catDrill) return;
     const ctx = catDrill.context;
     const newCtx = { ...ctx, [field]: value };
-    // On any period change, refresh level 1
     refreshLevel1(newCtx.year, newCtx.fromMonth, newCtx.toMonth);
   };
 
@@ -434,6 +501,22 @@ export default function AnalyticsPage() {
         (k: string) => !['month', 'total', 'ma_3m'].includes(k)
       )
     : [];
+
+  // Build Level 5 chart data — merge all products into unified month rows
+  const buildProductComparisonData = () => {
+    if (!catDrill || catDrill.level !== 5 || !catDrill.data?.series) return [];
+    const monthMap: Record<number, any> = {};
+    for (const product of catDrill.data.series) {
+      for (const m of product.months) {
+        if (!monthMap[m.month]) {
+          monthMap[m.month] = { month: m.month, month_name: m.month_name };
+        }
+        monthMap[m.month][`qty_${product.product_name}`] = m.total_quantity;
+        monthMap[m.month][`cost_${product.product_name}`] = m.total_cost;
+      }
+    }
+    return Object.values(monthMap).sort((a: any, b: any) => a.month - b.month);
+  };
 
   return (
     <div>
@@ -722,7 +805,7 @@ export default function AnalyticsPage() {
                 <div>
                   <CardTitle className="text-lg">Product Category Quantities ({currentYear})</CardTitle>
                   <p className="text-sm text-gray-500">
-                    FoodHouse proforma quantities by product category &middot; 5-level drill-down
+                    FoodHouse proforma quantities by product category &middot; 6-level drill-down
                   </p>
                 </div>
               </div>
@@ -748,21 +831,19 @@ export default function AnalyticsPage() {
                       <p className="text-sm text-gray-500">{getCatDrillSubtitle()}</p>
                     </div>
                   </div>
-                  <Button variant="ghost" size="sm" onClick={() => { setCatDrill(null); catHistoryRef.current = []; }}>
+                  <Button variant="ghost" size="sm" onClick={() => { setCatDrill(null); catHistoryRef.current = []; setSelectedProducts([]); }}>
                     <X className="w-4 h-4" />
                   </Button>
                 </div>
-                {/* Time Period Picker — shown at all levels */}
-                {catDrill.level === 1 && (
-                  <PeriodPicker
-                    selectedYear={catDrill.context.year}
-                    fromMonth={catDrill.context.fromMonth}
-                    toMonth={catDrill.context.toMonth}
-                    onYearChange={(y) => handlePeriodChange('year', y)}
-                    onFromMonthChange={(m) => handlePeriodChange('fromMonth', m)}
-                    onToMonthChange={(m) => handlePeriodChange('toMonth', m)}
-                  />
-                )}
+                {/* Time Period Picker — shown at ALL levels, always resets to L1 */}
+                <PeriodPicker
+                  selectedYear={catDrill.context.year}
+                  fromMonth={catDrill.context.fromMonth}
+                  toMonth={catDrill.context.toMonth}
+                  onYearChange={(y) => handlePeriodChange('year', y)}
+                  onFromMonthChange={(m) => handlePeriodChange('fromMonth', m)}
+                  onToMonthChange={(m) => handlePeriodChange('toMonth', m)}
+                />
               </CardHeader>
               <CardContent className="pt-4">
                 {catDrill.loading ? (
@@ -797,7 +878,7 @@ export default function AnalyticsPage() {
                                 <span className="text-xs text-gray-500 ml-2">{item.invoice_count ?? 0} invoices</span>
                               </div>
                               <div className="flex items-center gap-3">
-                                <span className="font-semibold tabular-nums">{fmtQty(item.total_quantity)}</span>
+                                <span className="tabular-nums text-gray-800">{fmtQty(item.total_quantity)}</span>
                                 <ChevronRight className="w-4 h-4 text-gray-400" />
                               </div>
                             </div>
@@ -824,7 +905,7 @@ export default function AnalyticsPage() {
                               <span className="text-xs text-gray-500 ml-2">{item.invoice_count ?? 0} invoices</span>
                             </div>
                             <div className="flex items-center gap-3">
-                              <span className="font-semibold tabular-nums">{fmtQty(item.total_quantity)}</span>
+                              <span className="tabular-nums text-gray-800">{fmtQty(item.total_quantity)}</span>
                               <ChevronRight className="w-4 h-4 text-gray-400" />
                             </div>
                           </div>
@@ -870,18 +951,18 @@ export default function AnalyticsPage() {
                                 <span className="text-xs text-gray-400">{item.item_count ?? 0} items</span>
                               </div>
                               <div className="flex items-center gap-3">
-                                <span className="font-semibold tabular-nums">{fmtQty(item.total_quantity)}</span>
+                                <span className="tabular-nums text-gray-800">{fmtQty(item.total_quantity)}</span>
                                 <span className="text-xs text-gray-400">({fmt(item.total_cost)})</span>
                                 <ChevronRight className="w-4 h-4 text-gray-400" />
                               </div>
                             </div>
                           ))}
                         </div>
-                        {/* Total row — improved styling */}
+                        {/* Total row */}
                         <div className="flex items-center justify-between p-3 mt-2 bg-teal-50 rounded-lg border border-teal-200">
-                          <span className="text-sm font-medium text-teal-800">&#1505;&#1492;&quot;&#1499;</span>
+                          <span className="text-sm text-teal-700">סה&quot;כ</span>
                           <div className="flex items-center gap-4">
-                            <span className="text-sm font-medium text-teal-800 tabular-nums">
+                            <span className="text-sm text-teal-700 tabular-nums">
                               {fmtQty((catDrill.data?.items || []).reduce((s: number, i: any) => s + (i.total_quantity || 0), 0))}
                             </span>
                             <span className="text-xs text-teal-600">
@@ -929,7 +1010,7 @@ export default function AnalyticsPage() {
                                 <span className="text-xs text-gray-500 ml-2">{item.product_count ?? 0} products</span>
                               </div>
                               <div className="flex items-center gap-4">
-                                <span className="font-semibold tabular-nums">{fmtQty(item.total_quantity)}</span>
+                                <span className="tabular-nums text-gray-800">{fmtQty(item.total_quantity)}</span>
                                 <span className="text-xs text-gray-500">{fmt(item.total_cost)}</span>
                                 <ChevronRight className="w-4 h-4 text-gray-400" />
                               </div>
@@ -938,9 +1019,9 @@ export default function AnalyticsPage() {
                         </div>
                         {/* Total row */}
                         <div className="flex items-center justify-between p-3 mt-2 bg-teal-50 rounded-lg border border-teal-200">
-                          <span className="text-sm font-medium text-teal-800">&#1505;&#1492;&quot;&#1499;</span>
+                          <span className="text-sm text-teal-700">סה&quot;כ</span>
                           <div className="flex items-center gap-4">
-                            <span className="text-sm font-medium text-teal-800 tabular-nums">
+                            <span className="text-sm text-teal-700 tabular-nums">
                               {fmtQty((catDrill.data?.items || []).reduce((s: number, i: any) => s + (i.total_quantity || 0), 0))}
                             </span>
                             <span className="text-xs text-teal-600">
@@ -952,45 +1033,176 @@ export default function AnalyticsPage() {
                     )}
                   </>
                 ) : catDrill.level === 4 ? (
-                  /* ─── Level 4: Products in category ─── */
+                  /* ─── Level 4: Products in category (with multi-select) ─── */
                   <div>
                     {(catDrill.data?.items || []).length === 0 ? (
                       <p className="text-center py-8 text-gray-400">No products in this category</p>
                     ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b text-left text-gray-500">
-                              <th className="pb-2 font-medium">Product</th>
-                              <th className="pb-2 font-medium text-right">Quantity</th>
-                              <th className="pb-2 font-medium text-right">Avg Price</th>
-                              <th className="pb-2 font-medium text-right">Total Cost</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(catDrill.data?.items || []).map((item: any, i: number) => (
-                              <tr key={i} className="border-b last:border-0">
-                                <td className="py-2 font-medium">{item.product_name}</td>
-                                <td className="py-2 text-right text-gray-600 tabular-nums">{fmtQty(item.total_quantity)}</td>
-                                <td className="py-2 text-right text-gray-600 tabular-nums">{fmt(item.avg_unit_price)}</td>
-                                <td className="py-2 text-right tabular-nums">{fmt(item.total_cost)}</td>
+                      <>
+                        {/* Compare button */}
+                        {selectedProducts.length > 0 && (
+                          <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200 flex items-center justify-between">
+                            <span className="text-sm text-blue-700">
+                              {selectedProducts.length} product{selectedProducts.length !== 1 ? 's' : ''} selected
+                            </span>
+                            <div className="flex gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setSelectedProducts([])}
+                                className="text-xs text-blue-600"
+                              >
+                                Clear
+                              </Button>
+                              <Button
+                                size="sm"
+                                onClick={() => drillIntoProductMonthly(selectedProducts)}
+                                className="bg-blue-600 text-white hover:bg-blue-700 text-xs"
+                              >
+                                Compare Monthly Trends
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="border-b text-left text-gray-500">
+                                <th className="pb-2 w-8"></th>
+                                <th className="pb-2 font-medium">Product</th>
+                                <th className="pb-2 font-medium text-right">Qty</th>
+                                <th className="pb-2 font-medium text-right">Avg Price</th>
+                                <th className="pb-2 font-medium text-right">Total</th>
                               </tr>
-                            ))}
-                          </tbody>
-                          <tfoot>
-                            <tr className="border-t-2">
-                              <td className="py-2 text-sm font-medium text-teal-800">&#1505;&#1492;&quot;&#1499;</td>
-                              <td className="py-2 text-right text-sm font-medium text-teal-800 tabular-nums">
-                                {fmtQty((catDrill.data?.items || []).reduce((s: number, i: any) => s + (i.total_quantity || 0), 0))}
-                              </td>
-                              <td className="py-2" />
-                              <td className="py-2 text-right text-sm font-medium text-teal-800 tabular-nums">
-                                {fmt((catDrill.data?.items || []).reduce((s: number, i: any) => s + (i.total_cost || 0), 0))}
-                              </td>
-                            </tr>
-                          </tfoot>
-                        </table>
-                      </div>
+                            </thead>
+                            <tbody>
+                              {(catDrill.data?.items || []).map((item: any, i: number) => {
+                                const isSelected = selectedProducts.includes(item.product_name);
+                                return (
+                                  <tr
+                                    key={i}
+                                    onClick={() => toggleProductSelection(item.product_name)}
+                                    className={`border-b last:border-0 cursor-pointer transition-colors ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                                  >
+                                    <td className="py-2">
+                                      <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}`}>
+                                        {isSelected && <Check className="w-3 h-3 text-white" />}
+                                      </div>
+                                    </td>
+                                    <td className="py-2 font-medium">{item.product_name}</td>
+                                    <td className="py-2 text-right text-gray-600 tabular-nums">{fmtQty(item.total_quantity)}</td>
+                                    <td className="py-2 text-right text-gray-600 tabular-nums">{fmt(item.avg_unit_price)}</td>
+                                    <td className="py-2 text-right tabular-nums">{fmt(item.total_cost)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot>
+                              <tr className="border-t-2">
+                                <td className="py-2" />
+                                <td className="py-2 text-sm text-teal-700">סה&quot;כ</td>
+                                <td className="py-2 text-right text-sm text-teal-700 tabular-nums">
+                                  {fmtQty((catDrill.data?.items || []).reduce((s: number, i: any) => s + (i.total_quantity || 0), 0))}
+                                </td>
+                                <td className="py-2" />
+                                <td className="py-2 text-right text-sm text-teal-700 tabular-nums">
+                                  {fmt((catDrill.data?.items || []).reduce((s: number, i: any) => s + (i.total_cost || 0), 0))}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                        {selectedProducts.length === 0 && (
+                          <p className="text-xs text-gray-400 mt-3 text-center">
+                            Tap rows to select products, then compare their monthly trends
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ) : catDrill.level === 5 ? (
+                  /* ─── Level 5: Multi-product monthly comparison ─── */
+                  <div>
+                    {(catDrill.data?.series || []).length === 0 ? (
+                      <p className="text-center py-8 text-gray-400">No monthly data for selected products</p>
+                    ) : (
+                      <>
+                        {/* Multi-line chart */}
+                        <div className="h-64 mb-4">
+                          <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                            <LineChart data={buildProductComparisonData()}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="month_name" tick={{ fontSize: 12 }} />
+                              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} />
+                              <Tooltip formatter={(val: any) => fmtQty(Number(val))} />
+                              <Legend />
+                              {(catDrill.data?.series || []).map((product: any, idx: number) => (
+                                <Line
+                                  key={product.product_name}
+                                  type="monotone"
+                                  dataKey={`qty_${product.product_name}`}
+                                  stroke={PRODUCT_COLORS[idx % PRODUCT_COLORS.length]}
+                                  strokeWidth={2}
+                                  dot={{ r: 4 }}
+                                  name={product.product_name}
+                                />
+                              ))}
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* Per-product tables */}
+                        {(catDrill.data?.series || []).map((product: any, pIdx: number) => (
+                          <div key={product.product_name} className="mb-4">
+                            <div className="flex items-center gap-2 mb-2">
+                              <div
+                                className="w-3 h-3 rounded-full"
+                                style={{ backgroundColor: PRODUCT_COLORS[pIdx % PRODUCT_COLORS.length] }}
+                              />
+                              <span className="font-medium text-sm">{product.product_name}</span>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="border-b text-left text-gray-500">
+                                    <th className="pb-1 font-medium text-xs">Month</th>
+                                    <th className="pb-1 font-medium text-xs text-right">Qty</th>
+                                    <th className="pb-1 font-medium text-xs text-right">Avg Price</th>
+                                    <th className="pb-1 font-medium text-xs text-right">Total</th>
+                                    <th className="pb-1 font-medium text-xs text-right">Orders</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {product.months.map((m: any, i: number) => (
+                                    <tr key={i} className="border-b last:border-0">
+                                      <td className="py-1.5">{m.month_name}</td>
+                                      <td className="py-1.5 text-right text-gray-600 tabular-nums">{fmtQty(m.total_quantity)}</td>
+                                      <td className="py-1.5 text-right text-gray-600 tabular-nums">{fmt(m.avg_price)}</td>
+                                      <td className="py-1.5 text-right tabular-nums">{fmt(m.total_cost)}</td>
+                                      <td className="py-1.5 text-right text-gray-500">{m.order_count}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr className="border-t">
+                                    <td className="py-1.5 text-sm text-teal-700">סה&quot;כ</td>
+                                    <td className="py-1.5 text-right text-sm text-teal-700 tabular-nums">
+                                      {fmtQty(product.months.reduce((s: number, m: any) => s + (m.total_quantity || 0), 0))}
+                                    </td>
+                                    <td className="py-1.5" />
+                                    <td className="py-1.5 text-right text-sm text-teal-700 tabular-nums">
+                                      {fmt(product.months.reduce((s: number, m: any) => s + (m.total_cost || 0), 0))}
+                                    </td>
+                                    <td className="py-1.5 text-right text-sm text-teal-700">
+                                      {product.months.reduce((s: number, m: any) => s + (m.order_count || 0), 0)}
+                                    </td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
+                      </>
                     )}
                   </div>
                 ) : null}

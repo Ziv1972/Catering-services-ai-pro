@@ -674,6 +674,10 @@ export const categoryAnalysisAPI = {
     const response = await api.get('/api/category-analysis/quantity/category-monthly', { params });
     return response.data;
   },
+  quantityProductMonthly: async (params: { year: number; site_id: number; category_name: string; product_names: string; supplier_id?: number }) => {
+    const response = await api.get('/api/category-analysis/quantity/product-monthly', { params });
+    return response.data;
+  },
   quantityProducts: async (params: { year: number; month: number; site_id: number; category_name: string; supplier_id?: number }) => {
     const response = await api.get('/api/category-analysis/quantity/products', { params });
     return response.data;

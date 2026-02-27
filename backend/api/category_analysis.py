@@ -486,6 +486,78 @@ async def quantity_category_monthly(
     }
 
 
+@router.get("/quantity/product-monthly")
+async def quantity_product_monthly(
+    year: int = Query(...),
+    site_id: int = Query(...),
+    category_name: str = Query(...),
+    product_names: str = Query(...),
+    supplier_id: Optional[int] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Monthly breakdown for specific products within a category at a site."""
+    mappings = await _load_category_mappings(db)
+    requested = [p.strip() for p in product_names.split(",") if p.strip()]
+
+    m_expr = extract_month(Proforma.invoice_date)
+    query = (
+        select(
+            m_expr.label("month_str"),
+            ProformaItem.product_name,
+            func.sum(ProformaItem.total_price).label("total_cost"),
+            func.sum(ProformaItem.quantity).label("total_qty"),
+            func.avg(ProformaItem.unit_price).label("avg_price"),
+            func.count(ProformaItem.id).label("order_count"),
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .where(
+            year_equals(Proforma.invoice_date, year),
+            Proforma.site_id == site_id,
+        )
+        .group_by(m_expr, ProformaItem.product_name)
+        .order_by(m_expr)
+    )
+    if supplier_id:
+        query = query.where(Proforma.supplier_id == supplier_id)
+
+    result = await db.execute(query)
+
+    products_data: dict[str, dict[int, dict]] = {}
+    for row in result:
+        group_name, _, _ = _match_product_to_category(row.product_name, mappings)
+        if group_name != category_name:
+            continue
+        if row.product_name not in requested:
+            continue
+
+        m = int(row.month_str)
+        if row.product_name not in products_data:
+            products_data[row.product_name] = {}
+
+        products_data[row.product_name][m] = {
+            "month": m,
+            "month_name": MONTH_NAMES.get(m, str(m)),
+            "total_cost": round(row.total_cost or 0, 2),
+            "total_quantity": round(row.total_qty or 0, 0),
+            "avg_price": round(row.avg_price or 0, 2),
+            "order_count": row.order_count or 0,
+        }
+
+    series = []
+    for pname in requested:
+        if pname in products_data:
+            months_data = sorted(products_data[pname].values(), key=lambda x: x["month"])
+            series.append({"product_name": pname, "months": months_data})
+
+    return {
+        "year": year,
+        "site_id": site_id,
+        "category_name": category_name,
+        "series": series,
+    }
+
+
 @router.get("/quantity/products")
 async def quantity_products(
     year: int = Query(...),
