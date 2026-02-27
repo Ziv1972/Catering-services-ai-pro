@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
   FileText, TrendingUp, Package,
-  ArrowRight, AlertTriangle, Plus, X, Check, Trash2, Receipt
+  ArrowRight, AlertTriangle, Plus, X, Check, Trash2,
 } from 'lucide-react';
 import { proformasAPI, suppliersAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -112,7 +112,6 @@ export default function ProformasPage() {
   }
 
   const totalAmount = proformas.reduce((sum, p) => sum + p.total_amount, 0);
-  const paidCount = proformas.filter(p => p.status === 'paid').length;
   const suppliers = Array.from(new Set(proformas.map(p => p.supplier_name))).filter(Boolean);
 
   return (
@@ -272,7 +271,7 @@ export default function ProformasPage() {
         )}
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <Card className="p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -291,17 +290,7 @@ export default function ProformasPage() {
                   ₪{totalAmount.toLocaleString('en-US', { maximumFractionDigits: 0 })}
                 </p>
               </div>
-              <Receipt className="w-7 h-7 text-green-500" />
-            </div>
-          </Card>
-
-          <Card className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600">Paid</p>
-                <p className="text-4xl font-bold text-purple-600 mt-1">{paidCount}</p>
-              </div>
-              <TrendingUp className="w-7 h-7 text-purple-500" />
+              <span className="text-2xl font-bold text-green-400">₪</span>
             </div>
           </Card>
 
