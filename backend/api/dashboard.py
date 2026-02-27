@@ -497,6 +497,59 @@ async def product_drill_down(
     return {"year": proforma_year, "month": month, "items": items}
 
 
+@router.get("/drill-down/product-history")
+async def product_history_drill_down(
+    product_name: str,
+    supplier_id: Optional[int] = None,
+    site_id: Optional[int] = None,
+    year: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Drill-down: monthly breakdown for a specific product."""
+    target_year = year or datetime.now().year
+    proforma_year = await _resolve_proforma_year(db, target_year)
+
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    query = (
+        select(
+            extract_month(Proforma.invoice_date).label("month"),
+            func.sum(ProformaItem.total_price).label("total"),
+            func.sum(ProformaItem.quantity).label("qty"),
+            func.count(ProformaItem.id).label("count"),
+            func.avg(ProformaItem.unit_price).label("avg_price"),
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .where(
+            year_equals(Proforma.invoice_date, proforma_year),
+            ProformaItem.product_name == product_name,
+        )
+        .group_by(extract_month(Proforma.invoice_date))
+        .order_by(extract_month(Proforma.invoice_date))
+    )
+    if supplier_id:
+        query = query.where(Proforma.supplier_id == supplier_id)
+    if site_id:
+        query = query.where(Proforma.site_id == site_id)
+
+    result = await db.execute(query)
+    monthly = [
+        {
+            "month": int(row.month),
+            "month_name": month_names[int(row.month) - 1],
+            "quantity": round(row.qty or 0, 1),
+            "total": round(row.total or 0, 0),
+            "avg_price": round(row.avg_price or 0, 2),
+            "orders": row.count or 0,
+        }
+        for row in result
+    ]
+
+    return {"product_name": product_name, "year": proforma_year, "monthly": monthly}
+
+
 @router.get("/drill-down/project")
 async def project_drill_down(
     project_id: int,

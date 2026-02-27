@@ -135,6 +135,7 @@ export default function Dashboard() {
   };
 
   // Drill-down handlers
+  // Level 1: Monthly overview (budget vs actual)
   const openBudgetDrillDown = async (supplier_id?: number, site_id?: number, label?: string, yearOverride?: number) => {
     const year = yearOverride || drillDownYear;
     setDrillDown({ type: 'budget', level: 1, context: { supplier_id, site_id, label }, data: null, loading: true });
@@ -144,6 +145,8 @@ export default function Dashboard() {
         site_id,
         year,
       });
+      // Use the resolved proforma_year from backend for subsequent calls
+      if (result?.year) setDrillDownYear(result.year);
       setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
@@ -157,25 +160,27 @@ export default function Dashboard() {
     }
   };
 
-  const drillIntoProducts = async (month: number, monthName: string) => {
+  // Level 2: Month → Category breakdown
+  const drillIntoMonthCategories = async (month: number, monthName: string) => {
     if (!drillDown) return;
     const ctx = drillDown.context;
+    const level1Data = drillDown.data; // preserve Level 1 data for going back
     setDrillDown((prev) => prev ? {
       ...prev,
       level: 2,
-      context: { ...ctx, month, monthName },
+      context: { ...ctx, month, monthName, level1Data },
       data: null,
       loading: true,
     } : null);
     setWorkingDays(null);
     setWorkingDaysInput('');
     try {
-      const [result, wdResult] = await Promise.all([
-        drillDownAPI.products({
-          supplier_id: ctx.supplier_id,
-          site_id: ctx.site_id,
-          month,
+      const [catResult, wdResult] = await Promise.all([
+        categoryAnalysisAPI.costByCategory({
           year: drillDownYear,
+          month,
+          site_id: ctx.site_id,
+          supplier_id: ctx.supplier_id,
         }),
         categoryAnalysisAPI.getWorkingDays({ site_id: ctx.site_id, year: drillDownYear }),
       ]);
@@ -184,15 +189,17 @@ export default function Dashboard() {
         setWorkingDays(wdEntry.working_days);
         setWorkingDaysInput(String(wdEntry.working_days));
       }
-      setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
+      setDrillDown((prev) => prev ? { ...prev, data: catResult, loading: false } : null);
     } catch {
       setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
     }
   };
 
-  const drillIntoCategoryProducts = async (categoryName: string, displayHe: string) => {
+  // Level 3: Category → Products
+  const drillIntoCategoryProducts = async (categoryName: string, displayHe: string, month?: number) => {
     if (!drillDown) return;
     const ctx = drillDown.context;
+    const m = month ?? ctx.month;
     setDrillDown((prev) => prev ? {
       ...prev,
       level: 3,
@@ -203,6 +210,7 @@ export default function Dashboard() {
     try {
       const result = await categoryAnalysisAPI.costProducts({
         year: drillDownYear,
+        month: m,
         site_id: ctx.site_id,
         supplier_id: ctx.supplier_id,
         category_name: categoryName,
@@ -210,6 +218,30 @@ export default function Dashboard() {
       setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
+    }
+  };
+
+  // Level 4: Product → Monthly breakdown
+  const drillIntoProductDetail = async (productName: string) => {
+    if (!drillDown) return;
+    const ctx = drillDown.context;
+    setDrillDown((prev) => prev ? {
+      ...prev,
+      level: 4,
+      context: { ...ctx, productName },
+      data: null,
+      loading: true,
+    } : null);
+    try {
+      const result = await drillDownAPI.productHistory({
+        product_name: productName,
+        supplier_id: ctx.supplier_id,
+        site_id: ctx.site_id,
+        year: drillDownYear,
+      });
+      setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
+    } catch {
+      setDrillDown((prev) => prev ? { ...prev, data: { monthly: [] }, loading: false } : null);
     }
   };
 
@@ -236,8 +268,25 @@ export default function Dashboard() {
       setDrillDown(null);
       return;
     }
-    // All budget sub-levels go back to level 1
-    openBudgetDrillDown(drillDown.context.supplier_id, drillDown.context.site_id, drillDown.context.label);
+    const ctx = drillDown.context;
+    if (drillDown.level === 4) {
+      // Level 4 → Level 3
+      drillIntoCategoryProducts(ctx.categoryName, ctx.categoryDisplayHe, ctx.month);
+    } else if (drillDown.level === 3) {
+      // Level 3 → Level 2
+      drillIntoMonthCategories(ctx.month, ctx.monthName);
+    } else if (drillDown.level === 2) {
+      // Level 2 → Level 1 (restore cached data)
+      if (ctx.level1Data) {
+        setDrillDown({
+          type: 'budget', level: 1,
+          context: { supplier_id: ctx.supplier_id, site_id: ctx.site_id, label: ctx.label },
+          data: ctx.level1Data, loading: false,
+        });
+      } else {
+        openBudgetDrillDown(ctx.supplier_id, ctx.site_id, ctx.label);
+      }
+    }
   };
 
   const openProjectDrillDown = async (projectId: number, projectName: string) => {
@@ -335,9 +384,11 @@ export default function Dashboard() {
                       {drillDown.type === 'budget' && drillDown.level === 1
                         ? `Budget vs Actual ${drillDown.context.label ? `- ${drillDown.context.label}` : ''}`
                         : drillDown.type === 'budget' && drillDown.level === 2
-                        ? `Products - ${drillDown.context.monthName}`
+                        ? `${drillDown.context.monthName} - Categories`
                         : drillDown.type === 'budget' && drillDown.level === 3
-                        ? `${drillDown.context.categoryDisplayHe} - Products`
+                        ? `${drillDown.context.monthName} - ${drillDown.context.categoryDisplayHe}`
+                        : drillDown.type === 'budget' && drillDown.level === 4
+                        ? `${drillDown.context.productName}`
                         : drillDown.type === 'project'
                         ? `Project: ${drillDown.context.label}`
                         : drillDown.type === 'maintenance'
@@ -346,8 +397,9 @@ export default function Dashboard() {
                     </CardTitle>
                     <p className="text-sm text-gray-500">
                       {drillDown.type === 'budget' && drillDown.level === 1 ? 'Click a month or category to drill down'
-                        : drillDown.type === 'budget' && drillDown.level === 2 ? 'Product-level spending detail'
-                        : drillDown.type === 'budget' && drillDown.level === 3 ? 'Product breakdown by category'
+                        : drillDown.type === 'budget' && drillDown.level === 2 ? 'Click a category to see products'
+                        : drillDown.type === 'budget' && drillDown.level === 3 ? 'Click a product for monthly breakdown'
+                        : drillDown.type === 'budget' && drillDown.level === 4 ? 'Monthly price & quantity history'
                         : drillDown.type === 'project' ? 'Tasks and progress'
                         : drillDown.type === 'maintenance' ? 'Expense breakdown'
                         : ''}
@@ -488,7 +540,7 @@ export default function Dashboard() {
                         {visibleItems.filter((i: any) => i.actual > 0).map((item: any) => (
                           <div
                             key={item.month}
-                            onClick={() => drillIntoProducts(item.month, item.month_name)}
+                            onClick={() => drillIntoMonthCategories(item.month, item.month_name)}
                             className="flex items-center justify-between p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-blue-50 transition-colors"
                           >
                             <div>
@@ -512,37 +564,15 @@ export default function Dashboard() {
                   );
                 })()
               ) : drillDown.type === 'budget' && drillDown.level === 2 ? (
-                /* Product breakdown for a month + working days */
+                /* Level 2: Category breakdown for a month */
                 <div>
                   {(drillDown.data?.items || []).length === 0 ? (
-                    <p className="text-center py-8 text-gray-400">No product data for this month</p>
+                    <p className="text-center py-8 text-gray-400">No data for this month</p>
                   ) : (
                     <>
-                      <div className="overflow-x-auto mb-4">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b text-left text-gray-500">
-                              <th className="pb-2 font-medium">Product</th>
-                              <th className="pb-2 font-medium text-right">Quantity</th>
-                              <th className="pb-2 font-medium text-right">Total</th>
-                              <th className="pb-2 font-medium text-right">Orders</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(drillDown.data?.items || []).slice(0, 50).map((item: any, i: number) => (
-                              <tr key={i} className="border-b last:border-0">
-                                <td className="py-2 font-medium">{item.product_name}</td>
-                                <td className="py-2 text-right text-gray-600">{item.total_quantity?.toLocaleString()}</td>
-                                <td className="py-2 text-right font-mono">{formatCurrency(item.total_spent)}</td>
-                                <td className="py-2 text-right text-gray-500">{item.order_count}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      {/* Working days */}
+                      {/* Working days + cost per day */}
                       {drillDown.context.site_id && (
-                        <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                        <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 mb-4">
                           <div className="flex items-center justify-between gap-3">
                             <div className="flex items-center gap-2">
                               <CalendarDays className="w-4 h-4 text-gray-500" />
@@ -570,21 +600,59 @@ export default function Dashboard() {
                             </div>
                           </div>
                           {workingDays && workingDays > 0 && (() => {
-                            const totalSpent = (drillDown.data?.items || []).reduce((s: number, i: any) => s + (i.total_spent || 0), 0);
+                            const totalCost = (drillDown.data?.items || []).reduce((s: number, i: any) => s + (i.total_cost || 0), 0);
                             return (
                               <div className="mt-2 text-sm text-gray-600 flex justify-between">
                                 <span>Cost per working day:</span>
-                                <span className="font-semibold">{formatCurrency(totalSpent / workingDays)}</span>
+                                <span className="font-semibold">{formatCurrency(totalCost / workingDays)}</span>
                               </div>
                             );
                           })()}
                         </div>
                       )}
+
+                      {/* Category cards */}
+                      <div className="space-y-2">
+                        {(drillDown.data?.items || []).map((cat: any, idx: number) => {
+                          const totalCost = (drillDown.data?.items || []).reduce((s: number, c: any) => s + (c.total_cost || 0), 0);
+                          const pct = totalCost > 0 ? Math.round((cat.total_cost / totalCost) * 100) : 0;
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => drillIntoCategoryProducts(cat.category_name, cat.display_name_he, drillDown.context.month)}
+                              className="w-full flex items-center justify-between p-3 rounded-lg border hover:bg-blue-50 transition-colors text-left"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: CATEGORY_COLORS[cat.category_name] || '#94a3b8' }} />
+                                <div>
+                                  <p className="font-medium text-gray-900">{cat.display_name_he}</p>
+                                  <p className="text-xs text-gray-500">
+                                    {cat.total_qty?.toLocaleString()} items · {cat.item_count} orders
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <div className="text-right">
+                                  <p className="font-semibold">{formatCurrency(cat.total_cost)}</p>
+                                  <p className="text-xs text-gray-500">{pct}%</p>
+                                </div>
+                                <ChevronRight className="w-4 h-4 text-gray-400" />
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Total */}
+                      <div className="mt-3 pt-3 border-t flex justify-between text-sm font-semibold">
+                        <span>Total</span>
+                        <span>{formatCurrency((drillDown.data?.items || []).reduce((s: number, c: any) => s + (c.total_cost || 0), 0))}</span>
+                      </div>
                     </>
                   )}
                 </div>
               ) : drillDown.type === 'budget' && drillDown.level === 3 ? (
-                /* Category product breakdown */
+                /* Level 3: Products in category */
                 <div>
                   {(drillDown.data?.items || []).length === 0 ? (
                     <p className="text-center py-8 text-gray-400">No products in this category</p>
@@ -601,8 +669,15 @@ export default function Dashboard() {
                         </thead>
                         <tbody>
                           {(drillDown.data?.items || []).map((item: any, i: number) => (
-                            <tr key={i} className="border-b last:border-0">
-                              <td className="py-2 font-medium">{item.product_name}</td>
+                            <tr
+                              key={i}
+                              onClick={() => drillIntoProductDetail(item.product_name)}
+                              className="border-b last:border-0 cursor-pointer hover:bg-blue-50 transition-colors"
+                            >
+                              <td className="py-2 font-medium flex items-center gap-1">
+                                {item.product_name}
+                                <ChevronRight className="w-3 h-3 text-gray-300" />
+                              </td>
                               <td className="py-2 text-right text-gray-600">{item.total_quantity?.toLocaleString()}</td>
                               <td className="py-2 text-right text-gray-600">{formatCurrency(item.avg_unit_price)}</td>
                               <td className="py-2 text-right font-mono">{formatCurrency(item.total_cost)}</td>
@@ -619,6 +694,64 @@ export default function Dashboard() {
                         </tfoot>
                       </table>
                     </div>
+                  )}
+                </div>
+              ) : drillDown.type === 'budget' && drillDown.level === 4 ? (
+                /* Level 4: Product monthly breakdown */
+                <div>
+                  {(drillDown.data?.monthly || []).length === 0 ? (
+                    <p className="text-center py-8 text-gray-400">No monthly data for this product</p>
+                  ) : (
+                    <>
+                      {/* Price trend chart */}
+                      <div className="h-48 mb-4">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                          <BarChart data={drillDown.data.monthly}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="month_name" tick={{ fontSize: 11 }} />
+                            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `₪${v}`} />
+                            <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
+                            <Legend />
+                            <Bar dataKey="total" fill="#3b82f6" name="Total Cost" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      {/* Monthly table */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b text-left text-gray-500">
+                              <th className="pb-2 font-medium">Month</th>
+                              <th className="pb-2 font-medium text-right">Qty</th>
+                              <th className="pb-2 font-medium text-right">Avg Price</th>
+                              <th className="pb-2 font-medium text-right">Total</th>
+                              <th className="pb-2 font-medium text-right">Orders</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {drillDown.data.monthly.map((m: any, i: number) => (
+                              <tr key={i} className="border-b last:border-0">
+                                <td className="py-2 font-medium">{m.month_name}</td>
+                                <td className="py-2 text-right text-gray-600">{m.quantity?.toLocaleString()}</td>
+                                <td className="py-2 text-right text-gray-600">₪{m.avg_price?.toFixed(2)}</td>
+                                <td className="py-2 text-right font-mono">{formatCurrency(m.total)}</td>
+                                <td className="py-2 text-right text-gray-500">{m.orders}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 font-semibold">
+                              <td className="py-2">Total</td>
+                              <td className="py-2 text-right">{drillDown.data.monthly.reduce((s: number, m: any) => s + (m.quantity || 0), 0).toLocaleString()}</td>
+                              <td className="py-2" />
+                              <td className="py-2 text-right font-mono">{formatCurrency(drillDown.data.monthly.reduce((s: number, m: any) => s + (m.total || 0), 0))}</td>
+                              <td className="py-2 text-right">{drillDown.data.monthly.reduce((s: number, m: any) => s + (m.orders || 0), 0)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </>
                   )}
                 </div>
               ) : drillDown.type === 'project' ? (

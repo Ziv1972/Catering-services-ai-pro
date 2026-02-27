@@ -611,6 +611,11 @@ export const drillDownAPI = {
     return response.data;
   },
 
+  productHistory: async (params: { product_name: string; supplier_id?: number; site_id?: number; year?: number }) => {
+    const response = await api.get('/api/dashboard/drill-down/product-history', { params });
+    return response.data;
+  },
+
   project: async (project_id: number) => {
     const response = await api.get('/api/dashboard/drill-down/project', { params: { project_id } });
     return response.data;
