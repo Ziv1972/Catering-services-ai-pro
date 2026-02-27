@@ -448,15 +448,16 @@ async def budget_drill_down(
             cat["total_qty"] = round(cat["total_qty"], 1)
 
         # ── Per-month category breakdown ──
+        cat_month_expr = extract_month(Proforma.invoice_date)
         month_cat_query = (
             select(
-                extract_month(Proforma.invoice_date).label("month"),
+                cat_month_expr.label("month"),
                 ProformaItem.product_name,
                 func.sum(ProformaItem.total_price).label("cost"),
             )
             .join(Proforma, ProformaItem.proforma_id == Proforma.id)
             .where(year_equals(Proforma.invoice_date, proforma_year))
-            .group_by(extract_month(Proforma.invoice_date), ProformaItem.product_name)
+            .group_by(cat_month_expr, ProformaItem.product_name)
         )
         if supplier_id:
             month_cat_query = month_cat_query.where(Proforma.supplier_id == supplier_id)
@@ -563,9 +564,10 @@ async def product_history_drill_down(
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+    ph_month_expr = extract_month(Proforma.invoice_date)
     query = (
         select(
-            extract_month(Proforma.invoice_date).label("month"),
+            ph_month_expr.label("month"),
             func.sum(ProformaItem.total_price).label("total"),
             func.sum(ProformaItem.quantity).label("qty"),
             func.count(ProformaItem.id).label("count"),
@@ -576,8 +578,8 @@ async def product_history_drill_down(
             year_equals(Proforma.invoice_date, proforma_year),
             ProformaItem.product_name == product_name,
         )
-        .group_by(extract_month(Proforma.invoice_date))
-        .order_by(extract_month(Proforma.invoice_date))
+        .group_by(ph_month_expr)
+        .order_by(ph_month_expr)
     )
     if supplier_id:
         query = query.where(Proforma.supplier_id == supplier_id)

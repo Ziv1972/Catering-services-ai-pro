@@ -137,15 +137,16 @@ async def cost_monthly(
     current_user: User = Depends(get_current_user),
 ):
     """Level 1: Total cost per month for the year."""
+    m_expr = extract_month(Proforma.invoice_date)
     query = (
         select(
-            extract_month(Proforma.invoice_date).label("month_str"),
+            m_expr.label("month_str"),
             func.sum(Proforma.total_amount).label("total_cost"),
             func.count(Proforma.id).label("invoice_count"),
         )
         .where(year_equals(Proforma.invoice_date, year))
-        .group_by(extract_month(Proforma.invoice_date))
-        .order_by(extract_month(Proforma.invoice_date))
+        .group_by(m_expr)
+        .order_by(m_expr)
     )
     if supplier_id:
         query = query.where(Proforma.supplier_id == supplier_id)
@@ -304,16 +305,17 @@ async def quantity_monthly(
     current_user: User = Depends(get_current_user),
 ):
     """Level 1: Total quantity per month for the year."""
+    m_expr = extract_month(Proforma.invoice_date)
     query = (
         select(
-            extract_month(Proforma.invoice_date).label("month_str"),
+            m_expr.label("month_str"),
             func.sum(ProformaItem.quantity).label("total_qty"),
             func.count(func.distinct(Proforma.id)).label("invoice_count"),
         )
         .join(Proforma, ProformaItem.proforma_id == Proforma.id)
         .where(year_equals(Proforma.invoice_date, year))
-        .group_by(extract_month(Proforma.invoice_date))
-        .order_by(extract_month(Proforma.invoice_date))
+        .group_by(m_expr)
+        .order_by(m_expr)
     )
     if supplier_id:
         query = query.where(Proforma.supplier_id == supplier_id)
