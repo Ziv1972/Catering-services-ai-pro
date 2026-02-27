@@ -18,7 +18,7 @@ from backend.models.complaint import Complaint, ComplaintCategory
 from backend.models.operations import Anomaly
 from backend.api.auth import get_current_user
 from backend.api.category_analysis import _load_category_mappings, _match_product_to_category
-from backend.utils.db_compat import year_equals, month_equals, extract_month
+from backend.utils.db_compat import year_equals, month_equals, extract_month, extract_year
 
 router = APIRouter()
 
@@ -80,7 +80,7 @@ async def get_analytics(
             ProformaItem.quantity,
             ProformaItem.total_price,
             extract_month(Proforma.invoice_date).label("month_num"),
-            func.strftime("%Y", Proforma.invoice_date).label("year_str"),
+            extract_year(Proforma.invoice_date).label("year_str"),
             Proforma.site_id,
             Site.name.label("site_name"),
         )
