@@ -539,6 +539,21 @@ async def get_daily_meals(
     }
 
 
+@router.post("/daily-meals/poll-now")
+async def trigger_meal_email_poll():
+    """
+    Manually trigger the IMAP email poller to check for new meal reports.
+    Useful for testing or forcing an immediate check.
+    """
+    from backend.services.meal_email_poller import poll_meal_emails
+    try:
+        result = await poll_meal_emails()
+        return result
+    except Exception as e:
+        logger.error(f"Manual meal poll failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/test")
 async def test_webhook():
     """Test endpoint to verify webhooks are working"""
@@ -551,6 +566,7 @@ async def test_webhook():
             "daily_meals": "POST /api/webhooks/daily-meals",
             "daily_meals_upload": "POST /api/webhooks/daily-meals/upload",
             "daily_meals_get": "GET /api/webhooks/daily-meals",
+            "daily_meals_poll": "POST /api/webhooks/daily-meals/poll-now",
         },
         "timestamp": datetime.utcnow().isoformat(),
     }

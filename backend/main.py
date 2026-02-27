@@ -1,6 +1,7 @@
 """
 Main FastAPI application
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -530,8 +531,13 @@ async def lifespan(app: FastAPI):
             await session.commit()
             logger.info(f"Seeded {len(groups)} product category groups with {len(mappings_data)} mappings")
 
+    # Start background meal email poller (if IMAP configured)
+    from backend.services.meal_email_poller import start_meal_email_scheduler
+    meal_poller_task = asyncio.create_task(start_meal_email_scheduler())
+
     yield
 
+    meal_poller_task.cancel()
     await engine.dispose()
 
 app = FastAPI(

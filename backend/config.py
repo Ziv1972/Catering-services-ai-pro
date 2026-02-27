@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     GMAIL_CREDENTIALS_PATH: str = ""
     GMAIL_TOKEN_PATH: str = ""
 
+    # IMAP email polling (for daily meal reports)
+    IMAP_HOST: str = ""            # e.g. "imap.gmail.com"
+    IMAP_EMAIL: str = ""           # e.g. "ziv@example.com"
+    IMAP_PASSWORD: str = ""        # Gmail app password
+    MEAL_EMAIL_SENDER: str = ""    # filter: sender address (partial match)
+    MEAL_EMAIL_SUBJECT: str = ""   # filter: subject keyword (partial match)
+    MEAL_POLL_INTERVAL_MIN: int = 60  # check every N minutes
+
     # Calendar (Google Calendar API)
     CALENDAR_CREDENTIALS_PATH: str = ""
 
