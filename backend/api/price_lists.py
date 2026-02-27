@@ -1,19 +1,22 @@
 """
 Price list API endpoints - supplier price management
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_, desc
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from datetime import date
 from pydantic import BaseModel
 import os
+import re
 
 from backend.database import get_db
 from backend.models.user import User
 from backend.models.price_list import PriceList, PriceListItem
 from backend.models.product import Product
+from backend.models.proforma import Proforma, ProformaItem
+from backend.models.supplier import Supplier
 from backend.api.auth import get_current_user
 
 router = APIRouter()
@@ -91,6 +94,123 @@ async def list_price_lists(
         )
         for pl in price_lists
     ]
+
+
+@router.post("/generate-from-proformas")
+async def generate_price_list_from_proformas(
+    supplier_id: int = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Auto-generate a price list from proforma/invoice data.
+    Extracts the latest unit price for each product from proforma items.
+    """
+    # Verify supplier exists
+    supp_result = await db.execute(select(Supplier).where(Supplier.id == supplier_id))
+    supplier = supp_result.scalar_one_or_none()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+
+    # Get all proforma items for this supplier, ordered by invoice date desc
+    # so we can pick the latest price for each product
+    items_q = (
+        select(
+            ProformaItem.product_name,
+            ProformaItem.unit_price,
+            ProformaItem.unit,
+            ProformaItem.product_id,
+            Proforma.invoice_date,
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .where(Proforma.supplier_id == supplier_id)
+        .order_by(Proforma.invoice_date.desc())
+    )
+    result = await db.execute(items_q)
+    rows = result.all()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No proforma data found for this supplier"
+        )
+
+    # Build latest price per product (first occurrence = most recent)
+    def normalize(name: str) -> str:
+        return re.sub(r'\s+', ' ', name.strip().lower())
+
+    seen: dict[str, dict] = {}
+    for row in rows:
+        key = normalize(row.product_name)
+        if key not in seen:
+            seen[key] = {
+                "product_name": row.product_name,
+                "unit_price": row.unit_price,
+                "unit": row.unit,
+                "product_id": row.product_id,
+                "invoice_date": row.invoice_date,
+            }
+
+    # Match product names to catalog products
+    catalog_result = await db.execute(select(Product).where(Product.is_active == True))
+    catalog = catalog_result.scalars().all()
+    catalog_map: dict[str, Product] = {}
+    for p in catalog:
+        catalog_map[normalize(p.name)] = p
+        if p.hebrew_name:
+            catalog_map[normalize(p.hebrew_name)] = p
+
+    # Determine effective date: latest proforma invoice date
+    latest_date = max(info["invoice_date"] for info in seen.values())
+
+    # Create the price list
+    price_list = PriceList(
+        supplier_id=supplier_id,
+        effective_date=latest_date,
+        notes=f"Auto-generated from proforma data ({len(seen)} products)",
+    )
+    db.add(price_list)
+    await db.flush()
+
+    # Create items
+    items_created = 0
+    unmatched_products: list[str] = []
+    for key, info in seen.items():
+        # Try to find product in catalog by name match
+        product = catalog_map.get(key)
+        product_id = info["product_id"] or (product.id if product else None)
+
+        if not product_id:
+            # Try to create a new product in the catalog
+            new_product = Product(
+                name=info["product_name"],
+                unit=info["unit"],
+                is_active=True,
+            )
+            db.add(new_product)
+            await db.flush()
+            product_id = new_product.id
+            unmatched_products.append(info["product_name"])
+
+        item = PriceListItem(
+            price_list_id=price_list.id,
+            product_id=product_id,
+            price=info["unit_price"],
+            unit=info["unit"],
+        )
+        db.add(item)
+        items_created += 1
+
+    await db.commit()
+
+    return {
+        "message": f"Generated price list with {items_created} products for {supplier.name}",
+        "price_list_id": price_list.id,
+        "supplier_name": supplier.name,
+        "effective_date": latest_date.isoformat(),
+        "items_count": items_created,
+        "new_products_created": unmatched_products,
+    }
 
 
 @router.get("/{price_list_id}")

@@ -692,6 +692,101 @@ async def maintenance_drill_down(
     }
 
 
+@router.get("/supplier-monthly")
+async def supplier_monthly_spending(
+    year: Optional[int] = None,
+    from_month: int = Query(default=1, ge=1, le=12),
+    to_month: int = Query(default=12, ge=1, le=12),
+    site_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Monthly actual spending per supplier for a given year and month range."""
+    from backend.models.supplier import Supplier
+    from backend.models.site import Site
+
+    target_year = year or datetime.now().year
+    proforma_year = await _resolve_proforma_year(db, target_year)
+
+    month_expr = extract_month(Proforma.invoice_date)
+    query = (
+        select(
+            month_expr.label("month"),
+            Proforma.supplier_id,
+            Supplier.name.label("supplier_name"),
+            Proforma.site_id,
+            Site.name.label("site_name"),
+            func.sum(Proforma.total_amount).label("total"),
+            func.count(Proforma.id).label("invoice_count"),
+        )
+        .join(Supplier, Proforma.supplier_id == Supplier.id)
+        .join(Site, Proforma.site_id == Site.id)
+        .where(year_equals(Proforma.invoice_date, proforma_year))
+        .group_by(month_expr, Proforma.supplier_id, Supplier.name, Proforma.site_id, Site.name)
+        .order_by(month_expr)
+    )
+    if site_id:
+        query = query.where(Proforma.site_id == site_id)
+
+    result = await db.execute(query)
+
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    # Build supplier series keyed by "supplier (site)"
+    supplier_series: dict[str, dict] = {}
+    for row in result:
+        m = int(row.month)
+        if m < from_month or m > to_month:
+            continue
+        key = f"{row.supplier_name} ({row.site_name})"
+        if key not in supplier_series:
+            supplier_series[key] = {
+                "label": key,
+                "supplier_id": row.supplier_id,
+                "site_id": row.site_id,
+                "supplier_name": row.supplier_name,
+                "site_name": row.site_name,
+                "months": {},
+                "total": 0,
+            }
+        supplier_series[key]["months"][m] = {
+            "month": m,
+            "month_name": month_names[m - 1],
+            "total": round(row.total or 0, 2),
+            "invoice_count": row.invoice_count or 0,
+        }
+        supplier_series[key]["total"] += row.total or 0
+
+    # Build unified chart data: one row per month, columns per supplier
+    chart_data = []
+    for m in range(from_month, to_month + 1):
+        row_data: dict = {"month": m, "month_name": month_names[m - 1]}
+        for key, series in supplier_series.items():
+            row_data[key] = round(series["months"].get(m, {}).get("total", 0), 2)
+        chart_data.append(row_data)
+
+    # Sort series by total descending
+    sorted_series = sorted(supplier_series.values(), key=lambda x: x["total"], reverse=True)
+    for s in sorted_series:
+        s["total"] = round(s["total"], 2)
+        s["months"] = sorted(s["months"].values(), key=lambda x: x["month"])
+
+    # Get available sites for filter
+    sites_result = await db.execute(select(Site.id, Site.name).order_by(Site.name))
+    sites = [{"id": r.id, "name": r.name} for r in sites_result]
+
+    return {
+        "year": proforma_year,
+        "from_month": from_month,
+        "to_month": to_month,
+        "chart_data": chart_data,
+        "series": sorted_series,
+        "series_keys": [s["label"] for s in sorted_series],
+        "sites": sites,
+    }
+
+
 @router.get("/debug-data")
 async def debug_data(
     db: AsyncSession = Depends(get_db),

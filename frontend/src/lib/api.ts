@@ -348,6 +348,10 @@ export const dashboardAPI = {
     const response = await api.get('/api/dashboard');
     return response.data;
   },
+  supplierMonthly: async (params: { year?: number; from_month?: number; to_month?: number; site_id?: number }) => {
+    const response = await api.get('/api/dashboard/supplier-monthly', { params });
+    return response.data;
+  },
 };
 
 // Supplier Budgets
@@ -577,6 +581,11 @@ export const priceListsAPI = {
     const response = await api.get('/api/price-lists/compare', {
       params: { price_list_id_1: id1, price_list_id_2: id2 },
     });
+    return response.data;
+  },
+
+  generateFromProformas: async (supplierId: number) => {
+    const response = await api.post(`/api/price-lists/generate-from-proformas?supplier_id=${supplierId}`);
     return response.data;
   },
 };

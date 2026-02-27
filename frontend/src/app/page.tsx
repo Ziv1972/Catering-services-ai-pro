@@ -53,6 +53,14 @@ export default function Dashboard() {
   const [budgetRange, setBudgetRange] = useState<number>(12);
   const [drillDownYear, setDrillDownYear] = useState<number>(new Date().getFullYear());
 
+  // Supplier monthly spending chart
+  const [supplierMonthly, setSupplierMonthly] = useState<any>(null);
+  const [supplierMonthlyLoading, setSupplierMonthlyLoading] = useState(false);
+  const [smYear, setSmYear] = useState<number>(new Date().getFullYear());
+  const [smFromMonth, setSmFromMonth] = useState<number>(1);
+  const [smToMonth, setSmToMonth] = useState<number>(12);
+  const [smSiteId, setSmSiteId] = useState<number | undefined>(undefined);
+
   useEffect(() => {
     loadDashboard();
   }, []);
@@ -77,6 +85,31 @@ export default function Dashboard() {
       setLoading(false);
     }
   };
+
+  const loadSupplierMonthly = async (year?: number, fromMonth?: number, toMonth?: number, siteId?: number) => {
+    setSupplierMonthlyLoading(true);
+    try {
+      const result = await dashboardAPI.supplierMonthly({
+        year: year ?? smYear,
+        from_month: fromMonth ?? smFromMonth,
+        to_month: toMonth ?? smToMonth,
+        site_id: siteId,
+      });
+      setSupplierMonthly(result);
+      if (result?.year) setSmYear(result.year);
+    } catch {
+      setSupplierMonthly(null);
+    } finally {
+      setSupplierMonthlyLoading(false);
+    }
+  };
+
+  // Load supplier monthly on mount
+  useEffect(() => {
+    loadSupplierMonthly();
+  }, []);
+
+  const SUPPLIER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#78716c'];
 
   const getChatErrorMessage = (error: unknown): string => {
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -165,7 +198,10 @@ export default function Dashboard() {
   const drillIntoMonthCategories = async (month: number, monthName: string) => {
     if (!drillDown) return;
     const ctx = drillDown.context;
-    const level1Data = drillDown.data; // preserve Level 1 data for going back
+    // Preserve Level 1 data: reuse cached version on back-nav, deep-copy on first entry
+    const level1Data = ctx.level1Data
+      ? ctx.level1Data
+      : (drillDown.data ? JSON.parse(JSON.stringify(drillDown.data)) : null);
     setDrillDown((prev) => prev ? {
       ...prev,
       level: 2,
@@ -998,19 +1034,98 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {chartData.length > 0 && (
-                <div className="h-48">
-                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                    <BarChart data={chartData}>
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
-                      <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
-                      <Bar dataKey="budget" fill="#93c5fd" name="Budget" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="actual" fill="#3b82f6" name="Actual" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
+              {/* Supplier Spending Over Time */}
+              <div>
+                <div className="flex flex-wrap items-center gap-2 mb-3 p-2 bg-gray-50 rounded-lg text-xs">
+                  <select
+                    value={smYear}
+                    onChange={(e) => { const y = Number(e.target.value); setSmYear(y); loadSupplierMonthly(y, smFromMonth, smToMonth, smSiteId); }}
+                    className="border rounded px-2 py-1 bg-white"
+                  >
+                    {[new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2].map((y) => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={smFromMonth}
+                    onChange={(e) => { const m = Number(e.target.value); setSmFromMonth(m); loadSupplierMonthly(smYear, m, smToMonth, smSiteId); }}
+                    className="border rounded px-2 py-1 bg-white"
+                  >
+                    {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((n, i) => (
+                      <option key={i} value={i + 1}>{n}</option>
+                    ))}
+                  </select>
+                  <span className="text-gray-400">→</span>
+                  <select
+                    value={smToMonth}
+                    onChange={(e) => { const m = Number(e.target.value); setSmToMonth(m); loadSupplierMonthly(smYear, smFromMonth, m, smSiteId); }}
+                    className="border rounded px-2 py-1 bg-white"
+                  >
+                    {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((n, i) => (
+                      <option key={i} value={i + 1}>{n}</option>
+                    ))}
+                  </select>
+                  {supplierMonthly?.sites?.length > 0 && (
+                    <select
+                      value={smSiteId ?? ''}
+                      onChange={(e) => { const v = e.target.value ? Number(e.target.value) : undefined; setSmSiteId(v); loadSupplierMonthly(smYear, smFromMonth, smToMonth, v); }}
+                      className="border rounded px-2 py-1 bg-white"
+                    >
+                      <option value="">All Sites</option>
+                      {supplierMonthly.sites.map((s: any) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
-              )}
+
+                {supplierMonthlyLoading ? (
+                  <div className="text-center py-8 text-gray-400 text-sm">Loading...</div>
+                ) : supplierMonthly?.chart_data?.length > 0 ? (
+                  <>
+                    <div className="h-52">
+                      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                        <LineChart data={supplierMonthly.chart_data}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="month_name" tick={{ fontSize: 11 }} />
+                          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
+                          <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
+                          <Legend wrapperStyle={{ fontSize: 11 }} />
+                          {(supplierMonthly.series_keys || []).map((key: string, i: number) => (
+                            <Line
+                              key={key}
+                              type="monotone"
+                              dataKey={key}
+                              stroke={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]}
+                              strokeWidth={2}
+                              dot={{ r: 3 }}
+                              name={key}
+                            />
+                          ))}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                    {/* Supplier totals for period */}
+                    <div className="mt-3 space-y-1">
+                      {(supplierMonthly.series || []).map((s: any, i: number) => (
+                        <div
+                          key={s.label}
+                          className="flex items-center justify-between text-xs p-1.5 rounded hover:bg-gray-50 cursor-pointer"
+                          onClick={() => openBudgetDrillDown(s.supplier_id, s.site_id, s.label, smYear)}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SUPPLIER_COLORS[i % SUPPLIER_COLORS.length] }} />
+                            <span className="text-gray-700">{s.label}</span>
+                          </div>
+                          <span className="tabular-nums text-gray-900">{formatCurrency(s.total)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-center py-8 text-gray-400 text-sm">No supplier data for this period</p>
+                )}
+              </div>
             </div>
           )}
         </CardContent>

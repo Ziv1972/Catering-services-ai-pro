@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import {
   FileText, Plus, ChevronRight, ArrowUpDown,
   TrendingUp, TrendingDown, Minus, Search, Filter,
+  RefreshCw, Loader2, CheckCircle2,
 } from 'lucide-react';
 import { priceListsAPI, suppliersAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -22,6 +23,10 @@ export default function PriceListsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Generate from proformas
+  const [generating, setGenerating] = useState(false);
+  const [generateResult, setGenerateResult] = useState<any>(null);
+
   // Create form
   const [showCreate, setShowCreate] = useState(false);
   const [createData, setCreateData] = useState({
@@ -31,6 +36,9 @@ export default function PriceListsPage() {
   });
 
   useEffect(() => {
+    setSelectedPriceList(null);
+    setSearchTerm('');
+    setGenerateResult(null);
     loadData();
   }, [selectedSupplier]);
 
@@ -78,6 +86,50 @@ export default function PriceListsPage() {
     }
   };
 
+  const handleGenerateFromProformas = async (supplierId: number) => {
+    setGenerating(true);
+    setGenerateResult(null);
+    try {
+      const result = await priceListsAPI.generateFromProformas(supplierId);
+      setGenerateResult(result);
+      await loadData();
+      // Auto-load the newly created price list
+      if (result.price_list_id) {
+        await loadDetail(result.price_list_id);
+      }
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Failed to generate price list';
+      setGenerateResult({ error: msg });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleGenerateAll = async () => {
+    setGenerating(true);
+    setGenerateResult(null);
+    try {
+      const results = [];
+      for (const s of suppliers) {
+        try {
+          const result = await priceListsAPI.generateFromProformas(s.id);
+          results.push({ supplier: s.name, ...result });
+        } catch {
+          results.push({ supplier: s.name, error: 'No proforma data' });
+        }
+      }
+      setGenerateResult({
+        message: `Generated for ${results.filter((r) => !r.error).length}/${suppliers.length} suppliers`,
+        details: results,
+      });
+      await loadData();
+    } catch {
+      setGenerateResult({ error: 'Failed to generate price lists' });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const filteredItems = selectedPriceList?.items?.filter((item: any) => {
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
@@ -88,6 +140,8 @@ export default function PriceListsPage() {
     );
   }) || [];
 
+  const selectedSupplierName = suppliers.find((s: any) => s.id === selectedSupplier)?.name;
+
   return (
     <main className="max-w-7xl mx-auto px-4 py-6">
       <div className="flex items-center justify-between mb-6">
@@ -95,10 +149,58 @@ export default function PriceListsPage() {
           <h1 className="text-2xl font-bold">Price Lists</h1>
           <p className="text-sm text-gray-500">Supplier pricing by product</p>
         </div>
-        <Button onClick={() => setShowCreate(true)} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="w-4 h-4 mr-2" /> New Price List
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={() => selectedSupplier ? handleGenerateFromProformas(selectedSupplier) : handleGenerateAll()}
+            disabled={generating}
+            variant="outline"
+            className="border-green-300 text-green-700 hover:bg-green-50"
+          >
+            {generating ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <RefreshCw className="w-4 h-4 mr-2" />
+            )}
+            {generating
+              ? 'Generating...'
+              : selectedSupplier
+                ? `Generate from Proformas`
+                : 'Generate All from Proformas'}
+          </Button>
+          <Button onClick={() => setShowCreate(true)} className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="w-4 h-4 mr-2" /> New Price List
+          </Button>
+        </div>
       </div>
+
+      {/* Generate result message */}
+      {generateResult && (
+        <div className={`mb-4 p-3 rounded-lg text-sm ${
+          generateResult.error ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            {generateResult.error ? (
+              <span>⚠️ {generateResult.error}</span>
+            ) : (
+              <>
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{generateResult.message}</span>
+                {generateResult.items_count && (
+                  <Badge variant="outline" className="text-xs text-green-700 border-green-300">
+                    {generateResult.items_count} products
+                  </Badge>
+                )}
+              </>
+            )}
+            <button
+              onClick={() => setGenerateResult(null)}
+              className="ml-auto text-gray-400 hover:text-gray-600"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Create Form Modal */}
       {showCreate && (
@@ -186,7 +288,25 @@ export default function PriceListsPage() {
               {loading ? (
                 <div className="text-center py-8 text-gray-400">Loading...</div>
               ) : priceLists.length === 0 ? (
-                <p className="text-center py-8 text-gray-400">No price lists found</p>
+                <div className="text-center py-8">
+                  <p className="text-gray-400 mb-3">No price lists found</p>
+                  {selectedSupplier && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleGenerateFromProformas(selectedSupplier)}
+                      disabled={generating}
+                      className="text-green-700 border-green-300 hover:bg-green-50"
+                    >
+                      {generating ? (
+                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-3 h-3 mr-1" />
+                      )}
+                      Generate from Proformas
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <div className="space-y-2">
                   {priceLists.map((pl: any) => (

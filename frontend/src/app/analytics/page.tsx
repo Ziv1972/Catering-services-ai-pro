@@ -1033,17 +1033,17 @@ export default function AnalyticsPage() {
                     )}
                   </>
                 ) : catDrill.level === 4 ? (
-                  /* ─── Level 4: Products in category (with multi-select) ─── */
+                  /* ─── Level 4: Products in category — click to see monthly ─── */
                   <div>
                     {(catDrill.data?.items || []).length === 0 ? (
                       <p className="text-center py-8 text-gray-400">No products in this category</p>
                     ) : (
                       <>
-                        {/* Compare button */}
-                        {selectedProducts.length > 0 && (
+                        {/* Multi-select compare bar */}
+                        {selectedProducts.length > 1 && (
                           <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200 flex items-center justify-between">
                             <span className="text-sm text-blue-700">
-                              {selectedProducts.length} product{selectedProducts.length !== 1 ? 's' : ''} selected
+                              {selectedProducts.length} products selected
                             </span>
                             <div className="flex gap-2">
                               <Button
@@ -1059,7 +1059,7 @@ export default function AnalyticsPage() {
                                 onClick={() => drillIntoProductMonthly(selectedProducts)}
                                 className="bg-blue-600 text-white hover:bg-blue-700 text-xs"
                               >
-                                Compare Monthly Trends
+                                Compare {selectedProducts.length} Products
                               </Button>
                             </div>
                           </div>
@@ -1068,11 +1068,11 @@ export default function AnalyticsPage() {
                           <table className="w-full text-sm">
                             <thead>
                               <tr className="border-b text-left text-gray-500">
-                                <th className="pb-2 w-8"></th>
                                 <th className="pb-2 font-medium">Product</th>
                                 <th className="pb-2 font-medium text-right">Qty</th>
                                 <th className="pb-2 font-medium text-right">Avg Price</th>
                                 <th className="pb-2 font-medium text-right">Total</th>
+                                <th className="pb-2 w-8"></th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1081,18 +1081,24 @@ export default function AnalyticsPage() {
                                 return (
                                   <tr
                                     key={i}
-                                    onClick={() => toggleProductSelection(item.product_name)}
-                                    className={`border-b last:border-0 cursor-pointer transition-colors ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                                    onClick={() => drillIntoProductMonthly([item.product_name])}
+                                    className="border-b last:border-0 cursor-pointer hover:bg-green-50 transition-colors"
                                   >
-                                    <td className="py-2">
-                                      <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}`}>
-                                        {isSelected && <Check className="w-3 h-3 text-white" />}
-                                      </div>
+                                    <td className="py-2 font-medium flex items-center gap-1">
+                                      {item.product_name}
+                                      <ChevronRight className="w-3 h-3 text-gray-300" />
                                     </td>
-                                    <td className="py-2 font-medium">{item.product_name}</td>
                                     <td className="py-2 text-right text-gray-600 tabular-nums">{fmtQty(item.total_quantity)}</td>
                                     <td className="py-2 text-right text-gray-600 tabular-nums">{fmt(item.avg_unit_price)}</td>
                                     <td className="py-2 text-right tabular-nums">{fmt(item.total_cost)}</td>
+                                    <td className="py-2">
+                                      <div
+                                        onClick={(e) => { e.stopPropagation(); toggleProductSelection(item.product_name); }}
+                                        className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 hover:border-blue-400'}`}
+                                      >
+                                        {isSelected && <Check className="w-3 h-3 text-white" />}
+                                      </div>
+                                    </td>
                                   </tr>
                                 );
                               })}
