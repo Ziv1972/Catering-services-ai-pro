@@ -307,6 +307,11 @@ export const historicalAPI = {
     const response = await api.get('/api/historical/drill-down/meals', { params });
     return response.data;
   },
+
+  drillDownMealsCategories: async (params?: { month?: number; year?: number; site_id?: number }) => {
+    const response = await api.get('/api/historical/drill-down/meals/categories', { params });
+    return response.data;
+  },
 };
 
 // Anomalies

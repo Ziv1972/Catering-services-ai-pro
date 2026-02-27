@@ -43,6 +43,8 @@ export default function AnalyticsPage() {
     label: string;
     data: any;
     loading: boolean;
+    level?: number;
+    context?: any;
   } | null>(null);
 
   useEffect(() => {
@@ -81,12 +83,41 @@ export default function AnalyticsPage() {
     const parsed = parseMonthLabel(monthLabel);
     if (!parsed) return;
 
-    setDrillDown({ type: 'meals', label: monthLabel, data: null, loading: true });
+    setDrillDown({ type: 'meals', label: monthLabel, data: null, loading: true, level: 1, context: { month: parsed.month, year: parsed.year, monthLabel } });
     try {
       const result = await historicalAPI.drillDownMeals({ month: parsed.month, year: parsed.year });
       setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
+    }
+  };
+
+  const drillMealIntoCategories = async (siteId: number, siteName: string) => {
+    if (!drillDown || drillDown.type !== 'meals') return;
+    const ctx = drillDown.context;
+    setDrillDown((prev) => prev ? {
+      ...prev, level: 2, label: `${ctx.monthLabel} — ${siteName}`,
+      context: { ...ctx, site_id: siteId, siteName },
+      data: null, loading: true,
+    } : null);
+    try {
+      const result = await historicalAPI.drillDownMealsCategories({
+        month: ctx.month, year: ctx.year, site_id: siteId,
+      });
+      setDrillDown((prev) => prev ? { ...prev, data: result, loading: false } : null);
+    } catch {
+      setDrillDown((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
+    }
+  };
+
+  const goBackMealDrill = () => {
+    if (!drillDown || drillDown.type !== 'meals') return;
+    if (drillDown.level === 2) {
+      // Go back to sites level
+      const ctx = drillDown.context;
+      handleMealClick({ activePayload: [{ payload: { month: ctx.monthLabel } }] });
+    } else {
+      setDrillDown(null);
     }
   };
 
@@ -774,9 +805,21 @@ export default function AnalyticsPage() {
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setDrillDown(null)}>
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm md:max-w-2xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between rounded-t-xl">
-                <h3 className="text-lg font-semibold">
-                  {drillDown.type === 'cost' ? 'Cost Breakdown' : 'Meal Details'} — {drillDown.label}
-                </h3>
+                <div className="flex items-center gap-2">
+                  {drillDown.type === 'meals' && (drillDown.level || 1) > 1 && (
+                    <button onClick={goBackMealDrill} className="p-1 hover:bg-gray-100 rounded">
+                      <ArrowLeft className="w-5 h-5" />
+                    </button>
+                  )}
+                  <div>
+                    <h3 className="text-lg font-semibold">
+                      {drillDown.type === 'cost' ? 'Cost Breakdown' : drillDown.level === 2 ? 'Categories' : 'Meals by Site'} — {drillDown.label}
+                    </h3>
+                    {drillDown.type === 'meals' && (drillDown.level || 1) === 1 && (
+                      <p className="text-xs text-gray-500">Click a site to see category breakdown</p>
+                    )}
+                  </div>
+                </div>
                 <button onClick={() => setDrillDown(null)} className="p-1 hover:bg-gray-100 rounded">
                   <X className="w-5 h-5" />
                 </button>
@@ -813,7 +856,8 @@ export default function AnalyticsPage() {
                       <p className="text-center text-gray-500 py-8">No cost data for this month</p>
                     )}
                   </div>
-                ) : (
+                ) : (drillDown.level || 1) === 1 ? (
+                  /* Level 1: Meals by Site */
                   <div>
                     {drillDown.data?.items?.length > 0 ? (
                       <>
@@ -827,23 +871,68 @@ export default function AnalyticsPage() {
                             <p className="text-xs text-purple-600">Total Cost</p>
                           </div>
                         </div>
+                        <div className="space-y-2">
+                          {drillDown.data.items.map((item: any, idx: number) => (
+                            <button
+                              key={idx}
+                              onClick={() => drillMealIntoCategories(item.site_id, item.site_name)}
+                              className="w-full flex items-center justify-between p-3 rounded-lg border hover:bg-blue-50 transition-colors text-left"
+                            >
+                              <div>
+                                <p className="font-medium text-gray-900">{item.site_name}</p>
+                                <p className="text-xs text-gray-500">{item.meal_count?.toLocaleString()} meals · {fmt(item.cost)}</p>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-center text-gray-500 py-8">No meal data for this month</p>
+                    )}
+                  </div>
+                ) : (
+                  /* Level 2: Categories for a site */
+                  <div>
+                    {drillDown.data?.items?.length > 0 ? (
+                      <>
+                        <div className="grid grid-cols-2 gap-4 mb-4">
+                          <div className="bg-green-50 rounded-lg p-3 text-center">
+                            <p className="text-2xl font-bold text-green-700">{drillDown.data.total_quantity?.toLocaleString()}</p>
+                            <p className="text-xs text-green-600">Total Quantity</p>
+                          </div>
+                          <div className="bg-purple-50 rounded-lg p-3 text-center">
+                            <p className="text-2xl font-bold text-purple-700">{fmt(drillDown.data.total_cost)}</p>
+                            <p className="text-xs text-purple-600">Total Cost</p>
+                          </div>
+                        </div>
                         <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead>
                             <tr className="border-b text-left">
-                              <th className="pb-2 font-medium text-gray-600">Date</th>
-                              <th className="pb-2 font-medium text-gray-600">Site</th>
-                              <th className="pb-2 font-medium text-gray-600 text-right">Meals</th>
+                              <th className="pb-2 font-medium text-gray-600">Category</th>
+                              <th className="pb-2 font-medium text-gray-600 text-right">Qty</th>
                               <th className="pb-2 font-medium text-gray-600 text-right">Cost</th>
+                              <th className="pb-2 font-medium text-gray-600 text-right">% of Total</th>
                             </tr>
                           </thead>
                           <tbody>
                             {drillDown.data.items.map((item: any, idx: number) => (
                               <tr key={idx} className="border-b last:border-b-0">
-                                <td className="py-2">{item.date}</td>
-                                <td className="py-2">{item.site_name}</td>
-                                <td className="py-2 text-right">{item.meal_count}</td>
-                                <td className="py-2 text-right">{item.cost ? fmt(item.cost) : '-'}</td>
+                                <td className="py-2">
+                                  <div className="flex items-center gap-2">
+                                    <div
+                                      className="w-3 h-3 rounded-full shrink-0"
+                                      style={{ backgroundColor: CATEGORY_COLORS[item.category] || '#d1d5db' }}
+                                    />
+                                    <span>{item.display_he}</span>
+                                  </div>
+                                </td>
+                                <td className="py-2 text-right">{item.quantity?.toLocaleString()}</td>
+                                <td className="py-2 text-right font-medium">{fmt(item.cost)}</td>
+                                <td className="py-2 text-right text-gray-500">
+                                  {drillDown.data.total_cost > 0 ? Math.round(item.cost / drillDown.data.total_cost * 100) : 0}%
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -851,7 +940,7 @@ export default function AnalyticsPage() {
                         </div>
                       </>
                     ) : (
-                      <p className="text-center text-gray-500 py-8">No meal data for this month</p>
+                      <p className="text-center text-gray-500 py-8">No category data for this site</p>
                     )}
                   </div>
                 )}

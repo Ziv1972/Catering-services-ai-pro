@@ -17,7 +17,8 @@ from backend.models.proforma import Proforma, ProformaItem
 from backend.models.complaint import Complaint, ComplaintCategory
 from backend.models.operations import Anomaly
 from backend.api.auth import get_current_user
-from backend.utils.db_compat import year_equals, month_equals
+from backend.api.category_analysis import _load_category_mappings, _match_product_to_category
+from backend.utils.db_compat import year_equals, month_equals, extract_month
 
 router = APIRouter()
 
@@ -69,79 +70,83 @@ async def get_analytics(
 ):
     """Get comprehensive analytics from real DB data"""
 
-    # 1. Meal trends by month per site
-    meal_query = (
-        select(HistoricalMealData)
-        .options(selectinload(HistoricalMealData.site))
-        .order_by(HistoricalMealData.date.asc())
+    # 1. Meal trends by month per site — derived from proforma items
+    mappings = await _load_category_mappings(db)
+
+    # Query proforma items with site info
+    items_query = (
+        select(
+            ProformaItem.product_name,
+            ProformaItem.quantity,
+            ProformaItem.total_price,
+            extract_month(Proforma.invoice_date).label("month_num"),
+            func.strftime("%Y", Proforma.invoice_date).label("year_str"),
+            Proforma.site_id,
+            Site.name.label("site_name"),
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .join(Site, Proforma.site_id == Site.id)
+        .order_by(Proforma.invoice_date.asc())
     )
     if site_id:
-        meal_query = meal_query.where(HistoricalMealData.site_id == site_id)
+        items_query = items_query.where(Proforma.site_id == site_id)
 
-    result = await db.execute(meal_query)
-    meals = result.scalars().all()
+    items_result = await db.execute(items_query)
+    all_items = list(items_result)
 
-    # Group meals by month and site
+    MONTH_ABBR = {
+        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+        7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+    }
+
+    # Group meal items (total_meals category) by month+site
     meal_by_month: dict = {}
-    for m in meals:
-        month_key = m.date.strftime("%b %Y")
-        site_name = m.site.name if m.site else "Unknown"
-        if month_key not in meal_by_month:
-            meal_by_month[month_key] = {}
-        meal_by_month[month_key][site_name] = (
-            meal_by_month[month_key].get(site_name, 0) + m.meal_count
+    meal_count_by_month: dict = {}
+    actual_cost_by_month: dict = {}
+
+    for item in all_items:
+        month_num = int(item.month_num)
+        year_str = item.year_str
+        month_key = f"{MONTH_ABBR[month_num]} {year_str}"
+        site_name = item.site_name or "Unknown"
+
+        # Accumulate total proforma cost by month
+        actual_cost_by_month[month_key] = (
+            actual_cost_by_month.get(month_key, 0) + (item.total_price or 0)
         )
+
+        # Categorize item
+        group_name, _, _ = _match_product_to_category(item.product_name, mappings)
+        if group_name == "total_meals":
+            qty = item.quantity or 0
+            if month_key not in meal_by_month:
+                meal_by_month[month_key] = {}
+            meal_by_month[month_key][site_name] = (
+                meal_by_month[month_key].get(site_name, 0) + qty
+            )
+            meal_count_by_month[month_key] = (
+                meal_count_by_month.get(month_key, 0) + qty
+            )
 
     meal_trends = []
     for month, sites in meal_by_month.items():
         entry: dict = {"month": month}
-        for site_name, count in sites.items():
-            safe_key = site_name.lower().replace(" ", "_")
-            entry[safe_key] = count
+        for sname, count in sites.items():
+            safe_key = sname.lower().replace(" ", "_")
+            entry[safe_key] = round(count)
         meal_trends.append(entry)
 
-    # 2. Cost trends by month (from actual proformas, not historical contract cost)
-    # Meal counts from historical data
-    meal_count_by_month: dict = {}
-    for m in meals:
-        month_key = m.date.strftime("%b %Y")
-        meal_count_by_month[month_key] = (
-            meal_count_by_month.get(month_key, 0) + m.meal_count
-        )
-
-    # Actual costs from proformas (loaded later, but query now)
-    proforma_cost_result = await db.execute(
-        select(Proforma)
-        .order_by(Proforma.invoice_date.asc())
-    )
-    proforma_costs = proforma_cost_result.scalars().all()
-
-    actual_cost_by_month: dict = {}
-    for p in proforma_costs:
-        month_key = p.invoice_date.strftime("%b %Y")
-        actual_cost_by_month[month_key] = (
-            actual_cost_by_month.get(month_key, 0) + p.total_amount
-        )
-
-    # Merge: use actual proforma cost, fall back to historical if no proforma
-    all_cost_months = set(actual_cost_by_month.keys()) | set(
-        m.date.strftime("%b %Y") for m in meals if m.cost
-    )
-
+    # 2. Cost trends by month (from proformas with meal-count denominator)
     cost_trends = []
-    for month_key in sorted(all_cost_months):
-        actual_cost = actual_cost_by_month.get(month_key, 0)
-        # Fall back to historical cost only if no proforma data
-        if actual_cost == 0:
-            for m in meals:
-                if m.date.strftime("%b %Y") == month_key and m.cost:
-                    actual_cost += m.cost
-        total_meals = meal_count_by_month.get(month_key, 1)
+    for month_key in sorted(actual_cost_by_month.keys()):
+        actual_cost = actual_cost_by_month[month_key]
+        total_meals = meal_count_by_month.get(month_key, 0)
         cost_trends.append({
             "month": month_key,
-            "avg_cost": round(actual_cost / total_meals, 1) if total_meals else 0,
+            "avg_cost": round(actual_cost / total_meals, 1) if total_meals > 0 else 0,
             "total_cost": round(actual_cost, 0),
-            "source": "proforma" if month_key in actual_cost_by_month else "historical",
+            "total_meals": round(total_meals),
+            "source": "proforma",
         })
 
     # 3. Complaint categories from DB
@@ -296,40 +301,117 @@ async def meals_drill_down(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Drill-down: daily meal data for a given month/site"""
+    """Drill-down Level 1: meal counts by site for a given month (from proformas)."""
+    target_year = year or date.today().year
+    mappings = await _load_category_mappings(db)
+
     query = (
-        select(HistoricalMealData)
-        .options(selectinload(HistoricalMealData.site))
-        .order_by(HistoricalMealData.date.asc())
-    )
-    if site_id:
-        query = query.where(HistoricalMealData.site_id == site_id)
-    if year:
-        start = date(year, month or 1, 1)
-        if month:
-            end_month = month + 1 if month < 12 else 1
-            end_year = year if month < 12 else year + 1
-            end = date(end_year, end_month, 1)
-        else:
-            end = date(year + 1, 1, 1)
-        query = query.where(
-            HistoricalMealData.date >= start,
-            HistoricalMealData.date < end,
+        select(
+            ProformaItem.product_name,
+            ProformaItem.quantity,
+            ProformaItem.total_price,
+            Proforma.site_id,
+            Site.name.label("site_name"),
         )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .join(Site, Proforma.site_id == Site.id)
+        .where(year_equals(Proforma.invoice_date, target_year))
+    )
+    if month:
+        query = query.where(month_equals(Proforma.invoice_date, month))
+    if site_id:
+        query = query.where(Proforma.site_id == site_id)
 
     result = await db.execute(query)
-    meals = result.scalars().all()
+
+    # Group by site, only total_meals category
+    by_site: dict = {}
+    total_meals = 0
+    total_cost = 0.0
+    for item in result:
+        group_name, display_he, display_en = _match_product_to_category(item.product_name, mappings)
+        if group_name == "total_meals":
+            qty = item.quantity or 0
+            sname = item.site_name or "Unknown"
+            if sname not in by_site:
+                by_site[sname] = {"site_id": item.site_id, "site_name": sname, "meal_count": 0, "cost": 0}
+            by_site[sname]["meal_count"] += qty
+            by_site[sname]["cost"] += item.total_price or 0
+            total_meals += qty
+            total_cost += item.total_price or 0
 
     return {
         "items": [
-            {
-                "date": m.date.isoformat(),
-                "site_name": m.site.name if m.site else None,
-                "meal_count": m.meal_count,
-                "cost": m.cost,
-            }
-            for m in meals
+            {**v, "meal_count": round(v["meal_count"]), "cost": round(v["cost"])}
+            for v in sorted(by_site.values(), key=lambda x: x["meal_count"], reverse=True)
         ],
-        "total_meals": sum(m.meal_count for m in meals),
-        "total_cost": sum(m.cost or 0 for m in meals),
+        "total_meals": round(total_meals),
+        "total_cost": round(total_cost),
+        "year": target_year,
+        "month": month,
+    }
+
+
+@router.get("/drill-down/meals/categories")
+async def meals_categories_drill_down(
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    site_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Drill-down Level 2: meal counts by category for a given month/site (from proformas)."""
+    target_year = year or date.today().year
+    mappings = await _load_category_mappings(db)
+
+    query = (
+        select(
+            ProformaItem.product_name,
+            ProformaItem.quantity,
+            ProformaItem.total_price,
+            Proforma.site_id,
+            Site.name.label("site_name"),
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .join(Site, Proforma.site_id == Site.id)
+        .where(year_equals(Proforma.invoice_date, target_year))
+    )
+    if month:
+        query = query.where(month_equals(Proforma.invoice_date, month))
+    if site_id:
+        query = query.where(Proforma.site_id == site_id)
+
+    result = await db.execute(query)
+
+    # Group ALL items by category
+    by_category: dict = {}
+    total_qty = 0
+    total_cost = 0.0
+    for item in result:
+        group_name, display_he, display_en = _match_product_to_category(item.product_name, mappings)
+        qty = item.quantity or 0
+        cost = item.total_price or 0
+        if group_name not in by_category:
+            by_category[group_name] = {
+                "category": group_name,
+                "display_he": display_he,
+                "display_en": display_en,
+                "quantity": 0,
+                "cost": 0,
+            }
+        by_category[group_name]["quantity"] += qty
+        by_category[group_name]["cost"] += cost
+        total_qty += qty
+        total_cost += cost
+
+    return {
+        "items": [
+            {**v, "quantity": round(v["quantity"]), "cost": round(v["cost"])}
+            for v in sorted(by_category.values(), key=lambda x: x["cost"], reverse=True)
+        ],
+        "total_quantity": round(total_qty),
+        "total_cost": round(total_cost),
+        "year": target_year,
+        "month": month,
+        "site_id": site_id,
     }
