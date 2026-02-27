@@ -993,6 +993,126 @@ async def meals_detail(
     }
 
 
+@router.get("/daily-meals")
+async def dashboard_daily_meals(
+    days: int = Query(default=30, ge=1, le=90),
+    site_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Daily meal counts from FoodHouse reports for the last N days.
+    Returns bars by date, broken down by meal type + site,
+    plus monthly aggregates with budget comparison.
+    """
+    from backend.models.daily_meal_count import DailyMealCount
+    from backend.models.site import Site
+    from backend.models.supplier import Supplier
+    from datetime import timedelta
+
+    today = date.today()
+    start_date = today - timedelta(days=days)
+
+    # ── Fetch daily meal records ──
+    query = (
+        select(DailyMealCount)
+        .where(DailyMealCount.date >= start_date)
+        .order_by(DailyMealCount.date.desc())
+    )
+    if site_id:
+        query = query.where(DailyMealCount.site_id == site_id)
+
+    result = await db.execute(query)
+    records = result.scalars().all()
+
+    # ── Site lookup ──
+    sites_result = await db.execute(select(Site.id, Site.name).order_by(Site.name))
+    sites = {r.id: r.name for r in sites_result}
+    sites_list = [{"id": sid, "name": sname} for sid, sname in sites.items()]
+
+    # ── Group by date ──
+    by_date: dict[str, dict] = {}
+    meal_type_set: set[str] = set()
+
+    for r in records:
+        d = r.date.isoformat()
+        mt_label = r.meal_type_en or r.meal_type or "Unknown"
+        site_name = sites.get(r.site_id, "Unknown")
+        key = f"{mt_label} ({site_name})" if not site_id else mt_label
+        meal_type_set.add(key)
+
+        if d not in by_date:
+            by_date[d] = {"date": d, "total": 0}
+        by_date[d][key] = by_date[d].get(key, 0) + r.quantity
+        by_date[d]["total"] += r.quantity
+
+    # Build chart data sorted by date ascending
+    chart_data = sorted(by_date.values(), key=lambda x: x["date"])
+    meal_type_keys = sorted(meal_type_set)
+
+    # ── Monthly aggregates for budget comparison ──
+    # Sum daily meals by month
+    monthly_meals: dict[int, float] = {}
+    for r in records:
+        m = r.date.month
+        monthly_meals[m] = monthly_meals.get(m, 0) + r.quantity
+
+    # Get FoodHouse budget for comparison
+    fh_result = await db.execute(
+        select(Supplier).where(Supplier.name.ilike("%foodhouse%"))
+    )
+    foodhouse = fh_result.scalar_one_or_none()
+
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    budget_comparison = []
+    if foodhouse:
+        budget_query = (
+            select(SupplierBudget)
+            .where(
+                SupplierBudget.supplier_id == foodhouse.id,
+                SupplierBudget.year == today.year,
+                SupplierBudget.is_active == True,
+            )
+        )
+        if site_id:
+            budget_query = budget_query.where(SupplierBudget.site_id == site_id)
+
+        budget_result = await db.execute(budget_query)
+        budgets = budget_result.scalars().all()
+
+        for m in sorted(monthly_meals.keys()):
+            month_budget = sum(getattr(b, MONTH_COLS[m - 1]) or 0 for b in budgets)
+            budget_comparison.append({
+                "month": m,
+                "month_name": month_names[m - 1],
+                "meals": round(monthly_meals[m]),
+                "budget": round(month_budget),
+            })
+
+    # ── Summary totals ──
+    total_meals = sum(r.quantity for r in records)
+    days_with_data = len(by_date)
+    avg_daily = round(total_meals / days_with_data) if days_with_data > 0 else 0
+
+    return {
+        "chart_data": chart_data,
+        "meal_type_keys": meal_type_keys,
+        "budget_comparison": budget_comparison,
+        "sites": sites_list,
+        "summary": {
+            "total_meals": round(total_meals),
+            "days_with_data": days_with_data,
+            "avg_daily": avg_daily,
+            "date_range": {
+                "from": start_date.isoformat(),
+                "to": today.isoformat(),
+            },
+        },
+    }
+
+
 @router.get("/debug-data")
 async def debug_data(
     db: AsyncSession = Depends(get_db),

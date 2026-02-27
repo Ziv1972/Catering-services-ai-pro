@@ -1,22 +1,127 @@
 """
 Webhook endpoints for Power Automate integration
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from datetime import datetime
+from sqlalchemy import select, and_
+from datetime import datetime, date
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import logging
+import re
+import io
+import csv
 
 from backend.database import get_db
 from backend.models.complaint import Complaint, ComplaintSource, ComplaintStatus
 from backend.models.meeting import Meeting, MeetingType
 from backend.models.site import Site
+from backend.models.daily_meal_count import DailyMealCount
 from backend.agents.complaint_intelligence.agent import ComplaintIntelligenceAgent
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# ──── Meal type parsing helpers ────
+MEAL_TYPE_MAP = {
+    "בשרי": ("Meat", "בשרי"),
+    "חלבי": ("Dairy", "חלבי"),
+    "עיקרית בלבד": ("Main Only", "עיקרית בלבד"),
+}
+
+SITE_MAP = {
+    "נס ציונה": "NZ",
+    "קרית גת": "KG",
+}
+
+
+def _parse_restaurant_line(name: str) -> dict:
+    """
+    Parse a line like 'HP פוד האוס בשרי עיקרית בלבד - נס ציונה'
+    Returns: { meal_type, meal_type_en, site_code, restaurant_name }
+    """
+    result = {"meal_type": "unknown", "meal_type_en": "Unknown", "site_code": None, "restaurant_name": name}
+
+    # Extract site from "- <site>" suffix
+    for heb_site, code in SITE_MAP.items():
+        if heb_site in name:
+            result["site_code"] = code
+            break
+
+    # Determine meal type (check longest matches first)
+    if "עיקרית בלבד" in name:
+        result["meal_type"] = "עיקרית בלבד"
+        result["meal_type_en"] = "Main Only"
+    elif "חלבי" in name:
+        result["meal_type"] = "חלבי"
+        result["meal_type_en"] = "Dairy"
+    elif "בשרי" in name:
+        result["meal_type"] = "בשרי"
+        result["meal_type_en"] = "Meat"
+
+    return result
+
+
+async def _upsert_daily_meals(
+    db: AsyncSession,
+    meal_date: date,
+    rows: list[dict],
+    source: str = "csv_upload",
+) -> dict:
+    """Upsert daily meal counts from parsed rows."""
+    created = 0
+    updated = 0
+
+    for row in rows:
+        parsed = _parse_restaurant_line(row["name"])
+        qty = row["quantity"]
+
+        # Resolve site_id
+        site_id = None
+        if parsed["site_code"]:
+            site_result = await db.execute(
+                select(Site).where(Site.code == parsed["site_code"])
+            )
+            site = site_result.scalar_one_or_none()
+            if site:
+                site_id = site.id
+
+        if not site_id:
+            continue
+
+        # Check for existing record (upsert)
+        existing_result = await db.execute(
+            select(DailyMealCount).where(
+                and_(
+                    DailyMealCount.date == meal_date,
+                    DailyMealCount.site_id == site_id,
+                    DailyMealCount.meal_type == parsed["meal_type"],
+                )
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+
+        if existing:
+            existing.quantity = qty
+            existing.restaurant_name = row["name"]
+            existing.source = source
+            updated += 1
+        else:
+            record = DailyMealCount(
+                date=meal_date,
+                site_id=site_id,
+                meal_type=parsed["meal_type"],
+                meal_type_en=parsed["meal_type_en"],
+                restaurant_name=row["name"],
+                quantity=qty,
+                source=source,
+            )
+            db.add(record)
+            created += 1
+
+    await db.commit()
+    return {"created": created, "updated": updated}
 
 
 class ComplaintWebhook(BaseModel):
@@ -253,6 +358,187 @@ async def receive_meeting_from_calendar(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/daily-meals")
+async def receive_daily_meals(
+    request: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Webhook endpoint for Power Automate email trigger.
+    Receives daily meal counts from the FoodHouse report email.
+
+    Expected JSON body from Power Automate:
+    {
+        "date": "2026-02-27",
+        "items": [
+            { "name": "HP פוד האוס בשרי - נס ציונה", "quantity": 635 },
+            { "name": "HP קופי האוס חלבי - קרית גת", "quantity": 14 }
+        ]
+    }
+
+    Or raw CSV content:
+    {
+        "date": "2026-02-27",
+        "csv_content": "שם מסעדה,מספר עסקאות\\nHP פוד האוס בשרי - נס ציונה,635.00\\n..."
+    }
+    """
+    try:
+        logger.info("Received daily-meals webhook")
+
+        # Parse date
+        date_str = request.get("date")
+        meal_date = date.fromisoformat(date_str) if date_str else date.today()
+
+        rows: list[dict] = []
+
+        # Option 1: Pre-parsed items array
+        if "items" in request:
+            for item in request["items"]:
+                rows.append({
+                    "name": item.get("name", ""),
+                    "quantity": float(item.get("quantity", 0)),
+                })
+
+        # Option 2: Raw CSV content from email body
+        elif "csv_content" in request:
+            csv_text = request["csv_content"]
+            reader = csv.reader(io.StringIO(csv_text))
+            header = next(reader, None)  # skip header
+            for csv_row in reader:
+                if len(csv_row) >= 2 and csv_row[0].strip():
+                    try:
+                        rows.append({
+                            "name": csv_row[0].strip(),
+                            "quantity": float(csv_row[1].strip()),
+                        })
+                    except ValueError:
+                        continue
+
+        if not rows:
+            return {"status": "warning", "message": "No meal data found in request"}
+
+        result = await _upsert_daily_meals(db, meal_date, rows, source="email")
+
+        logger.info(f"Daily meals imported: date={meal_date}, created={result['created']}, updated={result['updated']}")
+
+        return {
+            "status": "success",
+            "date": meal_date.isoformat(),
+            "items_processed": len(rows),
+            **result,
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing daily-meals webhook: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/daily-meals/upload")
+async def upload_daily_meals_csv(
+    file: UploadFile = File(...),
+    meal_date: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Upload a CSV file with daily meal counts.
+    CSV format: שם מסעדה,מספר עסקאות (restaurant name, transaction count)
+    Encoding: cp1255 (Windows Hebrew)
+    """
+    try:
+        content = await file.read()
+
+        # Try multiple encodings
+        text = None
+        for enc in ["cp1255", "utf-8-sig", "utf-8", "iso-8859-8"]:
+            try:
+                text = content.decode(enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+
+        if not text:
+            raise HTTPException(status_code=400, detail="Could not decode CSV file")
+
+        # Parse date from filename if not provided (e.g. HpIndig_Hadri_Ochel2526.csv)
+        parsed_date = date.today()
+        if meal_date:
+            parsed_date = date.fromisoformat(meal_date)
+
+        # Parse CSV
+        rows: list[dict] = []
+        reader = csv.reader(io.StringIO(text))
+        header = next(reader, None)
+        for csv_row in reader:
+            if len(csv_row) >= 2 and csv_row[0].strip():
+                try:
+                    rows.append({
+                        "name": csv_row[0].strip(),
+                        "quantity": float(csv_row[1].strip()),
+                    })
+                except ValueError:
+                    continue
+
+        if not rows:
+            raise HTTPException(status_code=400, detail="No valid data found in CSV")
+
+        result = await _upsert_daily_meals(db, parsed_date, rows, source="csv_upload")
+
+        return {
+            "status": "success",
+            "date": parsed_date.isoformat(),
+            "filename": file.filename,
+            "items_processed": len(rows),
+            **result,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading daily meals CSV: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/daily-meals")
+async def get_daily_meals(
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    site_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get daily meal counts for a date range."""
+    query = select(DailyMealCount).order_by(DailyMealCount.date.desc())
+
+    if from_date:
+        query = query.where(DailyMealCount.date >= date.fromisoformat(from_date))
+    if to_date:
+        query = query.where(DailyMealCount.date <= date.fromisoformat(to_date))
+    if site_id:
+        query = query.where(DailyMealCount.site_id == site_id)
+
+    result = await db.execute(query.options())
+    records = result.scalars().all()
+
+    # Group by date
+    by_date: dict = {}
+    for r in records:
+        d = r.date.isoformat()
+        if d not in by_date:
+            by_date[d] = {"date": d, "items": [], "total": 0}
+        by_date[d]["items"].append({
+            "site_id": r.site_id,
+            "meal_type": r.meal_type,
+            "meal_type_en": r.meal_type_en,
+            "restaurant_name": r.restaurant_name,
+            "quantity": r.quantity,
+        })
+        by_date[d]["total"] += r.quantity
+
+    return {
+        "days": sorted(by_date.values(), key=lambda x: x["date"], reverse=True),
+        "total_records": len(records),
+    }
+
+
 @router.get("/test")
 async def test_webhook():
     """Test endpoint to verify webhooks are working"""
@@ -262,6 +548,9 @@ async def test_webhook():
         "endpoints": {
             "complaints": "POST /api/webhooks/complaints",
             "meetings": "POST /api/webhooks/meetings",
+            "daily_meals": "POST /api/webhooks/daily-meals",
+            "daily_meals_upload": "POST /api/webhooks/daily-meals/upload",
+            "daily_meals_get": "GET /api/webhooks/daily-meals",
         },
         "timestamp": datetime.utcnow().isoformat(),
     }

@@ -18,6 +18,7 @@ from backend.models.product import Product
 from backend.models.price_list import PriceList, PriceListItem
 from backend.models.menu_compliance import ComplianceRule
 from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping
+from backend.models.daily_meal_count import DailyMealCount
 from backend.api.auth import get_password_hash
 from backend.api import auth, meetings, chat, dashboard, complaints
 from backend.api import menu_compliance, proformas, historical, anomalies, webhooks, suppliers

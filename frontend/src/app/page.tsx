@@ -10,8 +10,9 @@ import {
   ListTodo, ArrowRight, MessageSquare, Send,
   AlertCircle, CheckCircle2, Clock,
   ChevronRight, ChevronDown, ArrowLeft, X,
+  UtensilsCrossed, Upload, Loader2,
 } from 'lucide-react';
-import { dashboardAPI, chatAPI, drillDownAPI, categoryAnalysisAPI } from '@/lib/api';
+import { dashboardAPI, chatAPI, drillDownAPI, categoryAnalysisAPI, dailyMealsAPI } from '@/lib/api';
 import { format } from 'date-fns';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -69,6 +70,15 @@ export default function Dashboard() {
   // Meals drill-down (meal types breakdown)
   const [mealsDrill, setMealsDrill] = useState<any>(null);
   const [mealsDrillLoading, setMealsDrillLoading] = useState(false);
+
+  // Daily meals (from email/CSV)
+  const [dailyMeals, setDailyMeals] = useState<any>(null);
+  const [dailyMealsLoading, setDailyMealsLoading] = useState(false);
+  const [dailyMealsDays, setDailyMealsDays] = useState(30);
+  const [dailyMealsSiteId, setDailyMealsSiteId] = useState<number | undefined>(undefined);
+  const [csvUploading, setCsvUploading] = useState(false);
+  const [csvResult, setCsvResult] = useState<any>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadDashboard();
@@ -147,6 +157,39 @@ export default function Dashboard() {
     }
   };
 
+  const loadDailyMeals = async (days?: number, siteId?: number) => {
+    setDailyMealsLoading(true);
+    try {
+      const result = await dashboardAPI.dailyMeals({
+        days: days ?? dailyMealsDays,
+        site_id: siteId,
+      });
+      setDailyMeals(result);
+    } catch {
+      setDailyMeals(null);
+    } finally {
+      setDailyMealsLoading(false);
+    }
+  };
+
+  const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCsvUploading(true);
+    setCsvResult(null);
+    try {
+      const result = await dailyMealsAPI.upload(file);
+      setCsvResult(result);
+      await loadDailyMeals();
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Upload failed';
+      setCsvResult({ status: 'error', message: msg });
+    } finally {
+      setCsvUploading(false);
+      if (csvInputRef.current) csvInputRef.current.value = '';
+    }
+  };
+
   const toggleSupplier = (key: string) => {
     setHiddenSuppliers((prev) => {
       const next = new Set(prev);
@@ -159,10 +202,11 @@ export default function Dashboard() {
     });
   };
 
-  // Load supplier monthly + meals monthly on mount
+  // Load supplier monthly + meals monthly + daily meals on mount
   useEffect(() => {
     loadSupplierMonthly();
     loadMealsMonthly();
+    loadDailyMeals();
   }, []);
 
   const SUPPLIER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#78716c'];
@@ -1301,6 +1345,208 @@ export default function Dashboard() {
                   </>
                 ) : (
                   <p className="text-center py-8 text-gray-400 text-sm">No supplier data for this period</p>
+                )}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ═══════ ROW 1.5: Daily Meals ═══════ */}
+      <Card className="mb-6 border-l-4 border-l-orange-500">
+        <CardHeader className="pb-2">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-orange-50 rounded-lg">
+                <UtensilsCrossed className="w-5 h-5 text-orange-600" />
+              </div>
+              <div>
+                <CardTitle className="text-lg">Daily Meals</CardTitle>
+                <p className="text-sm text-gray-500">
+                  FoodHouse daily meal counts from email reports
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                accept=".csv"
+                ref={csvInputRef}
+                onChange={handleCsvUpload}
+                className="hidden"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => csvInputRef.current?.click()}
+                disabled={csvUploading}
+                className="border-orange-300 text-orange-700 hover:bg-orange-50"
+              >
+                {csvUploading ? (
+                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                ) : (
+                  <Upload className="w-4 h-4 mr-1" />
+                )}
+                {csvUploading ? 'Uploading...' : 'Upload CSV'}
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {/* Upload result message */}
+          {csvResult && (
+            <div className={`mb-4 p-3 rounded-lg text-sm ${
+              csvResult.status === 'error'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-green-50 text-green-700 border border-green-200'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {csvResult.status === 'error' ? (
+                    <AlertCircle className="w-4 h-4" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4" />
+                  )}
+                  <span>
+                    {csvResult.status === 'error'
+                      ? csvResult.message
+                      : `${csvResult.items_processed} records imported for ${csvResult.date} (${csvResult.created} new, ${csvResult.updated} updated)`}
+                  </span>
+                </div>
+                <button onClick={() => setCsvResult(null)} className="text-gray-400 hover:text-gray-600 ml-2">
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Controls */}
+          <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+            <div className="flex gap-1">
+              {[7, 14, 30].map((d) => (
+                <button
+                  key={d}
+                  onClick={() => { setDailyMealsDays(d); loadDailyMeals(d, dailyMealsSiteId); }}
+                  className={`px-3 py-1 rounded-full font-medium transition-colors ${
+                    dailyMealsDays === d ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {d}d
+                </button>
+              ))}
+            </div>
+            {dailyMeals?.sites?.length > 0 && (
+              <select
+                value={dailyMealsSiteId ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value ? Number(e.target.value) : undefined;
+                  setDailyMealsSiteId(v);
+                  loadDailyMeals(dailyMealsDays, v);
+                }}
+                className="border rounded px-2 py-1 bg-white text-xs"
+              >
+                <option value="">All Sites</option>
+                {dailyMeals.sites.map((s: any) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+            {dailyMeals?.summary && (
+              <span className="text-gray-500 ml-auto">
+                {dailyMeals.summary.days_with_data} days &middot;
+                avg {dailyMeals.summary.avg_daily}/day &middot;
+                total {dailyMeals.summary.total_meals.toLocaleString()}
+              </span>
+            )}
+          </div>
+
+          {dailyMealsLoading ? (
+            <div className="text-center py-8 text-gray-400 text-sm">Loading daily meals...</div>
+          ) : !dailyMeals?.chart_data?.length ? (
+            <div className="text-center py-8">
+              <UtensilsCrossed className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+              <p className="text-gray-400 mb-2">No daily meal data yet</p>
+              <p className="text-xs text-gray-400">Upload a CSV or set up Power Automate to push daily reports</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Daily bars chart */}
+              <div className="lg:col-span-2">
+                <p className="text-xs font-medium text-gray-500 mb-2">Daily Meal Count by Type</p>
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                    <BarChart data={dailyMeals.chart_data}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 10 }}
+                        tickFormatter={(v: string) => {
+                          const d = new Date(v);
+                          return `${d.getDate()}/${d.getMonth() + 1}`;
+                        }}
+                      />
+                      <YAxis tick={{ fontSize: 10 }} />
+                      <Tooltip
+                        labelFormatter={(v: any) => {
+                          const d = new Date(String(v));
+                          return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+                        }}
+                        formatter={(val: any, name: any) => [Number(val).toLocaleString(), String(name)]}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      {(dailyMeals.meal_type_keys || []).map((key: string, i: number) => (
+                        <Bar
+                          key={key}
+                          dataKey={key}
+                          stackId="meals"
+                          fill={
+                            key.includes('Meat') ? '#ef4444' :
+                            key.includes('Dairy') ? '#3b82f6' :
+                            key.includes('Main') ? '#f59e0b' :
+                            SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]
+                          }
+                          name={key}
+                        />
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Budget comparison sidebar */}
+              <div>
+                <p className="text-xs font-medium text-gray-500 mb-2">Monthly Budget vs Actual</p>
+                {dailyMeals.budget_comparison?.length > 0 ? (
+                  <div className="space-y-2">
+                    {dailyMeals.budget_comparison.map((bc: any) => {
+                      const pct = bc.budget > 0 ? Math.round(bc.meals / bc.budget * 100) : 0;
+                      return (
+                        <div key={bc.month} className="p-2 bg-gray-50 rounded-lg">
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="font-medium">{bc.month_name}</span>
+                            <span className="text-xs text-gray-500">
+                              {bc.meals.toLocaleString()} meals
+                              {bc.budget > 0 && ` / ₪${bc.budget.toLocaleString()}`}
+                            </span>
+                          </div>
+                          {bc.budget > 0 && (
+                            <div className="h-1.5 bg-gray-200 rounded-full">
+                              <div
+                                className={`h-1.5 rounded-full ${
+                                  pct > 90 ? 'bg-red-500' : pct > 70 ? 'bg-amber-500' : 'bg-green-500'
+                                }`}
+                                style={{ width: `${Math.min(pct, 100)}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-6 text-xs text-gray-400">
+                    No budget configured for meals
+                  </div>
                 )}
               </div>
             </div>

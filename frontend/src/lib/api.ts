@@ -360,6 +360,10 @@ export const dashboardAPI = {
     const response = await api.get('/api/dashboard/meals-detail', { params });
     return response.data;
   },
+  dailyMeals: async (params?: { days?: number; site_id?: number }) => {
+    const response = await api.get('/api/dashboard/daily-meals', { params });
+    return response.data;
+  },
 };
 
 // Supplier Budgets
@@ -594,6 +598,23 @@ export const priceListsAPI = {
 
   generateFromProformas: async (supplierId: number) => {
     const response = await api.post(`/api/price-lists/generate-from-proformas?supplier_id=${supplierId}`);
+    return response.data;
+  },
+};
+
+// Daily Meals (webhook endpoints)
+export const dailyMealsAPI = {
+  upload: async (file: File, mealDate?: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const params = mealDate ? `?meal_date=${mealDate}` : '';
+    const response = await api.post(`/api/webhooks/daily-meals/upload${params}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+  list: async (params?: { from_date?: string; to_date?: string; site_id?: number }) => {
+    const response = await api.get('/api/webhooks/daily-meals', { params });
     return response.data;
   },
 };
