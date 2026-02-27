@@ -356,6 +356,10 @@ export const dashboardAPI = {
     const response = await api.get('/api/dashboard/meals-monthly', { params });
     return response.data;
   },
+  mealsDetail: async (params: { year?: number; from_month?: number; to_month?: number; site_id?: number; supplier_id?: number }) => {
+    const response = await api.get('/api/dashboard/meals-detail', { params });
+    return response.data;
+  },
 };
 
 // Supplier Budgets

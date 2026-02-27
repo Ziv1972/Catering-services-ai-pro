@@ -883,6 +883,116 @@ async def meals_monthly(
     }
 
 
+@router.get("/meals-detail")
+async def meals_detail(
+    year: Optional[int] = None,
+    from_month: int = Query(default=1, ge=1, le=12),
+    to_month: int = Query(default=12, ge=1, le=12),
+    site_id: Optional[int] = None,
+    supplier_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Breakdown of meal types (product names in total_meals category) over time."""
+    from backend.models.site import Site
+    from backend.models.supplier import Supplier as SupplierModel
+    from backend.api.category_analysis import _load_category_mappings, _match_product_to_category
+
+    target_year = year or datetime.now().year
+    proforma_year = await _resolve_proforma_year(db, target_year)
+    mappings = await _load_category_mappings(db)
+
+    month_expr = extract_month(Proforma.invoice_date)
+    items_q = (
+        select(
+            ProformaItem.product_name,
+            ProformaItem.quantity,
+            ProformaItem.total_price,
+            month_expr.label("month_num"),
+            Site.name.label("site_name"),
+            Proforma.site_id,
+            Proforma.supplier_id,
+            SupplierModel.name.label("supplier_name"),
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .join(Site, Proforma.site_id == Site.id)
+        .join(SupplierModel, Proforma.supplier_id == SupplierModel.id)
+        .where(year_equals(Proforma.invoice_date, proforma_year))
+    )
+    if site_id:
+        items_q = items_q.where(Proforma.site_id == site_id)
+    if supplier_id:
+        items_q = items_q.where(Proforma.supplier_id == supplier_id)
+    else:
+        # Default to FoodHouse-like supplier
+        fh = await db.execute(select(SupplierModel).where(SupplierModel.name.ilike("%foodhouse%")))
+        fh_row = fh.scalar_one_or_none()
+        if fh_row:
+            items_q = items_q.where(Proforma.supplier_id == fh_row.id)
+
+    result = await db.execute(items_q)
+    items = list(result)
+
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    # Group by product_name, only total_meals items
+    # product_data: { product_name -> { month -> { qty, cost } } }
+    product_data: dict[str, dict[int, dict]] = {}
+    product_totals: dict[str, dict] = {}
+
+    for item in items:
+        group_name, _, _ = _match_product_to_category(item.product_name, mappings)
+        if group_name != "total_meals":
+            continue
+        m = int(item.month_num)
+        if m < from_month or m > to_month:
+            continue
+        pname = item.product_name
+        qty = item.quantity or 0
+        cost = item.total_price or 0
+
+        if pname not in product_data:
+            product_data[pname] = {}
+            product_totals[pname] = {"qty": 0, "cost": 0}
+        if m not in product_data[pname]:
+            product_data[pname][m] = {"qty": 0, "cost": 0}
+        product_data[pname][m]["qty"] += qty
+        product_data[pname][m]["cost"] += cost
+        product_totals[pname]["qty"] += qty
+        product_totals[pname]["cost"] += cost
+
+    # Sort products by total qty descending
+    sorted_products = sorted(product_totals.keys(), key=lambda p: product_totals[p]["qty"], reverse=True)
+
+    # Build chart data: one row per month, columns per product
+    chart_data = []
+    for m in range(from_month, to_month + 1):
+        row: dict = {"month": m, "month_name": month_names[m - 1]}
+        for pname in sorted_products:
+            row[pname] = round(product_data[pname].get(m, {}).get("qty", 0))
+        chart_data.append(row)
+
+    # Build series summary
+    series = [
+        {
+            "product_name": pname,
+            "total_qty": round(product_totals[pname]["qty"]),
+            "total_cost": round(product_totals[pname]["cost"], 2),
+        }
+        for pname in sorted_products
+    ]
+
+    return {
+        "year": proforma_year,
+        "from_month": from_month,
+        "to_month": to_month,
+        "chart_data": chart_data,
+        "product_keys": sorted_products,
+        "series": series,
+    }
+
+
 @router.get("/debug-data")
 async def debug_data(
     db: AsyncSession = Depends(get_db),

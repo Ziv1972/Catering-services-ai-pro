@@ -66,6 +66,10 @@ export default function Dashboard() {
   const [mealsMonthly, setMealsMonthly] = useState<any>(null);
   const [mealsMonthlyLoading, setMealsMonthlyLoading] = useState(false);
 
+  // Meals drill-down (meal types breakdown)
+  const [mealsDrill, setMealsDrill] = useState<any>(null);
+  const [mealsDrillLoading, setMealsDrillLoading] = useState(false);
+
   useEffect(() => {
     loadDashboard();
   }, []);
@@ -123,6 +127,23 @@ export default function Dashboard() {
       setMealsMonthly(null);
     } finally {
       setMealsMonthlyLoading(false);
+    }
+  };
+
+  const loadMealsDetail = async (year?: number, fromMonth?: number, toMonth?: number, siteId?: number) => {
+    setMealsDrillLoading(true);
+    try {
+      const result = await dashboardAPI.mealsDetail({
+        year: year ?? smYear,
+        from_month: fromMonth ?? smFromMonth,
+        to_month: toMonth ?? smToMonth,
+        site_id: siteId,
+      });
+      setMealsDrill(result);
+    } catch {
+      setMealsDrill(null);
+    } finally {
+      setMealsDrillLoading(false);
     }
   };
 
@@ -1169,29 +1190,112 @@ export default function Dashboard() {
 
                     {/* FoodHouse Meals Count */}
                     <div className="mt-4 pt-3 border-t">
-                      <p className="text-xs font-medium text-gray-600 mb-2">FoodHouse Meals Count</p>
-                      {mealsMonthlyLoading ? (
-                        <div className="text-center py-4 text-gray-400 text-xs">Loading meals...</div>
-                      ) : mealsMonthly?.chart_data?.length > 0 ? (
-                        <div className="h-36">
-                          <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                            <BarChart data={mealsMonthly.chart_data}>
-                              <CartesianGrid strokeDasharray="3 3" />
-                              <XAxis dataKey="month_name" tick={{ fontSize: 10 }} />
-                              <YAxis tick={{ fontSize: 10 }} />
-                              <Tooltip formatter={(val: any) => [Number(val).toLocaleString(), 'Meals']} />
-                              {(mealsMonthly.site_keys || []).length > 1 ? (
-                                (mealsMonthly.site_keys || []).map((sk: string, i: number) => (
-                                  <Bar key={sk} dataKey={sk} stackId="meals" fill={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]} name={sk} />
-                                ))
-                              ) : (
-                                <Bar dataKey="total" fill="#3b82f6" name="Meals" radius={[3, 3, 0, 0]} />
-                              )}
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-medium text-gray-600">
+                          {mealsDrill ? (
+                            <span className="flex items-center gap-1">
+                              <button onClick={() => setMealsDrill(null)} className="text-blue-600 hover:text-blue-800">
+                                FoodHouse Meals
+                              </button>
+                              <ChevronRight className="w-3 h-3 text-gray-400" />
+                              <span>Meal Types Breakdown</span>
+                            </span>
+                          ) : (
+                            'FoodHouse Meals Count'
+                          )}
+                        </p>
+                        {!mealsDrill && (
+                          <button
+                            onClick={() => loadMealsDetail()}
+                            className="text-xs text-blue-600 hover:text-blue-800"
+                          >
+                            View by type →
+                          </button>
+                        )}
+                        {mealsDrill && (
+                          <button
+                            onClick={() => setMealsDrill(null)}
+                            className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                          >
+                            <ArrowLeft className="w-3 h-3" /> Back
+                          </button>
+                        )}
+                      </div>
+
+                      {mealsDrill ? (
+                        /* Drill-down: meal types breakdown */
+                        mealsDrillLoading ? (
+                          <div className="text-center py-4 text-gray-400 text-xs">Loading meal types...</div>
+                        ) : mealsDrill?.chart_data?.length > 0 ? (
+                          <>
+                            <div className="h-44">
+                              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                                <BarChart data={mealsDrill.chart_data}>
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis dataKey="month_name" tick={{ fontSize: 10 }} />
+                                  <YAxis tick={{ fontSize: 10 }} />
+                                  <Tooltip formatter={(val: any, name: any) => [Number(val).toLocaleString(), String(name)]} />
+                                  {(mealsDrill.product_keys || []).map((pk: string, i: number) => (
+                                    <Bar key={pk} dataKey={pk} stackId="types" fill={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]} name={pk} />
+                                  ))}
+                                </BarChart>
+                              </ResponsiveContainer>
+                            </div>
+                            {/* Meal type totals table */}
+                            <div className="mt-2 max-h-40 overflow-y-auto">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="border-b text-gray-500">
+                                    <th className="text-left py-1 font-medium">Meal Type</th>
+                                    <th className="text-right py-1 font-medium">Qty</th>
+                                    <th className="text-right py-1 font-medium">Cost</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(mealsDrill.series || []).map((s: any, i: number) => (
+                                    <tr key={s.product_name} className="border-b last:border-0">
+                                      <td className="py-1.5">
+                                        <div className="flex items-center gap-1.5">
+                                          <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: SUPPLIER_COLORS[i % SUPPLIER_COLORS.length] }} />
+                                          <span className="text-gray-700 truncate">{s.product_name}</span>
+                                        </div>
+                                      </td>
+                                      <td className="text-right tabular-nums text-gray-900">{s.total_qty.toLocaleString()}</td>
+                                      <td className="text-right tabular-nums text-gray-900">{formatCurrency(s.total_cost)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-center py-4 text-gray-400 text-xs">No meal type data for this period</p>
+                        )
                       ) : (
-                        <p className="text-center py-4 text-gray-400 text-xs">No meal data for this period</p>
+                        /* Overview: total meals bar chart */
+                        mealsMonthlyLoading ? (
+                          <div className="text-center py-4 text-gray-400 text-xs">Loading meals...</div>
+                        ) : mealsMonthly?.chart_data?.length > 0 ? (
+                          <div className="h-36 cursor-pointer" onClick={() => loadMealsDetail()}>
+                            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                              <BarChart data={mealsMonthly.chart_data}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="month_name" tick={{ fontSize: 10 }} />
+                                <YAxis tick={{ fontSize: 10 }} />
+                                <Tooltip formatter={(val: any) => [Number(val).toLocaleString(), 'Meals']} />
+                                {(mealsMonthly.site_keys || []).length > 1 ? (
+                                  (mealsMonthly.site_keys || []).map((sk: string, i: number) => (
+                                    <Bar key={sk} dataKey={sk} stackId="meals" fill={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]} name={sk} />
+                                  ))
+                                ) : (
+                                  <Bar dataKey="total" fill="#3b82f6" name="Meals" radius={[3, 3, 0, 0]} />
+                                )}
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        ) : (
+                          <p className="text-center py-4 text-gray-400 text-xs">No meal data for this period</p>
+                        )
                       )}
                     </div>
                   </>
