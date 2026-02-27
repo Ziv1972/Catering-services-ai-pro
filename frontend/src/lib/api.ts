@@ -637,7 +637,7 @@ export const categoryAnalysisAPI = {
     const response = await api.get('/api/category-analysis/cost/by-category', { params });
     return response.data;
   },
-  costProducts: async (params: { year: number; month: number; site_id: number; category_name: string; supplier_id?: number }) => {
+  costProducts: async (params: { year: number; month?: number; site_id?: number; category_name: string; supplier_id?: number }) => {
     const response = await api.get('/api/category-analysis/cost/products', { params });
     return response.data;
   },

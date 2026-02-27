@@ -259,14 +259,14 @@ async def cost_by_category(
 @router.get("/cost/products")
 async def cost_products(
     year: int = Query(...),
-    month: int = Query(...),
-    site_id: int = Query(...),
+    month: Optional[int] = Query(default=None),
+    site_id: Optional[int] = Query(default=None),
     category_name: str = Query(...),
     supplier_id: Optional[int] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Level 4: Individual products within a category for a site+month."""
+    """Level 4: Individual products within a category for a site+month (or full year if month omitted)."""
     mappings = await _load_category_mappings(db)
     items = await _get_proforma_items_grouped(db, year, month, site_id, supplier_id)
 
