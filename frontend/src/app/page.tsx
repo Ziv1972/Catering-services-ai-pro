@@ -60,6 +60,11 @@ export default function Dashboard() {
   const [smFromMonth, setSmFromMonth] = useState<number>(1);
   const [smToMonth, setSmToMonth] = useState<number>(12);
   const [smSiteId, setSmSiteId] = useState<number | undefined>(undefined);
+  const [hiddenSuppliers, setHiddenSuppliers] = useState<Set<string>>(new Set());
+
+  // Meals monthly chart (below supplier spending)
+  const [mealsMonthly, setMealsMonthly] = useState<any>(null);
+  const [mealsMonthlyLoading, setMealsMonthlyLoading] = useState(false);
 
   useEffect(() => {
     loadDashboard();
@@ -104,9 +109,39 @@ export default function Dashboard() {
     }
   };
 
-  // Load supplier monthly on mount
+  const loadMealsMonthly = async (year?: number, fromMonth?: number, toMonth?: number, siteId?: number) => {
+    setMealsMonthlyLoading(true);
+    try {
+      const result = await dashboardAPI.mealsMonthly({
+        year: year ?? smYear,
+        from_month: fromMonth ?? smFromMonth,
+        to_month: toMonth ?? smToMonth,
+        site_id: siteId,
+      });
+      setMealsMonthly(result);
+    } catch {
+      setMealsMonthly(null);
+    } finally {
+      setMealsMonthlyLoading(false);
+    }
+  };
+
+  const toggleSupplier = (key: string) => {
+    setHiddenSuppliers((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  // Load supplier monthly + meals monthly on mount
   useEffect(() => {
     loadSupplierMonthly();
+    loadMealsMonthly();
   }, []);
 
   const SUPPLIER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#78716c'];
@@ -1039,7 +1074,7 @@ export default function Dashboard() {
                 <div className="flex flex-wrap items-center gap-2 mb-3 p-2 bg-gray-50 rounded-lg text-xs">
                   <select
                     value={smYear}
-                    onChange={(e) => { const y = Number(e.target.value); setSmYear(y); loadSupplierMonthly(y, smFromMonth, smToMonth, smSiteId); }}
+                    onChange={(e) => { const y = Number(e.target.value); setSmYear(y); loadSupplierMonthly(y, smFromMonth, smToMonth, smSiteId); loadMealsMonthly(y, smFromMonth, smToMonth, smSiteId); }}
                     className="border rounded px-2 py-1 bg-white"
                   >
                     {[new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2].map((y) => (
@@ -1048,7 +1083,7 @@ export default function Dashboard() {
                   </select>
                   <select
                     value={smFromMonth}
-                    onChange={(e) => { const m = Number(e.target.value); setSmFromMonth(m); loadSupplierMonthly(smYear, m, smToMonth, smSiteId); }}
+                    onChange={(e) => { const m = Number(e.target.value); setSmFromMonth(m); loadSupplierMonthly(smYear, m, smToMonth, smSiteId); loadMealsMonthly(smYear, m, smToMonth, smSiteId); }}
                     className="border rounded px-2 py-1 bg-white"
                   >
                     {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((n, i) => (
@@ -1058,7 +1093,7 @@ export default function Dashboard() {
                   <span className="text-gray-400">→</span>
                   <select
                     value={smToMonth}
-                    onChange={(e) => { const m = Number(e.target.value); setSmToMonth(m); loadSupplierMonthly(smYear, smFromMonth, m, smSiteId); }}
+                    onChange={(e) => { const m = Number(e.target.value); setSmToMonth(m); loadSupplierMonthly(smYear, smFromMonth, m, smSiteId); loadMealsMonthly(smYear, smFromMonth, m, smSiteId); }}
                     className="border rounded px-2 py-1 bg-white"
                   >
                     {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((n, i) => (
@@ -1068,7 +1103,7 @@ export default function Dashboard() {
                   {supplierMonthly?.sites?.length > 0 && (
                     <select
                       value={smSiteId ?? ''}
-                      onChange={(e) => { const v = e.target.value ? Number(e.target.value) : undefined; setSmSiteId(v); loadSupplierMonthly(smYear, smFromMonth, smToMonth, v); }}
+                      onChange={(e) => { const v = e.target.value ? Number(e.target.value) : undefined; setSmSiteId(v); loadSupplierMonthly(smYear, smFromMonth, smToMonth, v); loadMealsMonthly(smYear, smFromMonth, smToMonth, v); }}
                       className="border rounded px-2 py-1 bg-white"
                     >
                       <option value="">All Sites</option>
@@ -1083,6 +1118,31 @@ export default function Dashboard() {
                   <div className="text-center py-8 text-gray-400 text-sm">Loading...</div>
                 ) : supplierMonthly?.chart_data?.length > 0 ? (
                   <>
+                    {/* Supplier toggle chips */}
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {(supplierMonthly.series || []).map((s: any, i: number) => {
+                        const isHidden = hiddenSuppliers.has(s.label);
+                        const color = SUPPLIER_COLORS[i % SUPPLIER_COLORS.length];
+                        return (
+                          <button
+                            key={s.label}
+                            onClick={() => toggleSupplier(s.label)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-all border ${
+                              isHidden
+                                ? 'bg-gray-100 text-gray-400 border-gray-200'
+                                : 'border-transparent text-white'
+                            }`}
+                            style={isHidden ? {} : { backgroundColor: color }}
+                          >
+                            <div
+                              className="w-2 h-2 rounded-full"
+                              style={{ backgroundColor: isHidden ? '#d1d5db' : '#fff' }}
+                            />
+                            {s.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                     <div className="h-52">
                       <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                         <LineChart data={supplierMonthly.chart_data}>
@@ -1090,36 +1150,49 @@ export default function Dashboard() {
                           <XAxis dataKey="month_name" tick={{ fontSize: 11 }} />
                           <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
                           <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
-                          <Legend wrapperStyle={{ fontSize: 11 }} />
                           {(supplierMonthly.series_keys || []).map((key: string, i: number) => (
-                            <Line
-                              key={key}
-                              type="monotone"
-                              dataKey={key}
-                              stroke={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]}
-                              strokeWidth={2}
-                              dot={{ r: 3 }}
-                              name={key}
-                            />
+                            !hiddenSuppliers.has(key) && (
+                              <Line
+                                key={key}
+                                type="monotone"
+                                dataKey={key}
+                                stroke={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]}
+                                strokeWidth={2}
+                                dot={{ r: 3 }}
+                                name={key}
+                              />
+                            )
                           ))}
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
-                    {/* Supplier totals for period */}
-                    <div className="mt-3 space-y-1">
-                      {(supplierMonthly.series || []).map((s: any, i: number) => (
-                        <div
-                          key={s.label}
-                          className="flex items-center justify-between text-xs p-1.5 rounded hover:bg-gray-50 cursor-pointer"
-                          onClick={() => openBudgetDrillDown(s.supplier_id, s.site_id, s.label, smYear)}
-                        >
-                          <div className="flex items-center gap-2">
-                            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SUPPLIER_COLORS[i % SUPPLIER_COLORS.length] }} />
-                            <span className="text-gray-700">{s.label}</span>
-                          </div>
-                          <span className="tabular-nums text-gray-900">{formatCurrency(s.total)}</span>
+
+                    {/* FoodHouse Meals Count */}
+                    <div className="mt-4 pt-3 border-t">
+                      <p className="text-xs font-medium text-gray-600 mb-2">FoodHouse Meals Count</p>
+                      {mealsMonthlyLoading ? (
+                        <div className="text-center py-4 text-gray-400 text-xs">Loading meals...</div>
+                      ) : mealsMonthly?.chart_data?.length > 0 ? (
+                        <div className="h-36">
+                          <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                            <BarChart data={mealsMonthly.chart_data}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="month_name" tick={{ fontSize: 10 }} />
+                              <YAxis tick={{ fontSize: 10 }} />
+                              <Tooltip formatter={(val: any) => [Number(val).toLocaleString(), 'Meals']} />
+                              {(mealsMonthly.site_keys || []).length > 1 ? (
+                                (mealsMonthly.site_keys || []).map((sk: string, i: number) => (
+                                  <Bar key={sk} dataKey={sk} stackId="meals" fill={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]} name={sk} />
+                                ))
+                              ) : (
+                                <Bar dataKey="total" fill="#3b82f6" name="Meals" radius={[3, 3, 0, 0]} />
+                              )}
+                            </BarChart>
+                          </ResponsiveContainer>
                         </div>
-                      ))}
+                      ) : (
+                        <p className="text-center py-4 text-gray-400 text-xs">No meal data for this period</p>
+                      )}
                     </div>
                   </>
                 ) : (

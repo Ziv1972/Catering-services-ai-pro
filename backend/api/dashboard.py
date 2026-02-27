@@ -787,6 +787,102 @@ async def supplier_monthly_spending(
     }
 
 
+@router.get("/meals-monthly")
+async def meals_monthly(
+    year: Optional[int] = None,
+    from_month: int = Query(default=1, ge=1, le=12),
+    to_month: int = Query(default=12, ge=1, le=12),
+    site_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """FoodHouse meals count by month from proforma items in total_meals category."""
+    from backend.models.site import Site
+    from backend.models.supplier import Supplier
+    from backend.api.category_analysis import _load_category_mappings, _match_product_to_category
+
+    target_year = year or datetime.now().year
+    proforma_year = await _resolve_proforma_year(db, target_year)
+
+    # Load category mappings
+    mappings = await _load_category_mappings(db)
+
+    # Get FoodHouse supplier
+    fh_result = await db.execute(
+        select(Supplier).where(Supplier.name.ilike("%foodhouse%"))
+    )
+    foodhouse = fh_result.scalar_one_or_none()
+    if not foodhouse:
+        return {"year": proforma_year, "chart_data": [], "sites": []}
+
+    # Get all proforma items for FoodHouse in the target year
+    month_expr = extract_month(Proforma.invoice_date)
+    items_q = (
+        select(
+            ProformaItem.product_name,
+            ProformaItem.quantity,
+            month_expr.label("month_num"),
+            Site.name.label("site_name"),
+            Proforma.site_id,
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .join(Site, Proforma.site_id == Site.id)
+        .where(Proforma.supplier_id == foodhouse.id)
+        .where(year_equals(Proforma.invoice_date, proforma_year))
+    )
+    if site_id:
+        items_q = items_q.where(Proforma.site_id == site_id)
+
+    result = await db.execute(items_q)
+    items = list(result)
+
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    # Categorize items, count only total_meals
+    # meals_by_month: { month -> { site_name -> count } }
+    meals_by_month: dict[int, dict[str, float]] = {}
+    site_set: set[str] = set()
+
+    for item in items:
+        group_name, _, _ = _match_product_to_category(item.product_name, mappings)
+        if group_name != "total_meals":
+            continue
+        m = int(item.month_num)
+        if m < from_month or m > to_month:
+            continue
+        qty = item.quantity or 0
+        sname = item.site_name or "Unknown"
+        site_set.add(sname)
+        if m not in meals_by_month:
+            meals_by_month[m] = {}
+        meals_by_month[m][sname] = meals_by_month[m].get(sname, 0) + qty
+
+    # Build chart data
+    chart_data = []
+    site_keys = sorted(site_set)
+    for m in range(from_month, to_month + 1):
+        row: dict = {"month": m, "month_name": month_names[m - 1]}
+        month_data = meals_by_month.get(m, {})
+        for sk in site_keys:
+            row[sk] = round(month_data.get(sk, 0))
+        row["total"] = sum(round(month_data.get(sk, 0)) for sk in site_keys)
+        chart_data.append(row)
+
+    # Sites for filter
+    sites_result = await db.execute(select(Site.id, Site.name).order_by(Site.name))
+    sites = [{"id": r.id, "name": r.name} for r in sites_result]
+
+    return {
+        "year": proforma_year,
+        "from_month": from_month,
+        "to_month": to_month,
+        "chart_data": chart_data,
+        "site_keys": site_keys,
+        "sites": sites,
+    }
+
+
 @router.get("/debug-data")
 async def debug_data(
     db: AsyncSession = Depends(get_db),
