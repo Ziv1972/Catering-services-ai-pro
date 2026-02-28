@@ -246,6 +246,24 @@ def _count_daily_item_presence(item_keyword: str, daily_categories: list) -> int
     )
 
 
+def _find_item_days(item_keyword: str, daily_categories: list) -> list[str]:
+    """Return list of dates where the item appears."""
+    keyword = item_keyword.lower()
+    return [
+        dc["date"] for dc in daily_categories
+        if any(keyword in str(item).lower() for _, item in dc["items"])
+    ]
+
+
+def _find_missing_days(item_keyword: str, daily_categories: list) -> list[str]:
+    """Return list of dates where the item does NOT appear."""
+    keyword = item_keyword.lower()
+    return [
+        dc["date"] for dc in daily_categories
+        if not any(keyword in str(item).lower() for _, item in dc["items"])
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -449,6 +467,7 @@ def _check_single_rule(
         actual = _count_item_occurrences(item_keyword, item_counter)
         expected = round(freq * weeks_in_month)
         comparison = _derive_comparison(actual, expected)
+        found_days = _find_item_days(item_keyword, daily_categories)
 
         if is_max:
             passed = actual <= expected
@@ -469,6 +488,7 @@ def _check_single_rule(
                 "comparison": comparison,
                 "weekly_freq": freq,
                 "is_max_rule": is_max,
+                "found_on_days": found_days,
             },
         }
 
@@ -489,6 +509,7 @@ def _check_single_rule(
         actual = _count_item_occurrences(item_keyword, item_counter)
         expected = round(freq)
         comparison = _derive_comparison(actual, expected)
+        found_days = _find_item_days(item_keyword, daily_categories)
 
         if is_max:
             passed = actual <= expected
@@ -509,6 +530,7 @@ def _check_single_rule(
                 "comparison": comparison,
                 "monthly_freq": freq,
                 "is_max_rule": is_max,
+                "found_on_days": found_days,
             },
         }
 
@@ -563,6 +585,8 @@ def _check_single_rule(
             expected = total_days
             comparison = _derive_comparison(actual, expected)
             passed = actual >= expected
+            found_days = _find_item_days(item_keyword, daily_categories)
+            missing_days = _find_missing_days(item_keyword, daily_categories)
 
             return {
                 **base,
@@ -575,6 +599,8 @@ def _check_single_rule(
                     "expected_count": expected,
                     "actual_count": actual,
                     "comparison": comparison,
+                    "found_on_days": found_days,
+                    "missing_on_days": missing_days[:10],
                 },
             }
 
@@ -630,6 +656,8 @@ def _check_single_rule(
         expected = total_days
         comparison = _derive_comparison(actual, expected)
         passed = actual >= expected
+        found_days = _find_item_days(item_keyword, daily_categories)
+        missing_days = _find_missing_days(item_keyword, daily_categories)
 
         return {
             **base,
@@ -642,6 +670,8 @@ def _check_single_rule(
                 "expected_count": expected,
                 "actual_count": actual,
                 "comparison": comparison,
+                "found_on_days": found_days,
+                "missing_on_days": missing_days[:10],
             },
         }
 
