@@ -454,10 +454,13 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center h-screen bg-[hsl(var(--background))]">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4" />
-          <p className="text-gray-500">Loading dashboard...</p>
+          <div className="relative w-10 h-10 mx-auto mb-4">
+            <div className="absolute inset-0 rounded-full border-2 border-gray-200" />
+            <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          </div>
+          <p className="text-sm text-muted-foreground">Loading dashboard...</p>
         </div>
       </div>
     );
@@ -503,11 +506,76 @@ export default function Dashboard() {
   };
 
   return (
-    <main className="max-w-7xl mx-auto px-4 py-6">
+    <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      {/* ═══════ KPI STAT CARDS ═══════ */}
+      <div className="stagger-children grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="group relative overflow-hidden rounded-xl border bg-card p-5 card-hover">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Budget Use</span>
+            <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
+              <DollarSign className="w-4 h-4" />
+            </div>
+          </div>
+          <p className="text-2xl font-bold tracking-tight">
+            {budgetSummary.length > 0
+              ? `${Math.round(budgetSummary.reduce((s: number, b: any) => s + (b.monthly_percent || 0), 0) / budgetSummary.length)}%`
+              : '—'}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {budgetSummary.length} supplier{budgetSummary.length !== 1 ? 's' : ''} tracked
+          </p>
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 to-blue-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+
+        <div className="group relative overflow-hidden rounded-xl border bg-card p-5 card-hover">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Projects</span>
+            <div className="p-1.5 rounded-lg bg-purple-50 text-purple-600">
+              <FolderKanban className="w-4 h-4" />
+            </div>
+          </div>
+          <p className="text-2xl font-bold tracking-tight">{projects.length}</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {projects.reduce((s: number, p: any) => s + (p.done_count || 0), 0)} / {projects.reduce((s: number, p: any) => s + (p.task_count || 0), 0)} tasks done
+          </p>
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 to-purple-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+
+        <div className="group relative overflow-hidden rounded-xl border bg-card p-5 card-hover">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Meetings</span>
+            <div className="p-1.5 rounded-lg bg-sky-50 text-sky-600">
+              <CalendarDays className="w-4 h-4" />
+            </div>
+          </div>
+          <p className="text-2xl font-bold tracking-tight">{meetings.length}</p>
+          <p className="text-xs text-muted-foreground mt-1">upcoming scheduled</p>
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-sky-500 to-sky-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+
+        <div className="group relative overflow-hidden rounded-xl border bg-card p-5 card-hover">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Tasks</span>
+            <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
+              <ListTodo className="w-4 h-4" />
+            </div>
+          </div>
+          <p className="text-2xl font-bold tracking-tight">{todos.mine.length + todos.delegated.length}</p>
+          <p className="text-xs mt-1">
+            {todos.overdue_count > 0 ? (
+              <span className="text-red-600 font-medium">{todos.overdue_count} overdue</span>
+            ) : (
+              <span className="text-muted-foreground">all on track</span>
+            )}
+          </p>
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 to-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+      </div>
+
       {/* Drill-down overlay */}
       {drillDown && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <Card className="w-full max-w-sm md:max-w-2xl lg:max-w-3xl max-h-[80vh] overflow-auto">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <Card className="w-full max-w-sm md:max-w-2xl lg:max-w-3xl max-h-[80vh] overflow-auto shadow-2xl border-0 ring-1 ring-black/5">
             <CardHeader className="pb-2 sticky top-0 bg-white z-10 border-b">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -1054,23 +1122,18 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ═══════ ROW 1: Budget vs Actual ═══════ */}
-      <Card className="mb-6 border-l-4 border-l-blue-500">
-        <CardHeader className="pb-2">
+      {/* ═══════ BUDGET VS ACTUAL ═══════ */}
+      <Card className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <CardHeader className="pb-3">
           <div className="flex justify-between items-center">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-50 rounded-lg">
-                <DollarSign className="w-5 h-5 text-blue-600" />
-              </div>
-              <div>
-                <CardTitle className="text-lg">Budget vs Actual ({displayYear})</CardTitle>
-                <p className="text-sm text-gray-500">
-                  Supplier spending &middot; click a row to drill down
-                </p>
-              </div>
+            <div>
+              <CardTitle className="text-base font-semibold">Budget vs Actual</CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {displayYear} supplier spending &middot; click a row to drill down
+              </p>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => router.push('/budget')}>
-              View All <ArrowRight className="w-4 h-4 ml-1" />
+            <Button variant="outline" size="sm" onClick={() => router.push('/budget')} className="text-xs h-8">
+              View All <ArrowRight className="w-3.5 h-3.5 ml-1" />
             </Button>
           </div>
         </CardHeader>
@@ -1081,41 +1144,45 @@ export default function Dashboard() {
             </p>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {budgetSummary.map((b: any, i: number) => (
                   <div
                     key={i}
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-blue-50 cursor-pointer transition-colors"
+                    className="group flex items-center justify-between p-3.5 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer transition-all"
                     onClick={(e) => {
                       e.stopPropagation();
                       openBudgetDrillDown(b.supplier_id, b.site_id, `${b.supplier_name} (${b.site_name})`, data?.proforma_year);
                     }}
                   >
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <p className="font-medium text-sm">{b.supplier_name}</p>
+                        <p className="font-medium text-sm truncate">{b.supplier_name}</p>
                         {b.shift && b.shift !== 'all' && (
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${b.shift === 'night' ? 'bg-indigo-100 text-indigo-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${b.shift === 'night' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'}`}>
                             {b.shift === 'night' ? 'Night' : 'Day'}
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-gray-500">{b.site_name}</p>
+                      <p className="text-xs text-muted-foreground">{b.site_name}</p>
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm font-semibold">
-                        {formatCurrency(b.monthly_actual)} / {formatCurrency(b.monthly_budget)}
+                    <div className="text-right ml-4">
+                      <p className="text-sm tabular-nums">
+                        <span className="font-semibold">{formatCurrency(b.monthly_actual)}</span>
+                        <span className="text-muted-foreground"> / {formatCurrency(b.monthly_budget)}</span>
                       </p>
-                      <div className="w-20 sm:w-24 md:w-32 h-2 bg-gray-200 rounded-full mt-1">
+                      <div className="w-24 md:w-32 h-1.5 bg-gray-100 rounded-full mt-1.5">
                         <div
-                          className={`h-2 rounded-full ${
+                          className={`h-1.5 rounded-full transition-all duration-700 ease-out ${
                             b.monthly_percent > 90 ? 'bg-red-500' :
-                            b.monthly_percent > 70 ? 'bg-yellow-500' : 'bg-green-500'
+                            b.monthly_percent > 70 ? 'bg-amber-500' : 'bg-emerald-500'
                           }`}
                           style={{ width: `${Math.min(b.monthly_percent, 100)}%` }}
                         />
                       </div>
-                      <p className="text-xs text-gray-500 mt-0.5">{b.monthly_percent}%</p>
+                      <p className={`text-xs mt-0.5 font-medium ${
+                        b.monthly_percent > 90 ? 'text-red-600' :
+                        b.monthly_percent > 70 ? 'text-amber-600' : 'text-emerald-600'
+                      }`}>{b.monthly_percent}%</p>
                     </div>
                   </div>
                 ))}
@@ -1136,7 +1203,7 @@ export default function Dashboard() {
 
               {/* Supplier Spending Over Time */}
               <div>
-                <div className="flex flex-wrap items-center gap-2 mb-3 p-2 bg-gray-50 rounded-lg text-xs">
+                <div className="flex flex-wrap items-center gap-2 mb-3 p-2.5 bg-muted/50 rounded-lg text-xs border">
                   <select
                     value={smYear}
                     onChange={(e) => { const y = Number(e.target.value); setSmYear(y); loadSupplierMonthly(y, smFromMonth, smToMonth, smSiteId); loadMealsMonthly(y, smFromMonth, smToMonth, smSiteId); }}
@@ -1352,20 +1419,15 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      {/* ═══════ ROW 1.5: Daily Meals ═══════ */}
-      <Card className="mb-6 border-l-4 border-l-orange-500">
-        <CardHeader className="pb-2">
+      {/* ═══════ DAILY MEALS ═══════ */}
+      <Card className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <CardHeader className="pb-3">
           <div className="flex justify-between items-center">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-orange-50 rounded-lg">
-                <UtensilsCrossed className="w-5 h-5 text-orange-600" />
-              </div>
-              <div>
-                <CardTitle className="text-lg">Daily Meals</CardTitle>
-                <p className="text-sm text-gray-500">
-                  FoodHouse daily meal counts from email reports
-                </p>
-              </div>
+            <div>
+              <CardTitle className="text-base font-semibold">Daily Meals</CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                FoodHouse daily meal counts from email reports
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -1554,24 +1616,19 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      {/* ═══════ ROW 2: Projects + Maintenance ═══════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      {/* ═══════ PROJECTS + MAINTENANCE ═══════ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card
-          className="hover:shadow-lg transition-shadow cursor-pointer border-l-4 border-l-purple-500"
+          className="group overflow-hidden rounded-xl border bg-card shadow-sm card-hover cursor-pointer"
           onClick={() => router.push('/projects')}
         >
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-3">
             <div className="flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-purple-50 rounded-lg">
-                  <FolderKanban className="w-5 h-5 text-purple-600" />
-                </div>
-                <div>
-                  <CardTitle className="text-lg">Active Projects</CardTitle>
-                  <p className="text-sm text-gray-500">{projects.length} ongoing</p>
-                </div>
+              <div>
+                <CardTitle className="text-base font-semibold">Active Projects</CardTitle>
+                <p className="text-xs text-muted-foreground mt-0.5">{projects.length} ongoing</p>
               </div>
-              <ChevronRight className="w-5 h-5 text-gray-400" />
+              <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-foreground group-hover:translate-x-0.5 transition-all" />
             </div>
           </CardHeader>
           <CardContent>
@@ -1608,21 +1665,16 @@ export default function Dashboard() {
         </Card>
 
         <Card
-          className="hover:shadow-lg transition-shadow cursor-pointer border-l-4 border-l-amber-500"
+          className="group overflow-hidden rounded-xl border bg-card shadow-sm card-hover cursor-pointer"
           onClick={() => router.push('/maintenance')}
         >
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-3">
             <div className="flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-50 rounded-lg">
-                  <Wrench className="w-5 h-5 text-amber-600" />
-                </div>
-                <div>
-                  <CardTitle className="text-lg">Maintenance Budget</CardTitle>
-                  <p className="text-sm text-gray-500">Q{data?.current_quarter} {data?.current_year}</p>
-                </div>
+              <div>
+                <CardTitle className="text-base font-semibold">Maintenance Budget</CardTitle>
+                <p className="text-xs text-muted-foreground mt-0.5">Q{data?.current_quarter} {data?.current_year}</p>
               </div>
-              <ChevronRight className="w-5 h-5 text-gray-400" />
+              <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-foreground group-hover:translate-x-0.5 transition-all" />
             </div>
           </CardHeader>
           <CardContent>
@@ -1661,24 +1713,19 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* ═══════ ROW 3: Meetings + Todos ═══════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      {/* ═══════ MEETINGS + TODOS ═══════ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card
-          className="hover:shadow-lg transition-shadow cursor-pointer border-l-4 border-l-sky-500"
+          className="group overflow-hidden rounded-xl border bg-card shadow-sm card-hover cursor-pointer"
           onClick={() => router.push('/meetings')}
         >
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-3">
             <div className="flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-sky-50 rounded-lg">
-                  <CalendarDays className="w-5 h-5 text-sky-600" />
-                </div>
-                <div>
-                  <CardTitle className="text-lg">Upcoming Meetings</CardTitle>
-                  <p className="text-sm text-gray-500">{meetings.length} scheduled</p>
-                </div>
+              <div>
+                <CardTitle className="text-base font-semibold">Upcoming Meetings</CardTitle>
+                <p className="text-xs text-muted-foreground mt-0.5">{meetings.length} scheduled</p>
               </div>
-              <ChevronRight className="w-5 h-5 text-gray-400" />
+              <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-foreground group-hover:translate-x-0.5 transition-all" />
             </div>
           </CardHeader>
           <CardContent>
@@ -1712,26 +1759,21 @@ export default function Dashboard() {
         </Card>
 
         <Card
-          className="hover:shadow-lg transition-shadow cursor-pointer border-l-4 border-l-emerald-500"
+          className="group overflow-hidden rounded-xl border bg-card shadow-sm card-hover cursor-pointer"
           onClick={() => router.push('/todos')}
         >
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-3">
             <div className="flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-emerald-50 rounded-lg">
-                  <ListTodo className="w-5 h-5 text-emerald-600" />
-                </div>
-                <div>
-                  <CardTitle className="text-lg">Tasks & Follow-ups</CardTitle>
-                  <p className="text-sm text-gray-500">
-                    {todos.mine.length + todos.delegated.length} open
-                    {todos.overdue_count > 0 && (
-                      <span className="text-red-600 ml-2">&middot; {todos.overdue_count} overdue</span>
-                    )}
-                  </p>
-                </div>
+              <div>
+                <CardTitle className="text-base font-semibold">Tasks & Follow-ups</CardTitle>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {todos.mine.length + todos.delegated.length} open
+                  {todos.overdue_count > 0 && (
+                    <span className="text-red-600 font-medium ml-1">&middot; {todos.overdue_count} overdue</span>
+                  )}
+                </p>
               </div>
-              <ChevronRight className="w-5 h-5 text-gray-400" />
+              <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-foreground group-hover:translate-x-0.5 transition-all" />
             </div>
           </CardHeader>
           <CardContent>
@@ -1781,16 +1823,16 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* ═══════ ROW 4: AI Chat ═══════ */}
-      <Card className="border-l-4 border-l-indigo-500">
-        <CardHeader className="pb-2">
+      {/* ═══════ AI CHAT ═══════ */}
+      <Card className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <CardHeader className="pb-3">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-50 rounded-lg">
-              <MessageSquare className="w-5 h-5 text-indigo-600" />
+            <div className="p-2 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 text-white">
+              <MessageSquare className="w-4 h-4" />
             </div>
             <div>
-              <CardTitle className="text-lg">AI Assistant</CardTitle>
-              <p className="text-sm text-gray-500">Ask anything about your operations</p>
+              <CardTitle className="text-base font-semibold">AI Assistant</CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">Ask anything about your operations</p>
             </div>
           </div>
         </CardHeader>
@@ -1829,17 +1871,17 @@ export default function Dashboard() {
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleChat()}
               placeholder="Ask about budget, complaints, meetings..."
-              className="flex-1 px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+              className="flex-1 px-4 py-2.5 border rounded-lg bg-muted/30 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition-colors"
               disabled={chatLoading}
             />
             <Button
               onClick={handleChat}
               disabled={chatLoading || !chatInput.trim()}
-              className="bg-indigo-600 hover:bg-indigo-700"
+              className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white shadow-sm"
               aria-label="Send message"
             >
               {chatLoading ? (
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
               ) : (
                 <Send className="w-4 h-4" />
               )}
@@ -1851,7 +1893,7 @@ export default function Dashboard() {
               <button
                 key={q}
                 onClick={() => quickChat(q)}
-                className="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-gray-600 transition-colors"
+                className="text-xs px-3 py-1.5 rounded-full border border-gray-200 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
               >
                 {q}
               </button>

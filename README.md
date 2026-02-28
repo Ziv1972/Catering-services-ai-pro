@@ -273,19 +273,30 @@ graph TD
 | Auth | JWT (python-jose, passlib) |
 | Integrations | Gmail API, Slack SDK, Google Calendar, Power Automate |
 
-## Pages
+## Pages (20)
 
 | Route | Page | Description |
 |-------|------|-------------|
-| `/` | Dashboard | Overview metrics, quick actions |
-| `/login` | Login | Email/password auth with visibility toggle |
-| `/meetings` | Meetings | List, create, AI brief generation |
-| `/complaints` | Complaints | Tracking, AI analysis, pattern detection |
-| `/menu-compliance` | Menu Checks | Compliance audits, 68 Hebrew rules |
-| `/suppliers` | Suppliers | Supplier directory, contracts |
-| `/proformas` | Proformas | Invoice tracking, line items |
-| `/anomalies` | Anomalies | Price spikes, usage anomalies |
-| `/analytics` | Analytics | Historical trends, spending analysis |
+| `/` | Dashboard | Central hub: KPI cards, budget vs actual, supplier spending chart, meals charts, daily meals, AI chat |
+| `/login` | Login | JWT authentication |
+| `/budget` | Budget | Annual supplier budget planning with monthly breakdown and vs-actual comparison |
+| `/projects` | Projects | Project management with tasks and document uploads |
+| `/projects/[id]` | Project Detail | Task CRUD, document management, file upload with AI processing |
+| `/maintenance` | Maintenance | Quarterly maintenance budgets and expense tracking |
+| `/meetings` | Meetings | Upcoming meetings with AI-generated briefs |
+| `/meetings/new` | Create Meeting | New meeting form with type/site/duration |
+| `/meetings/[id]` | Meeting Detail | AI brief, priority topics, questions, action items |
+| `/todos` | Todos | Personal/delegated task management with priority and entity linking |
+| `/menu-compliance` | Menu Compliance | Upload menus, run compliance checks, manage 68 Hebrew rules |
+| `/menu-compliance/[id]` | Compliance Detail | Check results with findings per rule |
+| `/suppliers` | Suppliers | Supplier CRUD with contract tracking |
+| `/price-lists` | Price Lists | Supplier pricing, auto-generate from proformas, compare lists |
+| `/proformas` | Proformas | Invoice management with vendor spending summary |
+| `/proformas/[id]` | Proforma Detail | Line items, price comparison against price lists |
+| `/complaints` | Complaints | Complaint management, fine rules, AI analysis, pattern detection |
+| `/complaints/[id]` | Complaint Detail | AI draft response, resolution tracking |
+| `/analytics` | Analytics | Multi-level drill-down: cost (4 levels), quantity (5 levels) |
+| `/anomalies` | Anomalies | Operational anomaly tracking with severity and resolution |
 
 ## API Endpoints
 
@@ -386,8 +397,8 @@ catering-services-ai-pro/
 │   │   ├── historical.py          # Historical data
 │   │   ├── dashboard.py           # Dashboard metrics
 │   │   └── webhooks.py            # Gmail/Slack/Calendar
-│   ├── models/                    # SQLAlchemy models (19 tables)
-│   ├── services/                  # Claude API wrapper
+│   ├── models/                    # SQLAlchemy models (20+ tables)
+│   ├── services/                  # Claude API, IMAP poller, menu analysis
 │   ├── tests/                     # pytest test suite
 │   ├── main.py                    # FastAPI app entry
 │   ├── config.py                  # Pydantic settings
@@ -402,6 +413,11 @@ catering-services-ai-pro/
 │   │   │   ├── menu-compliance/   # Compliance audits
 │   │   │   ├── proformas/         # Invoice tracking
 │   │   │   ├── suppliers/         # Supplier directory
+│   │   │   ├── price-lists/       # Price list management
+│   │   │   ├── budget/            # Supplier budgets
+│   │   │   ├── projects/          # Project management
+│   │   │   ├── maintenance/       # Maintenance budgets
+│   │   │   ├── todos/             # Task management
 │   │   │   ├── anomalies/         # Anomaly alerts
 │   │   │   └── analytics/         # Reports & trends
 │   │   ├── components/
@@ -484,15 +500,42 @@ Production data migrated from FoodHouse Analytics:
 
 ## Roadmap
 
-- [x] Phase 1: Meeting Prep Agent
-- [x] Phase 2: Complaint Intelligence Agent
-- [x] Frontend: All 9 pages with CRUD
-- [x] Real data migration from FoodHouse Analytics
-- [ ] Phase 3: Budget Intelligence Agent
-- [ ] Phase 4: Event Coordination Agent
-- [ ] Phase 5: Dietary Compliance Agent
-- [ ] Phase 6: Communication Hub Agent
-- [ ] Power Automate Integration
+### Completed
+- [x] Phase 1: Meeting Prep Agent — AI brief generation with historical context
+- [x] Phase 2: Complaint Intelligence Agent — analysis, patterns, weekly summaries, draft responses
+- [x] Frontend: 9 → **20 pages** with full CRUD
+- [x] Real data migration from FoodHouse Analytics (11,497 proforma items)
+- [x] Dashboard overhaul: budget cards, supplier spending, meals chart, AI chat widget
+- [x] Budget drill-down: 4-stage cascading (supplier → month → site → category → products)
+- [x] Product category analysis: 4-level drill-down (9 groups, 50+ mappings)
+- [x] Analytics page: cost (4 levels) and quantity (5 levels) drill-down
+- [x] Complaints with fines, pattern detection, weekly AI summaries
+- [x] File upload for projects/tasks with AI processing (summarize/extract)
+- [x] Price list generation from proformas, cross-list comparison
+- [x] Supplier spending charts, price comparison for proformas
+- [x] Menu compliance: upload, rules management, check results
+- [x] Project management with tasks, documents, entity linking
+- [x] Todo system with priority, delegation, entity linking
+- [x] Maintenance budgets (quarterly) and expense tracking
+- [x] Daily meals automation: IMAP email poller, webhooks, CSV upload, dashboard chart
+- [x] Working days management per site/month
+
+### In Progress — Phase 5: UI/UX Overhaul + Price Lists
+- [ ] Dashboard redesign with shadcn/ui (modern KPI cards, better charts, dark mode)
+- [ ] Price list management — file upload or product-by-product editing for all suppliers
+
+### Upcoming — Phase 6: Remaining AI Agents
+- [ ] Budget Intelligence Agent (forecasting, alerts, trends)
+- [ ] Dietary Compliance Agent (automated menu rule checking)
+- [ ] Event Coordination Agent (event planning support)
+- [ ] Communication Hub Agent (Slack/email routing)
+
+### Future — Phase 7: Platform Maturity
+- [ ] Notification system (email/Slack alerts)
+- [ ] Role-based access control
+- [ ] Export reports (PDF/Excel)
+- [ ] Mobile PWA optimization
+- [ ] Audit log, multi-language UI
 
 ## License
 
