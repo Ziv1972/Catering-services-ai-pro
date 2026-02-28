@@ -290,7 +290,7 @@ graph TD
 | `/menu-compliance` | Menu Compliance | Upload menus, run compliance checks, manage 68 Hebrew rules |
 | `/menu-compliance/[id]` | Compliance Detail | Check results with findings per rule |
 | `/suppliers` | Suppliers | Supplier CRUD with contract tracking |
-| `/price-lists` | Price Lists | Supplier pricing, auto-generate from proformas, compare lists |
+| `/price-lists` | Price Lists | CSV upload, inline editing, add product, auto-generate from proformas, compare lists |
 | `/proformas` | Proformas | Invoice management with vendor spending summary |
 | `/proformas/[id]` | Proforma Detail | Line items, price comparison against price lists |
 | `/complaints` | Complaints | Complaint management, fine rules, AI analysis, pattern detection |
@@ -520,9 +520,10 @@ Production data migrated from FoodHouse Analytics:
 - [x] Daily meals automation: IMAP email poller, webhooks, CSV upload, dashboard chart
 - [x] Working days management per site/month
 
-### In Progress — Phase 5: UI/UX Overhaul + Price Lists
-- [ ] Dashboard redesign with shadcn/ui (modern KPI cards, better charts, dark mode)
-- [ ] Price list management — file upload or product-by-product editing for all suppliers
+### Completed — Phase 5: UI/UX Overhaul + Price Lists
+- [x] Dashboard redesign with modern KPI cards, semantic color tokens, animated transitions, responsive layout
+- [x] Price list management — CSV upload (multi-encoding, auto-column detection), inline editing, add product with catalog auto-creation
+- [x] Branding update: "Catering AI Pro" header, "HP Israel - Ziv Reshef Simchoni" subtitle, footer
 
 ### Upcoming — Phase 6: Remaining AI Agents
 - [ ] Budget Intelligence Agent (forecasting, alerts, trends)

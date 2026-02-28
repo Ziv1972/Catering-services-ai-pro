@@ -84,7 +84,7 @@ docker-compose up -d    # full stack: PostgreSQL + Redis
 | Menu Compliance | `/menu-compliance` | Upload menus, run compliance checks, manage Hebrew rules |
 | Compliance Detail | `/menu-compliance/[id]` | Check results with findings per rule |
 | Suppliers | `/suppliers` | Supplier CRUD with contract tracking |
-| Price Lists | `/price-lists` | Supplier pricing management, auto-generate from proformas, compare lists |
+| Price Lists | `/price-lists` | CSV upload, inline editing, add product, auto-generate from proformas, compare lists |
 | Proformas | `/proformas` | Invoice management with vendor spending summary |
 | Proforma Detail | `/proformas/[id]` | Line items, price comparison against price lists |
 | Complaints | `/complaints` | Complaint management, fine rules, AI analysis, pattern detection |
@@ -199,7 +199,7 @@ async def action(
 
 Compliance rules, meal types, product names, and some domain data are in Hebrew. The system manages catering for HP Israel — Hebrew text in database seeds and UI is expected.
 
-## What's Been Built (42 commits)
+## What's Been Built (44 commits)
 
 ### Phase 1: Foundation
 - FastAPI backend with async SQLAlchemy, JWT auth, 2-site support
@@ -221,12 +221,19 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - Supplier spending charts, price comparison for proformas
 - Menu compliance: upload, rules management, check results
 
-### Phase 4: Daily Meal Automation (Latest)
+### Phase 4: Daily Meal Automation
 - DailyMealCount model with upsert logic
 - Webhook endpoints for Power Automate + CSV upload
 - Dashboard: stacked bar chart by meal type with budget comparison
 - IMAP email poller for hands-free Gmail → database pipeline
 - Manual trigger endpoint for testing
+
+### Phase 5: UI/UX Overhaul + Price Lists (Latest)
+- Dashboard redesign: modern KPI cards, semantic color tokens (CSS custom properties), animated transitions, responsive grid
+- Price list management overhaul: CSV upload with multi-encoding support (utf-8, cp1255, latin-1) and auto column detection (EN/HE headers)
+- Inline price/unit editing with hover-to-reveal actions, add product with catalog auto-creation, duplicate detection
+- Backend endpoints: PUT/DELETE items, POST add-product, POST upload CSV
+- Branding: "Catering AI Pro" header, "HP Israel - Ziv Reshef Simchoni" subtitle + footer
 
 ## Session Summary Rules
 
@@ -249,9 +256,10 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 
 ## What's Next
 
-### Phase 5: UI/UX Overhaul + Price Lists (Current)
-- [ ] **Dashboard redesign** — shadcn/ui components, modern card-based KPI layout, Tremor-style charts, dark mode support
-- [ ] **Price list management fix** — User must update price lists from external file upload OR product-by-product editing (for ALL suppliers, not just auto-generated)
+### Phase 5: UI/UX Overhaul + Price Lists (Completed)
+- [x] **Dashboard redesign** — modern KPI cards, semantic color tokens, animated transitions, responsive layout
+- [x] **Price list management** — CSV upload (multi-encoding, auto-column detection), inline editing, add product with catalog auto-creation
+- [x] **Branding** — "Catering AI Pro" header, "HP Israel - Ziv Reshef Simchoni" subtitle + footer
 - [ ] Fix `test_dashboard` test (key mismatch: `upcoming_meetings` → `meetings`)
 - [ ] First real FoodHouse email test — tune IMAP sender/subject filters
 
