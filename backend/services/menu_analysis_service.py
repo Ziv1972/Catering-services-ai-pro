@@ -545,6 +545,8 @@ def _check_single_rule(
         if has_min_pattern:
             # Daily variety check — how many distinct items per day match category
             daily_counts = []
+            met_days = []
+            unmet_days = []
             for dc in daily_categories:
                 day_count = sum(
                     1 for _, item in dc["items"]
@@ -552,6 +554,10 @@ def _check_single_rule(
                     or any(cat_keyword.lower() in c.lower() for c in dc["categories"])
                 )
                 daily_counts.append(day_count)
+                if day_count >= min_count:
+                    met_days.append(dc["date"])
+                else:
+                    unmet_days.append(dc["date"])
 
             avg_daily = round(sum(daily_counts) / max(len(daily_counts), 1), 1)
             expected = min_count
@@ -573,6 +579,8 @@ def _check_single_rule(
                     "comparison": comparison,
                     "avg_daily": avg_daily,
                     "min_required": min_count,
+                    "found_on_days": met_days,
+                    "missing_on_days": unmet_days[:10],
                 },
             }
         else:
@@ -613,12 +621,15 @@ def _check_single_rule(
             item_keyword = params["item"]
 
         daily_counts = []
+        exceeded_days = []
         for dc in daily_categories:
             day_count = sum(
                 1 for _, item in dc["items"]
                 if item_keyword.lower() in str(item).lower()
             )
             daily_counts.append(day_count)
+            if day_count > max_count:
+                exceeded_days.append(dc["date"])
 
         max_found = max(daily_counts) if daily_counts else 0
         avg_daily = round(sum(daily_counts) / max(len(daily_counts), 1), 1)
@@ -641,6 +652,7 @@ def _check_single_rule(
                 "comparison": comparison,
                 "max_daily_found": max_found,
                 "avg_daily": avg_daily,
+                "found_on_days": exceeded_days,
             },
         }
 
