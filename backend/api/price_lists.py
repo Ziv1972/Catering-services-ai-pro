@@ -8,6 +8,9 @@ from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from datetime import date
 from pydantic import BaseModel
+import csv
+import io
+import logging
 import os
 import re
 
@@ -19,6 +22,7 @@ from backend.models.proforma import Proforma, ProformaItem
 from backend.models.supplier import Supplier
 from backend.api.auth import get_current_user
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -61,6 +65,19 @@ class PriceListItemCreate(BaseModel):
 
 class PriceListItemBulkCreate(BaseModel):
     items: List[PriceListItemCreate]
+
+
+class PriceListItemUpdate(BaseModel):
+    price: Optional[float] = None
+    unit: Optional[str] = None
+
+
+class AddProductToList(BaseModel):
+    product_name: str
+    price: float
+    unit: Optional[str] = None
+    hebrew_name: Optional[str] = None
+    category: Optional[str] = None
 
 
 @router.get("/", response_model=List[PriceListResponse])
@@ -437,4 +454,302 @@ async def compare_price_lists(
             "new": sum(1 for c in comparisons if c["status"] == "new"),
             "removed": sum(1 for c in comparisons if c["status"] == "removed"),
         }
+    }
+
+
+# ── Inline item editing ──────────────────────────────────────────────
+
+
+@router.put("/{price_list_id}/items/{item_id}")
+async def update_item(
+    price_list_id: int,
+    item_id: int,
+    data: PriceListItemUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update price / unit for a single item."""
+    result = await db.execute(
+        select(PriceListItem).where(
+            PriceListItem.id == item_id,
+            PriceListItem.price_list_id == price_list_id,
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if data.price is not None:
+        item.price = data.price
+    if data.unit is not None:
+        item.unit = data.unit
+
+    await db.commit()
+    await db.refresh(item)
+    return {"message": "Item updated", "id": item.id, "price": item.price, "unit": item.unit}
+
+
+@router.delete("/{price_list_id}/items/{item_id}")
+async def delete_item(
+    price_list_id: int,
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove a single item from a price list."""
+    result = await db.execute(
+        select(PriceListItem).where(
+            PriceListItem.id == item_id,
+            PriceListItem.price_list_id == price_list_id,
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    await db.delete(item)
+    await db.commit()
+    return {"message": "Item deleted"}
+
+
+@router.post("/{price_list_id}/add-product")
+async def add_product_to_list(
+    price_list_id: int,
+    data: AddProductToList,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Add a new product (by name) to a price list. Creates the product if it doesn't exist."""
+    # Verify price list exists
+    pl_result = await db.execute(select(PriceList).where(PriceList.id == price_list_id))
+    if not pl_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Price list not found")
+
+    # Try to find an existing product by name
+    def normalize(name: str) -> str:
+        return re.sub(r"\s+", " ", name.strip().lower())
+
+    catalog_result = await db.execute(select(Product).where(Product.is_active == True))
+    catalog = catalog_result.scalars().all()
+
+    product = None
+    norm_name = normalize(data.product_name)
+    for p in catalog:
+        if normalize(p.name) == norm_name or (p.hebrew_name and normalize(p.hebrew_name) == norm_name):
+            product = p
+            break
+
+    if not product:
+        product = Product(
+            name=data.product_name,
+            hebrew_name=data.hebrew_name,
+            category=data.category,
+            unit=data.unit,
+            is_active=True,
+        )
+        db.add(product)
+        await db.flush()
+
+    # Check for duplicate
+    dup_result = await db.execute(
+        select(PriceListItem).where(
+            PriceListItem.price_list_id == price_list_id,
+            PriceListItem.product_id == product.id,
+        )
+    )
+    if dup_result.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Product already exists in this price list")
+
+    item = PriceListItem(
+        price_list_id=price_list_id,
+        product_id=product.id,
+        price=data.price,
+        unit=data.unit or product.unit,
+    )
+    db.add(item)
+    await db.commit()
+
+    return {
+        "message": "Product added",
+        "item_id": item.id,
+        "product_id": product.id,
+        "product_name": product.name,
+        "price": item.price,
+        "unit": item.unit,
+    }
+
+
+# ── CSV / Excel file upload ──────────────────────────────────────────
+
+
+def _parse_csv_bytes(raw: bytes) -> list[dict]:
+    """Parse CSV bytes (UTF-8 or cp1255) into a list of row dicts."""
+    for encoding in ("utf-8-sig", "utf-8", "cp1255", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except (UnicodeDecodeError, ValueError):
+            continue
+    else:
+        raise ValueError("Cannot decode file — try UTF-8 or cp1255 encoding")
+
+    reader = csv.DictReader(io.StringIO(text))
+    rows: list[dict] = []
+    for row in reader:
+        # Normalise header keys to lowercase, strip whitespace
+        row = {k.strip().lower(): v.strip() for k, v in row.items() if k}
+        rows.append(row)
+    return rows
+
+
+def _detect_columns(rows: list[dict]) -> tuple[str, str, str | None]:
+    """Detect which columns map to product_name, price, and unit."""
+    headers = set()
+    for r in rows:
+        headers.update(r.keys())
+
+    name_candidates = [h for h in headers if any(k in h for k in ("product", "name", "item", "שם", "מוצר", "פריט"))]
+    price_candidates = [h for h in headers if any(k in h for k in ("price", "מחיר", "unit_price", "cost", "עלות"))]
+    unit_candidates = [h for h in headers if any(k in h for k in ("unit", "יחידה", "uom"))]
+
+    name_col = name_candidates[0] if name_candidates else None
+    price_col = price_candidates[0] if price_candidates else None
+    unit_col = unit_candidates[0] if unit_candidates else None
+
+    if not name_col or not price_col:
+        available = ", ".join(sorted(headers))
+        raise ValueError(
+            f"Cannot detect product name / price columns. "
+            f"Available headers: {available}. "
+            f"Expected columns containing: product/name/item and price/cost"
+        )
+
+    return name_col, price_col, unit_col
+
+
+@router.post("/upload")
+async def upload_price_list(
+    file: UploadFile = File(...),
+    supplier_id: int = Form(...),
+    effective_date: str = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Upload a CSV file to create a new price list.
+    Expected columns: product name, price, and optionally unit.
+    Column detection is automatic (supports English & Hebrew headers).
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ("csv", "tsv", "txt"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only CSV files are supported. Please export your Excel as CSV first.",
+        )
+
+    # Verify supplier
+    supp_result = await db.execute(select(Supplier).where(Supplier.id == supplier_id))
+    supplier = supp_result.scalar_one_or_none()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+
+    raw = await file.read()
+    try:
+        rows = _parse_csv_bytes(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="File is empty or has no data rows")
+
+    try:
+        name_col, price_col, unit_col = _detect_columns(rows)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Build product catalog lookup
+    catalog_result = await db.execute(select(Product).where(Product.is_active == True))
+    catalog = catalog_result.scalars().all()
+
+    def normalize(name: str) -> str:
+        return re.sub(r"\s+", " ", name.strip().lower())
+
+    catalog_map: dict[str, Product] = {}
+    for p in catalog:
+        catalog_map[normalize(p.name)] = p
+        if p.hebrew_name:
+            catalog_map[normalize(p.hebrew_name)] = p
+
+    # Parse effective date
+    eff_date = date.today()
+    if effective_date:
+        try:
+            eff_date = date.fromisoformat(effective_date)
+        except ValueError:
+            pass
+
+    # Create price list
+    price_list = PriceList(
+        supplier_id=supplier_id,
+        effective_date=eff_date,
+        file_path=file.filename,
+        notes=f"Uploaded from {file.filename} ({len(rows)} rows)",
+    )
+    db.add(price_list)
+    await db.flush()
+
+    items_created = 0
+    products_created = 0
+    skipped: list[str] = []
+
+    for row in rows:
+        product_name = row.get(name_col, "").strip()
+        price_str = row.get(price_col, "").strip()
+        unit_val = row.get(unit_col, "").strip() if unit_col else None
+
+        if not product_name or not price_str:
+            continue
+
+        # Parse price (handle commas, currency symbols)
+        price_str = re.sub(r"[^\d.\-]", "", price_str.replace(",", "."))
+        try:
+            price_val = float(price_str)
+        except ValueError:
+            skipped.append(product_name)
+            continue
+
+        if price_val <= 0:
+            skipped.append(product_name)
+            continue
+
+        # Find or create product
+        product = catalog_map.get(normalize(product_name))
+        if not product:
+            product = Product(name=product_name, unit=unit_val, is_active=True)
+            db.add(product)
+            await db.flush()
+            catalog_map[normalize(product_name)] = product
+            products_created += 1
+
+        item = PriceListItem(
+            price_list_id=price_list.id,
+            product_id=product.id,
+            price=price_val,
+            unit=unit_val or product.unit,
+        )
+        db.add(item)
+        items_created += 1
+
+    await db.commit()
+
+    return {
+        "message": f"Price list created with {items_created} products for {supplier.name}",
+        "price_list_id": price_list.id,
+        "items_count": items_created,
+        "new_products_created": products_created,
+        "skipped": skipped[:10],
+        "file_name": file.filename,
     }

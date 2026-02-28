@@ -35,9 +35,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
       <NavHeader />
-      {children}
+      <div className="flex-1">{children}</div>
+      <footer className="border-t bg-white py-4 text-center text-xs text-gray-400">
+        by Ziv Reshef Simchoni
+      </footer>
     </div>
   );
 }

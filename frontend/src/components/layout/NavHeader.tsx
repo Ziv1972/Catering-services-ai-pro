@@ -47,10 +47,10 @@ export function NavHeader() {
             <Utensils className="w-6 h-6 text-blue-600" />
             <div>
               <h1 className="text-lg font-bold text-gray-900">
-                <span className="hidden sm:inline">Catering Services AI Pro</span>
-                <span className="sm:hidden">Catering AI</span>
+                <span className="hidden sm:inline">Catering AI Pro</span>
+                <span className="sm:hidden">Catering AI Pro</span>
               </h1>
-              <p className="text-xs text-gray-500 hidden sm:block">HP Israel - Ziv Reshef</p>
+              <p className="text-xs text-gray-500 hidden sm:block">HP Israel - Ziv Reshef Simchoni</p>
             </div>
           </div>
 

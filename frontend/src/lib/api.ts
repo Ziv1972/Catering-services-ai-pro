@@ -577,6 +577,38 @@ export const priceListsAPI = {
     return response.data;
   },
 
+  updateItem: async (priceListId: number, itemId: number, data: { price?: number; unit?: string }) => {
+    const response = await api.put(`/api/price-lists/${priceListId}/items/${itemId}`, data);
+    return response.data;
+  },
+
+  deleteItem: async (priceListId: number, itemId: number) => {
+    const response = await api.delete(`/api/price-lists/${priceListId}/items/${itemId}`);
+    return response.data;
+  },
+
+  addProduct: async (priceListId: number, data: {
+    product_name: string;
+    price: number;
+    unit?: string;
+    hebrew_name?: string;
+    category?: string;
+  }) => {
+    const response = await api.post(`/api/price-lists/${priceListId}/add-product`, data);
+    return response.data;
+  },
+
+  upload: async (file: File, supplierId: number, effectiveDate?: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('supplier_id', supplierId.toString());
+    if (effectiveDate) formData.append('effective_date', effectiveDate);
+    const response = await api.post('/api/price-lists/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+
   getProducts: async (category?: string) => {
     const response = await api.get('/api/price-lists/products/catalog', {
       params: category ? { category } : {},

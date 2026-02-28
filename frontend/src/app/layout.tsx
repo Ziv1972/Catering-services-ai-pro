@@ -6,7 +6,7 @@ import { AppShell } from '@/components/layout/AppShell';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Catering Services AI Pro',
+  title: 'Catering AI Pro',
   description: 'AI-powered assistant for corporate catering management',
 };
 
