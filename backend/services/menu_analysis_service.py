@@ -1,7 +1,11 @@
 """
 Menu compliance analysis engine.
 Parses uploaded menu files and runs compliance rules against them.
+Handles Hebrew rule types: item_frequency_weekly, item_frequency_monthly,
+count_min, count_max, item_present, no_repeat_weekly, no_repeat_daily,
+no_consecutive, frequency, mandatory.
 """
+import re
 import csv
 import io
 import json
@@ -39,6 +43,10 @@ If the text is unreadable or empty, return an empty array [].
 Do not include Fridays/Saturdays (Shabbat).
 """
 
+
+# ---------------------------------------------------------------------------
+# File parsing
+# ---------------------------------------------------------------------------
 
 async def parse_menu_file(file_path: str, month: str, year: int) -> list[dict]:
     """Parse a menu file (CSV, Excel, or text) into structured day data."""
@@ -120,7 +128,7 @@ def _generate_placeholder_days(month: str, year: int) -> list[dict]:
 
     while current < end:
         weekday = current.weekday()
-        if weekday < 5:  # Mon-Fri (skip Sat/Sun in Python weekday, but Israeli week is Sun-Thu)
+        if weekday < 5:
             days.append({
                 "date": current.isoformat(),
                 "day_of_week": day_names[weekday],
@@ -131,6 +139,89 @@ def _generate_placeholder_days(month: str, year: int) -> list[dict]:
     return days
 
 
+# ---------------------------------------------------------------------------
+# Hebrew rule name parsing
+# ---------------------------------------------------------------------------
+
+def _extract_item_and_freq(name: str) -> tuple:
+    """Extract (item_keyword, frequency, is_max) from a Hebrew rule name.
+
+    Examples:
+        "אסאדו 3 פעמים בחודש"      → ("אסאדו", 3.0, False)
+        "המבורגר פעם בשבוע"         → ("המבורגר", 1.0, False)
+        "נקניקיות מקסימום פעם בשבוע" → ("נקניקיות", 1.0, True)
+        "חזה עוף בגריל 5 פעמים בשבוע" → ("חזה עוף בגריל", 5.0, False)
+        "כנאפה אסאדו"              → ("כנאפה אסאדו", 1.0, False)
+    """
+    is_max = "מקסימום" in name
+    clean = name.replace("מקסימום", "").strip()
+
+    # Pattern: "ITEM X.Y פעמ..."
+    match = re.match(r'^(.+?)\s+(\d+(?:\.\d+)?)\s+פעמ', clean)
+    if match:
+        return match.group(1).strip(), float(match.group(2)), is_max
+
+    # Pattern: "ITEM פעם ב..."
+    match = re.match(r'^(.+?)\s+פעם\s+ב', clean)
+    if match:
+        return match.group(1).strip(), 1.0, is_max
+
+    # No frequency pattern — use full name as item keyword, default freq 1
+    return clean, 1.0, is_max
+
+
+def _extract_daily_count(name: str) -> tuple:
+    """Extract (count, category_keyword) from count_min/count_max names.
+
+    Examples:
+        "מינימום 11 סוגי סלטים ביום" → (11, "סלטים")
+        "מינימום 2 סוגי מרק ביום"    → (2, "מרק")
+        "מקסימום 2 מנות בשר טחון ביום" → (2, "בשר טחון")
+    """
+    # "מינימום X סוגי CATEGORY ביום"
+    match = re.match(r'^מינימום\s+(\d+)\s+סוגי\s+(.+?)(?:\s+ביום)?$', name)
+    if match:
+        return int(match.group(1)), match.group(2).strip()
+
+    # "מקסימום X מנות ITEM ביום"
+    match = re.match(r'^מקסימום\s+(\d+)\s+מנות\s+(.+?)(?:\s+ביום)?$', name)
+    if match:
+        return int(match.group(1)), match.group(2).strip()
+
+    # "מינימום X CATEGORY"
+    match = re.match(r'^מינימום\s+(\d+)\s+(.+)', name)
+    if match:
+        return int(match.group(1)), match.group(2).strip()
+
+    return 1, name
+
+
+def _extract_item_present_keyword(name: str) -> str:
+    """Extract item keyword from item_present / count_min daily-item rules.
+
+    Examples:
+        "סלט חומוס יומי"      → "חומוס"
+        "מרק צח/ירקות יומי"   → "מרק צח"
+        "גריל יומי"           → "גריל"
+        "מנת בקר יומית"       → "בקר"
+        "קרוטונים יומיים"     → "קרוטונים"
+    """
+    clean = re.sub(r'\s+(יומי|יומית|יומיים|יומיות)$', '', name).strip()
+    # Remove common prefixes like "סלט", "מנת", "מנה"
+    for prefix in ["סלט ", "מנת ", "מנה "]:
+        if clean.startswith(prefix):
+            clean = clean[len(prefix):]
+            break
+    # Take first part before "/" if compound
+    if "/" in clean:
+        clean = clean.split("/")[0].strip()
+    return clean
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _derive_comparison(actual: int, expected: int) -> str:
     """Derive comparison label: above, under, or even."""
     if actual > expected:
@@ -139,6 +230,25 @@ def _derive_comparison(actual: int, expected: int) -> str:
         return "under"
     return "even"
 
+
+def _count_item_occurrences(item_keyword: str, item_counter: Counter) -> int:
+    """Count how many times an item appears using substring match."""
+    keyword = item_keyword.lower()
+    return sum(v for k, v in item_counter.items() if keyword in k)
+
+
+def _count_daily_item_presence(item_keyword: str, daily_categories: list) -> int:
+    """Count how many days an item appears on."""
+    keyword = item_keyword.lower()
+    return sum(
+        1 for dc in daily_categories
+        if any(keyword in str(item).lower() for _, item in dc["items"])
+    )
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
 
 async def run_compliance_check(
     check_id: int,
@@ -218,7 +328,6 @@ async def run_compliance_check(
         else:
             warning_count += 1
 
-        # Count above/under/even from evidence
         evidence = cr.get("evidence") or {}
         comparison = evidence.get("comparison", "even")
         if comparison == "above":
@@ -252,6 +361,10 @@ async def run_compliance_check(
     }
 
 
+# ---------------------------------------------------------------------------
+# Rule evaluation
+# ---------------------------------------------------------------------------
+
 def _evaluate_rules(rules: list, days_data: list[dict]) -> list[dict]:
     """Evaluate compliance rules against parsed menu days."""
     results = []
@@ -277,7 +390,9 @@ def _evaluate_rules(rules: list, days_data: list[dict]) -> list[dict]:
     item_counter = Counter(all_items_flat)
 
     for rule in rules:
-        rule_result = _check_single_rule(rule, days_data, daily_categories, item_counter, total_days)
+        rule_result = _check_single_rule(
+            rule, days_data, daily_categories, item_counter, total_days
+        )
         results.append(rule_result)
 
     return results
@@ -290,13 +405,14 @@ def _check_single_rule(
     item_counter: Counter,
     total_days: int
 ) -> dict:
-    """Check a single compliance rule with expected vs actual comparison."""
+    """Check a single compliance rule — handles all Hebrew rule types."""
     params = rule.parameters or {}
     rule_type = rule.rule_type or "mandatory"
     category = rule.category or ""
+    name = rule.name or ""
 
     base = {
-        "rule_name": rule.name,
+        "rule_name": name,
         "rule_category": category,
         "severity": "critical" if rule.priority <= 1 else "warning",
     }
@@ -316,18 +432,328 @@ def _check_single_rule(
 
     weeks_in_month = max(total_days / 5, 1)
 
-    # Frequency-based rules (e.g., item should appear at most X times per week)
+    # =================================================================
+    # item_frequency_weekly — "אטריות מרק 2 פעמים בשבוע"
+    # =================================================================
+    if rule_type == "item_frequency_weekly":
+        item_keyword, freq, is_max = _extract_item_and_freq(name)
+        if params.get("item"):
+            item_keyword = params["item"]
+        if params.get("min_per_week"):
+            freq = params["min_per_week"]
+            is_max = False
+        if params.get("max_per_week"):
+            freq = params["max_per_week"]
+            is_max = True
+
+        actual = _count_item_occurrences(item_keyword, item_counter)
+        expected = round(freq * weeks_in_month)
+        comparison = _derive_comparison(actual, expected)
+
+        if is_max:
+            passed = actual <= expected
+        else:
+            passed = actual >= expected
+
+        return {
+            **base,
+            "passed": passed,
+            "finding_text": (
+                f"'{item_keyword}': Expected {'≤' if is_max else '≥'}{expected}, "
+                f"Actual {actual}"
+            ),
+            "evidence": {
+                "item_searched": item_keyword,
+                "expected_count": expected,
+                "actual_count": actual,
+                "comparison": comparison,
+                "weekly_freq": freq,
+                "is_max_rule": is_max,
+            },
+        }
+
+    # =================================================================
+    # item_frequency_monthly — "אסאדו 3 פעמים בחודש"
+    # =================================================================
+    if rule_type == "item_frequency_monthly":
+        item_keyword, freq, is_max = _extract_item_and_freq(name)
+        if params.get("item"):
+            item_keyword = params["item"]
+        if params.get("min_per_month"):
+            freq = params["min_per_month"]
+            is_max = False
+        if params.get("max_per_month"):
+            freq = params["max_per_month"]
+            is_max = True
+
+        actual = _count_item_occurrences(item_keyword, item_counter)
+        expected = round(freq)
+        comparison = _derive_comparison(actual, expected)
+
+        if is_max:
+            passed = actual <= expected
+        else:
+            passed = actual >= expected
+
+        return {
+            **base,
+            "passed": passed,
+            "finding_text": (
+                f"'{item_keyword}': Expected {'≤' if is_max else '≥'}{expected}/month, "
+                f"Actual {actual}"
+            ),
+            "evidence": {
+                "item_searched": item_keyword,
+                "expected_count": expected,
+                "actual_count": actual,
+                "comparison": comparison,
+                "monthly_freq": freq,
+                "is_max_rule": is_max,
+            },
+        }
+
+    # =================================================================
+    # count_min — "מינימום 11 סוגי סלטים ביום" or "מנת בקר יומית"
+    # =================================================================
+    if rule_type == "count_min":
+        # Check if it's a "מינימום X סוגי..." pattern
+        min_count, cat_keyword = _extract_daily_count(name)
+        has_min_pattern = name.startswith("מינימום")
+
+        if has_min_pattern:
+            # Daily variety check — how many distinct items per day match category
+            daily_counts = []
+            for dc in daily_categories:
+                day_count = sum(
+                    1 for _, item in dc["items"]
+                    if cat_keyword.lower() in str(item).lower()
+                    or any(cat_keyword.lower() in c.lower() for c in dc["categories"])
+                )
+                daily_counts.append(day_count)
+
+            avg_daily = round(sum(daily_counts) / max(len(daily_counts), 1), 1)
+            expected = min_count
+            actual = round(avg_daily)
+            comparison = _derive_comparison(actual, expected)
+            passed = avg_daily >= min_count
+
+            return {
+                **base,
+                "passed": passed,
+                "finding_text": (
+                    f"'{cat_keyword}': Min {min_count}/day, "
+                    f"Avg {avg_daily}/day"
+                ),
+                "evidence": {
+                    "category_keyword": cat_keyword,
+                    "expected_count": expected,
+                    "actual_count": actual,
+                    "comparison": comparison,
+                    "avg_daily": avg_daily,
+                    "min_required": min_count,
+                },
+            }
+        else:
+            # Daily item presence check — "גריל יומי", "מנת בקר יומית"
+            item_keyword = _extract_item_present_keyword(name)
+            if params.get("item"):
+                item_keyword = params["item"]
+
+            actual = _count_daily_item_presence(item_keyword, daily_categories)
+            expected = total_days
+            comparison = _derive_comparison(actual, expected)
+            passed = actual >= expected
+
+            return {
+                **base,
+                "passed": passed,
+                "finding_text": (
+                    f"'{item_keyword}': Present {actual}/{total_days} days"
+                ),
+                "evidence": {
+                    "item_searched": item_keyword,
+                    "expected_count": expected,
+                    "actual_count": actual,
+                    "comparison": comparison,
+                },
+            }
+
+    # =================================================================
+    # count_max — "מקסימום 2 מנות בשר טחון ביום"
+    # =================================================================
+    if rule_type == "count_max":
+        max_count, item_keyword = _extract_daily_count(name)
+        if params.get("item"):
+            item_keyword = params["item"]
+
+        daily_counts = []
+        for dc in daily_categories:
+            day_count = sum(
+                1 for _, item in dc["items"]
+                if item_keyword.lower() in str(item).lower()
+            )
+            daily_counts.append(day_count)
+
+        max_found = max(daily_counts) if daily_counts else 0
+        avg_daily = round(sum(daily_counts) / max(len(daily_counts), 1), 1)
+        expected = max_count
+        actual = round(avg_daily)
+        comparison = _derive_comparison(actual, expected)
+        passed = max_found <= max_count
+
+        return {
+            **base,
+            "passed": passed,
+            "finding_text": (
+                f"'{item_keyword}': Max {max_count}/day, "
+                f"Peak {max_found}/day, Avg {avg_daily}/day"
+            ),
+            "evidence": {
+                "item_searched": item_keyword,
+                "expected_count": expected,
+                "actual_count": actual,
+                "comparison": comparison,
+                "max_daily_found": max_found,
+                "avg_daily": avg_daily,
+            },
+        }
+
+    # =================================================================
+    # item_present — "סלט חומוס יומי", "מרק צח/ירקות יומי"
+    # =================================================================
+    if rule_type == "item_present":
+        item_keyword = _extract_item_present_keyword(name)
+        if params.get("item"):
+            item_keyword = params["item"]
+
+        actual = _count_daily_item_presence(item_keyword, daily_categories)
+        expected = total_days
+        comparison = _derive_comparison(actual, expected)
+        passed = actual >= expected
+
+        return {
+            **base,
+            "passed": passed,
+            "finding_text": (
+                f"'{item_keyword}': Present {actual}/{total_days} days"
+            ),
+            "evidence": {
+                "item_searched": item_keyword,
+                "expected_count": expected,
+                "actual_count": actual,
+                "comparison": comparison,
+            },
+        }
+
+    # =================================================================
+    # no_repeat_weekly — "אין אותו מרק פעמיים בשבוע"
+    # =================================================================
+    if rule_type == "no_repeat_weekly":
+        repeats = 0
+        weeks: dict[int, list] = {}
+        for dc in daily_categories:
+            d = dc.get("date", "")
+            try:
+                week = date.fromisoformat(d).isocalendar()[1]
+            except (ValueError, TypeError):
+                continue
+            if week not in weeks:
+                weeks[week] = []
+            for _, item in dc["items"]:
+                weeks[week].append(str(item).lower())
+
+        for week_items in weeks.values():
+            counter = Counter(week_items)
+            repeats += sum(v - 1 for v in counter.values() if v > 1)
+
+        expected = 0
+        comparison = _derive_comparison(repeats, expected)
+        passed = repeats == 0
+
+        return {
+            **base,
+            "passed": passed,
+            "finding_text": (
+                f"Weekly repeats found: {repeats}"
+                if repeats > 0 else "No weekly repeats"
+            ),
+            "evidence": {
+                "expected_count": expected,
+                "actual_count": repeats,
+                "comparison": comparison,
+            },
+        }
+
+    # =================================================================
+    # no_repeat_daily — "אין לחזור על אותו סלט פעמיים ביום"
+    # =================================================================
+    if rule_type == "no_repeat_daily":
+        repeats = 0
+        for dc in daily_categories:
+            items_lower = [str(item).lower() for _, item in dc["items"]]
+            counter = Counter(items_lower)
+            repeats += sum(v - 1 for v in counter.values() if v > 1)
+
+        expected = 0
+        comparison = _derive_comparison(repeats, expected)
+        passed = repeats == 0
+
+        return {
+            **base,
+            "passed": passed,
+            "finding_text": (
+                f"Daily repeats found: {repeats}"
+                if repeats > 0 else "No daily repeats"
+            ),
+            "evidence": {
+                "expected_count": expected,
+                "actual_count": repeats,
+                "comparison": comparison,
+            },
+        }
+
+    # =================================================================
+    # no_consecutive — "אין לחזור על אותו פריט יום אחר יום"
+    # =================================================================
+    if rule_type == "no_consecutive":
+        consecutive_repeats = 0
+        prev_items: set = set()
+        for dc in daily_categories:
+            current_items = {str(item).lower() for _, item in dc["items"]}
+            overlap = prev_items & current_items
+            consecutive_repeats += len(overlap)
+            prev_items = current_items
+
+        expected = 0
+        comparison = _derive_comparison(consecutive_repeats, expected)
+        passed = consecutive_repeats == 0
+
+        return {
+            **base,
+            "passed": passed,
+            "finding_text": (
+                f"Consecutive-day repeats: {consecutive_repeats}"
+                if consecutive_repeats > 0 else "No consecutive repeats"
+            ),
+            "evidence": {
+                "expected_count": expected,
+                "actual_count": consecutive_repeats,
+                "comparison": comparison,
+            },
+        }
+
+    # =================================================================
+    # Legacy: frequency (old seeded rules with parameters)
+    # =================================================================
     if rule_type == "frequency":
         max_per_week = params.get("max_per_week")
         min_per_week = params.get("min_per_week")
         target_item = params.get("item", "").lower()
-        target_category = params.get("category", "").lower()
 
         if target_item:
-            count = sum(1 for i in item_counter if target_item in i)
-            weekly_avg = count / weeks_in_month
+            actual = _count_item_occurrences(target_item, item_counter)
+            weekly_avg = actual / weeks_in_month
 
-            # Calculate expected monthly count based on rule standard
             if min_per_week is not None:
                 expected = round(min_per_week * weeks_in_month)
             elif max_per_week is not None:
@@ -335,59 +761,50 @@ def _check_single_rule(
             else:
                 expected = 0
 
-            actual = count
             comparison = _derive_comparison(actual, expected)
-
-            evidence = {
-                "total_count": count,
-                "weekly_avg": round(weekly_avg, 1),
-                "expected_count": expected,
-                "actual_count": actual,
-                "comparison": comparison,
-            }
 
             if max_per_week and weekly_avg > max_per_week:
                 return {
-                    **base,
-                    "passed": False,
+                    **base, "passed": False,
                     "finding_text": (
-                        f"'{target_item}' appears ~{weekly_avg:.1f} times/week "
-                        f"(max allowed: {max_per_week}). "
-                        f"Expected: {expected}, Actual: {actual}"
+                        f"'{target_item}': ~{weekly_avg:.1f}/week "
+                        f"(max {max_per_week}). Expected ≤{expected}, Actual {actual}"
                     ),
-                    "evidence": evidence,
+                    "evidence": {
+                        "expected_count": expected, "actual_count": actual,
+                        "comparison": comparison,
+                    },
                 }
             if min_per_week and weekly_avg < min_per_week:
                 return {
-                    **base,
-                    "passed": False,
+                    **base, "passed": False,
                     "finding_text": (
-                        f"'{target_item}' appears ~{weekly_avg:.1f} times/week "
-                        f"(min required: {min_per_week}). "
-                        f"Expected: {expected}, Actual: {actual}"
+                        f"'{target_item}': ~{weekly_avg:.1f}/week "
+                        f"(min {min_per_week}). Expected ≥{expected}, Actual {actual}"
                     ),
-                    "evidence": evidence,
+                    "evidence": {
+                        "expected_count": expected, "actual_count": actual,
+                        "comparison": comparison,
+                    },
                 }
 
             return {
-                **base,
-                "passed": True,
+                **base, "passed": True,
                 "finding_text": f"Expected: {expected}, Actual: {actual}",
-                "evidence": evidence,
+                "evidence": {
+                    "expected_count": expected, "actual_count": actual,
+                    "comparison": comparison,
+                },
             }
 
         return {
-            **base,
-            "passed": True,
-            "finding_text": None,
-            "evidence": {
-                "expected_count": 0,
-                "actual_count": 0,
-                "comparison": "even",
-            },
+            **base, "passed": True, "finding_text": None,
+            "evidence": {"expected_count": 0, "actual_count": 0, "comparison": "even"},
         }
 
-    # Mandatory rules (e.g., every day must have salad, soup, etc.)
+    # =================================================================
+    # Legacy: mandatory (old seeded rules with parameters)
+    # =================================================================
     if rule_type == "mandatory":
         required_category = params.get("required_category", "").lower()
         required_item = params.get("required_item", "").lower()
@@ -403,72 +820,80 @@ def _check_single_rule(
             actual = total_days - len(missing_days)
             comparison = _derive_comparison(actual, expected)
 
-            evidence = {
-                "expected_count": expected,
-                "actual_count": actual,
-                "comparison": comparison,
-            }
-
             if missing_days:
                 return {
-                    **base,
-                    "passed": False,
+                    **base, "passed": False,
                     "finding_text": (
-                        f"Category '{required_category}' missing on {len(missing_days)} "
-                        f"of {total_days} days. "
-                        f"Expected: {expected}, Actual: {actual}"
+                        f"Category '{required_category}' missing on "
+                        f"{len(missing_days)}/{total_days} days"
                     ),
-                    "evidence": {**evidence, "missing_days": missing_days[:5]},
+                    "evidence": {
+                        "expected_count": expected, "actual_count": actual,
+                        "comparison": comparison, "missing_days": missing_days[:5],
+                    },
                 }
             return {
-                **base,
-                "passed": True,
+                **base, "passed": True,
                 "finding_text": f"Present all {total_days} days",
-                "evidence": evidence,
+                "evidence": {
+                    "expected_count": expected, "actual_count": actual,
+                    "comparison": comparison,
+                },
             }
 
         if required_item:
-            days_with = sum(
-                1 for dc in daily_categories
-                if any(required_item in str(item).lower() for _, item in dc["items"])
-            )
-
+            actual = _count_daily_item_presence(required_item, daily_categories)
             expected = total_days
-            actual = days_with
             comparison = _derive_comparison(actual, expected)
 
-            evidence = {
+            if actual == 0:
+                return {
+                    **base, "passed": False,
+                    "finding_text": (
+                        f"Required item '{required_item}' not found in any day"
+                    ),
+                    "evidence": {
+                        "expected_count": expected, "actual_count": 0,
+                        "comparison": comparison,
+                    },
+                }
+            return {
+                **base, "passed": True,
+                "finding_text": f"Found on {actual}/{total_days} days",
+                "evidence": {
+                    "expected_count": expected, "actual_count": actual,
+                    "comparison": comparison,
+                },
+            }
+
+    # =================================================================
+    # Unknown rule type — try to treat as item frequency using name parsing
+    # =================================================================
+    item_keyword, freq, is_max = _extract_item_and_freq(name)
+    if freq > 0 and item_keyword:
+        actual = _count_item_occurrences(item_keyword, item_counter)
+        expected = round(freq)
+        comparison = _derive_comparison(actual, expected)
+        passed = actual <= expected if is_max else actual >= expected
+
+        return {
+            **base,
+            "passed": passed,
+            "finding_text": f"'{item_keyword}': Expected {expected}, Actual {actual}",
+            "evidence": {
+                "item_searched": item_keyword,
                 "expected_count": expected,
                 "actual_count": actual,
                 "comparison": comparison,
-                "days_with_item": days_with,
-                "total_days": total_days,
-            }
+            },
+        }
 
-            if days_with == 0:
-                return {
-                    **base,
-                    "passed": False,
-                    "finding_text": (
-                        f"Required item '{required_item}' not found in any day. "
-                        f"Expected: {expected}, Actual: 0"
-                    ),
-                    "evidence": evidence,
-                }
-            return {
-                **base,
-                "passed": True,
-                "finding_text": f"Found on {days_with} of {total_days} days",
-                "evidence": evidence,
-            }
-
-    # Default: if no specific check logic, check against rule description heuristically
     return {
         **base,
         "passed": True,
         "finding_text": None,
         "evidence": {
-            "note": "Rule evaluated by general compliance check",
+            "note": "Rule type not evaluable",
             "expected_count": 0,
             "actual_count": 0,
             "comparison": "even",
