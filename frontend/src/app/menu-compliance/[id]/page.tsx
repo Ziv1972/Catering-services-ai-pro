@@ -7,7 +7,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, AlertTriangle, CheckCircle2, XCircle, FileText,
-  TrendingUp, TrendingDown, Equal, ArrowUpCircle, ArrowDownCircle, MinusCircle
+  TrendingUp, TrendingDown, Equal, ArrowUpCircle, ArrowDownCircle, MinusCircle,
+  RefreshCw
 } from 'lucide-react';
 import { menuComplianceAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -20,6 +21,7 @@ export default function MenuCheckDetailPage() {
   const [check, setCheck] = useState<any>(null);
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rerunning, setRerunning] = useState(false);
 
   useEffect(() => {
     loadCheckData();
@@ -37,6 +39,18 @@ export default function MenuCheckDetailPage() {
       console.error('Failed to load check:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRerun = async () => {
+    setRerunning(true);
+    try {
+      await menuComplianceAPI.rerunCheck(checkId);
+      await loadCheckData();
+    } catch (error) {
+      console.error('Failed to re-run check:', error);
+    } finally {
+      setRerunning(false);
     }
   };
 
@@ -91,7 +105,16 @@ export default function MenuCheckDetailPage() {
             )}
           </div>
 
-          <div className="text-right">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              onClick={handleRerun}
+              disabled={rerunning}
+              className="gap-2"
+            >
+              <RefreshCw className={`w-4 h-4 ${rerunning ? 'animate-spin' : ''}`} />
+              {rerunning ? 'Re-running...' : 'Re-run Check'}
+            </Button>
             {check.critical_findings > 0 ? (
               <Badge variant="destructive" className="text-lg px-4 py-2">
                 {check.critical_findings} Critical Issues

@@ -214,6 +214,11 @@ export const menuComplianceAPI = {
     const response = await api.delete(`/api/menu-compliance/rules/${id}`);
     return response.data;
   },
+
+  rerunCheck: async (checkId: number) => {
+    const response = await api.post(`/api/menu-compliance/checks/${checkId}/run`);
+    return response.data;
+  },
 };
 
 // Proformas
