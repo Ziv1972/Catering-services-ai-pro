@@ -327,6 +327,9 @@ async def run_compliance_check(
     even_count = 0
 
     for cr in check_results:
+        evidence = cr.get("evidence") or {}
+        if cr.get("rule_id"):
+            evidence = {**evidence, "rule_id": cr["rule_id"]}
         result_obj = CheckResult(
             menu_check_id=check.id,
             rule_name=cr["rule_name"],
@@ -334,7 +337,7 @@ async def run_compliance_check(
             passed=cr["passed"],
             severity=cr["severity"],
             finding_text=cr.get("finding_text"),
-            evidence=cr.get("evidence"),
+            evidence=evidence,
             reviewed=False,
         )
         db.add(result_obj)
@@ -429,10 +432,12 @@ def _check_single_rule(
     category = rule.category or ""
     name = rule.name or ""
 
+    rule_id = getattr(rule, "id", None)
     base = {
         "rule_name": name,
         "rule_category": category,
         "severity": "critical" if rule.priority <= 1 else "warning",
+        "rule_id": rule_id,
     }
 
     if total_days == 0:

@@ -358,7 +358,12 @@ async def update_rule(
 
     updates = data.model_dump(exclude_none=True)
     for key, value in updates.items():
-        setattr(rule, key, value)
+        if key == "parameters" and isinstance(value, dict):
+            # Merge new parameters into existing ones (don't replace)
+            existing = rule.parameters or {}
+            setattr(rule, key, {**existing, **value})
+        else:
+            setattr(rule, key, value)
 
     await db.commit()
     await db.refresh(rule)

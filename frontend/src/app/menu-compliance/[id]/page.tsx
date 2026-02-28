@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, CheckCircle2, XCircle, FileText,
   TrendingUp, TrendingDown, Equal, ArrowUpCircle, ArrowDownCircle, MinusCircle,
-  RefreshCw, Calendar
+  RefreshCw, Calendar, Search, Pencil, Check, X, Loader2
 } from 'lucide-react';
 import { menuComplianceAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -88,6 +88,17 @@ export default function MenuCheckDetailPage() {
       return acc;
     }, {}
   );
+
+  const handleKeywordUpdate = async (ruleId: number, newKeyword: string) => {
+    try {
+      await menuComplianceAPI.updateRule(ruleId, {
+        parameters: { item: newKeyword },
+      });
+    } catch (error) {
+      console.error('Failed to update keyword:', error);
+      throw error;
+    }
+  };
 
   const toggleFilter = (f: FilterType) => {
     setFilter(filter === f ? 'all' : f);
@@ -229,7 +240,11 @@ export default function MenuCheckDetailPage() {
                 <CardContent>
                   <div className="space-y-3">
                     {categoryResults.map((result: any) => (
-                      <ResultRow key={result.id} result={result} />
+                      <ResultRow
+                        key={result.id}
+                        result={result}
+                        onKeywordUpdate={handleKeywordUpdate}
+                      />
                     ))}
                   </div>
                 </CardContent>
@@ -275,7 +290,18 @@ function formatDate(dateStr: string) {
 }
 
 
-function ResultRow({ result }: { result: any }) {
+function ResultRow({
+  result,
+  onKeywordUpdate,
+}: {
+  result: any;
+  onKeywordUpdate: (ruleId: number, keyword: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
   const evidence = result.evidence || {};
   const hasComparison = evidence.expected_count !== undefined && evidence.actual_count !== undefined;
   const comparison = evidence.comparison || 'even';
@@ -284,6 +310,8 @@ function ResultRow({ result }: { result: any }) {
   const deficit = expected !== null && actual !== null ? expected - actual : null;
   const foundDays: string[] = evidence.found_on_days || [];
   const missingDays: string[] = evidence.missing_on_days || [];
+  const searchedKeyword: string = evidence.item_searched || evidence.category_keyword || '';
+  const ruleId: number | null = evidence.rule_id || null;
 
   const borderColor = comparison === 'under' ? 'border-red-400'
     : comparison === 'above' ? 'border-blue-400'
@@ -293,6 +321,34 @@ function ResultRow({ result }: { result: any }) {
     : comparison === 'above' ? 'bg-blue-50'
     : 'bg-green-50';
 
+  const handleStartEdit = () => {
+    setEditValue(searchedKeyword);
+    setEditing(true);
+    setSaved(false);
+  };
+
+  const handleCancel = () => {
+    setEditing(false);
+    setEditValue('');
+  };
+
+  const handleSave = async () => {
+    if (!ruleId || !editValue.trim() || editValue.trim() === searchedKeyword) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onKeywordUpdate(ruleId, editValue.trim());
+      setSaved(true);
+      setEditing(false);
+    } catch {
+      // keep editing open on failure
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className={`p-4 rounded-lg border-l-4 ${borderColor} ${bgColor}`}>
       {/* Header row */}
@@ -300,6 +356,70 @@ function ResultRow({ result }: { result: any }) {
         <h4 className="font-medium text-gray-900">{result.rule_name}</h4>
         <ComparisonBadge comparison={comparison} />
       </div>
+
+      {/* Searched keyword — shown for under-standard items */}
+      {comparison === 'under' && searchedKeyword && (
+        <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            <Search className="w-3 h-3" />
+            <span>Searched:</span>
+          </div>
+          {!editing ? (
+            <div className="flex items-center gap-1.5">
+              <code className="px-1.5 py-0.5 text-xs bg-white/80 border border-gray-300 rounded font-mono text-gray-800">
+                {searchedKeyword}
+              </code>
+              {ruleId && (
+                <button
+                  onClick={handleStartEdit}
+                  className="p-0.5 text-gray-400 hover:text-orange-600 transition-colors"
+                  title="Wrong word? Paste the correct one"
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              )}
+              {saved && (
+                <span className="text-xs text-green-600 font-medium flex items-center gap-0.5">
+                  <Check className="w-3 h-3" /> Saved — re-run to apply
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="text"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSave();
+                  if (e.key === 'Escape') handleCancel();
+                }}
+                className="px-1.5 py-0.5 text-xs border border-orange-400 rounded font-mono text-gray-800 bg-white w-48 focus:outline-none focus:ring-1 focus:ring-orange-400"
+                dir="rtl"
+                autoFocus
+                disabled={saving}
+                placeholder="Paste correct word..."
+              />
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="p-0.5 text-green-600 hover:text-green-800 transition-colors disabled:opacity-50"
+                title="Save"
+              >
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              </button>
+              <button
+                onClick={handleCancel}
+                disabled={saving}
+                className="p-0.5 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50"
+                title="Cancel"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Expected vs Actual inline */}
       {hasComparison && expected !== null && actual !== null && (
@@ -347,7 +467,7 @@ function ResultRow({ result }: { result: any }) {
       {comparison === 'under' && foundDays.length === 0 && actual === 0 && (
         <div className="mt-2 p-2.5 bg-white/70 rounded-md">
           <p className="text-xs text-red-600 font-medium">
-            ⚠ Not found anywhere in the menu
+            Not found anywhere in the menu
           </p>
         </div>
       )}
