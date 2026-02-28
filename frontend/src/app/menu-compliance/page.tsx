@@ -6,7 +6,8 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
-  FileText, AlertTriangle, CheckCircle2, Upload, X, Plus, Pencil, BookOpen, Check
+  FileText, AlertTriangle, CheckCircle2, Upload, X, Plus, Pencil, BookOpen, Check, Search,
+  TrendingUp, TrendingDown, Equal
 } from 'lucide-react';
 import { menuComplianceAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -29,6 +30,8 @@ export default function MenuCompliancePage() {
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [ruleForm, setRuleForm] = useState({ name: '', rule_type: 'mandatory', description: '', category: '', priority: 1 });
   const [savingRule, setSavingRule] = useState(false);
+  const [ruleSearch, setRuleSearch] = useState('');
+  const [ruleCategory, setRuleCategory] = useState<string | null>(null);
   const [uploadForm, setUploadForm] = useState({
     siteId: 1,
     month: MONTHS[new Date().getMonth()],
@@ -128,6 +131,13 @@ export default function MenuCompliancePage() {
     acc[key].push(check);
     return acc;
   }, {});
+
+  const ruleCategories = Array.from(new Set(rules.map((r: any) => r.category).filter(Boolean))) as string[];
+  const filteredRules = rules.filter((r: any) => {
+    const matchesSearch = !ruleSearch || r.name.toLowerCase().includes(ruleSearch.toLowerCase()) || (r.description || '').toLowerCase().includes(ruleSearch.toLowerCase());
+    const matchesCategory = !ruleCategory || r.category === ruleCategory;
+    return matchesSearch && matchesCategory;
+  });
 
   const totalCritical = checks.reduce((sum: number, c: any) => sum + (c.critical_findings || 0), 0);
   const totalFindings = checks.reduce((sum: number, c: any) => sum + (c.total_findings || 0), 0);
@@ -307,11 +317,49 @@ export default function MenuCompliancePage() {
                 </form>
               )}
 
+              {rules.length > 0 && (
+                <div className="mb-4 space-y-3">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <input
+                      value={ruleSearch}
+                      onChange={e => setRuleSearch(e.target.value)}
+                      placeholder="Search rules..."
+                      className="w-full pl-9 pr-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  {ruleCategories.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => setRuleCategory(null)}
+                        className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${!ruleCategory ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                      >
+                        All ({rules.length})
+                      </button>
+                      {ruleCategories.map(cat => {
+                        const count = rules.filter((r: any) => r.category === cat).length;
+                        return (
+                          <button
+                            key={cat}
+                            onClick={() => setRuleCategory(ruleCategory === cat ? null : cat)}
+                            className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${ruleCategory === cat ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                          >
+                            {cat} ({count})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {rules.length === 0 ? (
                 <p className="text-gray-500 text-sm py-4 text-center">No compliance rules defined yet. Add your first rule.</p>
+              ) : filteredRules.length === 0 ? (
+                <p className="text-gray-500 text-sm py-4 text-center">No rules match your search.</p>
               ) : (
                 <div className="space-y-2">
-                  {rules.map((r: any) => (
+                  {filteredRules.map((r: any) => (
                     <div key={r.id} className={`flex items-center justify-between p-3 rounded-lg border ${r.is_active ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
@@ -457,6 +505,27 @@ export default function MenuCompliancePage() {
                           <p className="text-xs text-gray-600">Passed</p>
                         </div>
                       </div>
+
+                      {/* Quantity Summary */}
+                      {(check.dishes_above > 0 || check.dishes_under > 0 || check.dishes_even > 0) && (
+                        <div className="grid grid-cols-3 gap-2 pt-3 mt-3 border-t border-dashed">
+                          <div className="flex items-center justify-center gap-1">
+                            <TrendingUp className="w-3 h-3 text-blue-500" />
+                            <span className="text-sm font-semibold text-blue-600">{check.dishes_above || 0}</span>
+                            <span className="text-xs text-gray-500">above</span>
+                          </div>
+                          <div className="flex items-center justify-center gap-1">
+                            <TrendingDown className="w-3 h-3 text-red-500" />
+                            <span className="text-sm font-semibold text-red-600">{check.dishes_under || 0}</span>
+                            <span className="text-xs text-gray-500">under</span>
+                          </div>
+                          <div className="flex items-center justify-center gap-1">
+                            <Equal className="w-3 h-3 text-green-500" />
+                            <span className="text-sm font-semibold text-green-600">{check.dishes_even || 0}</span>
+                            <span className="text-xs text-gray-500">even</span>
+                          </div>
+                        </div>
+                      )}
                     </Card>
                   ))}
                 </div>

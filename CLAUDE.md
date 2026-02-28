@@ -234,6 +234,7 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - Inline price/unit editing with hover-to-reveal actions, add product with catalog auto-creation, duplicate detection
 - Backend endpoints: PUT/DELETE items, POST add-product, POST upload CSV
 - Branding: "Catering AI Pro" header, "HP Israel - Ziv Reshef Simchoni" subtitle + footer
+- Menu compliance rules: search box + category filter pills with counts
 
 ## Session Summary Rules
 

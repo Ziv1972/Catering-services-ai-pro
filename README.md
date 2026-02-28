@@ -524,6 +524,7 @@ Production data migrated from FoodHouse Analytics:
 - [x] Dashboard redesign with modern KPI cards, semantic color tokens, animated transitions, responsive layout
 - [x] Price list management — CSV upload (multi-encoding, auto-column detection), inline editing, add product with catalog auto-creation
 - [x] Branding update: "Catering AI Pro" header, "HP Israel - Ziv Reshef Simchoni" subtitle, footer
+- [x] Menu compliance rules: search box + category filter pills with counts
 
 ### Upcoming — Phase 6: Remaining AI Agents
 - [ ] Budget Intelligence Agent (forecasting, alerts, trends)

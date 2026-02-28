@@ -39,6 +39,11 @@ class MenuCheck(Base):
     warnings = Column(Integer, default=0)
     passed_rules = Column(Integer, default=0)
 
+    # Summary comparison (dishes above/under/even vs standard)
+    dishes_above = Column(Integer, default=0)
+    dishes_under = Column(Integer, default=0)
+    dishes_even = Column(Integer, default=0)
+
     # Timestamps
     checked_at = Column(Date, nullable=False)
 

@@ -55,6 +55,8 @@ async def parse_menu_file(file_path: str, month: str, year: int) -> list[dict]:
                 rows = []
                 for sheet in wb.sheetnames:
                     ws = wb[sheet]
+                    if not hasattr(ws, 'iter_rows'):
+                        continue
                     for row in ws.iter_rows(values_only=True):
                         cells = [str(c) if c is not None else "" for c in row]
                         rows.append(",".join(cells))
@@ -129,6 +131,15 @@ def _generate_placeholder_days(month: str, year: int) -> list[dict]:
     return days
 
 
+def _derive_comparison(actual: int, expected: int) -> str:
+    """Derive comparison label: above, under, or even."""
+    if actual > expected:
+        return "above"
+    if actual < expected:
+        return "under"
+    return "even"
+
+
 async def run_compliance_check(
     check_id: int,
     db: AsyncSession
@@ -183,6 +194,9 @@ async def run_compliance_check(
     critical_count = 0
     warning_count = 0
     passed_count = 0
+    above_count = 0
+    under_count = 0
+    even_count = 0
 
     for cr in check_results:
         result_obj = CheckResult(
@@ -204,11 +218,24 @@ async def run_compliance_check(
         else:
             warning_count += 1
 
+        # Count above/under/even from evidence
+        evidence = cr.get("evidence") or {}
+        comparison = evidence.get("comparison", "even")
+        if comparison == "above":
+            above_count += 1
+        elif comparison == "under":
+            under_count += 1
+        else:
+            even_count += 1
+
     # Update check totals
     check.total_findings = critical_count + warning_count
     check.critical_findings = critical_count
     check.warnings = warning_count
     check.passed_rules = passed_count
+    check.dishes_above = above_count
+    check.dishes_under = under_count
+    check.dishes_even = even_count
 
     await db.commit()
 
@@ -219,6 +246,9 @@ async def run_compliance_check(
         "passed_rules": passed_count,
         "days_parsed": len(days_data),
         "rules_checked": len(rules),
+        "dishes_above": above_count,
+        "dishes_under": under_count,
+        "dishes_even": even_count,
     }
 
 
@@ -260,7 +290,7 @@ def _check_single_rule(
     item_counter: Counter,
     total_days: int
 ) -> dict:
-    """Check a single compliance rule."""
+    """Check a single compliance rule with expected vs actual comparison."""
     params = rule.parameters or {}
     rule_type = rule.rule_type or "mandatory"
     category = rule.category or ""
@@ -276,8 +306,15 @@ def _check_single_rule(
             **base,
             "passed": False,
             "finding_text": "No menu days found to check against this rule.",
-            "evidence": {"days_checked": 0},
+            "evidence": {
+                "days_checked": 0,
+                "expected_count": 0,
+                "actual_count": 0,
+                "comparison": "even",
+            },
         }
+
+    weeks_in_month = max(total_days / 5, 1)
 
     # Frequency-based rules (e.g., item should appear at most X times per week)
     if rule_type == "frequency":
@@ -288,7 +325,26 @@ def _check_single_rule(
 
         if target_item:
             count = sum(1 for i in item_counter if target_item in i)
-            weekly_avg = count / max(total_days / 5, 1)
+            weekly_avg = count / weeks_in_month
+
+            # Calculate expected monthly count based on rule standard
+            if min_per_week is not None:
+                expected = round(min_per_week * weeks_in_month)
+            elif max_per_week is not None:
+                expected = round(max_per_week * weeks_in_month)
+            else:
+                expected = 0
+
+            actual = count
+            comparison = _derive_comparison(actual, expected)
+
+            evidence = {
+                "total_count": count,
+                "weekly_avg": round(weekly_avg, 1),
+                "expected_count": expected,
+                "actual_count": actual,
+                "comparison": comparison,
+            }
 
             if max_per_week and weekly_avg > max_per_week:
                 return {
@@ -296,9 +352,10 @@ def _check_single_rule(
                     "passed": False,
                     "finding_text": (
                         f"'{target_item}' appears ~{weekly_avg:.1f} times/week "
-                        f"(max allowed: {max_per_week})"
+                        f"(max allowed: {max_per_week}). "
+                        f"Expected: {expected}, Actual: {actual}"
                     ),
-                    "evidence": {"total_count": count, "weekly_avg": round(weekly_avg, 1)},
+                    "evidence": evidence,
                 }
             if min_per_week and weekly_avg < min_per_week:
                 return {
@@ -306,12 +363,29 @@ def _check_single_rule(
                     "passed": False,
                     "finding_text": (
                         f"'{target_item}' appears ~{weekly_avg:.1f} times/week "
-                        f"(min required: {min_per_week})"
+                        f"(min required: {min_per_week}). "
+                        f"Expected: {expected}, Actual: {actual}"
                     ),
-                    "evidence": {"total_count": count, "weekly_avg": round(weekly_avg, 1)},
+                    "evidence": evidence,
                 }
 
-        return {**base, "passed": True, "finding_text": None, "evidence": None}
+            return {
+                **base,
+                "passed": True,
+                "finding_text": f"Expected: {expected}, Actual: {actual}",
+                "evidence": evidence,
+            }
+
+        return {
+            **base,
+            "passed": True,
+            "finding_text": None,
+            "evidence": {
+                "expected_count": 0,
+                "actual_count": 0,
+                "comparison": "even",
+            },
+        }
 
     # Mandatory rules (e.g., every day must have salad, soup, etc.)
     if rule_type == "mandatory":
@@ -325,36 +399,78 @@ def _check_single_rule(
                 if not any(required_category in c for c in cats_lower):
                     missing_days.append(dc["date"])
 
+            expected = total_days
+            actual = total_days - len(missing_days)
+            comparison = _derive_comparison(actual, expected)
+
+            evidence = {
+                "expected_count": expected,
+                "actual_count": actual,
+                "comparison": comparison,
+            }
+
             if missing_days:
                 return {
                     **base,
                     "passed": False,
                     "finding_text": (
                         f"Category '{required_category}' missing on {len(missing_days)} "
-                        f"of {total_days} days"
+                        f"of {total_days} days. "
+                        f"Expected: {expected}, Actual: {actual}"
                     ),
-                    "evidence": {"missing_days": missing_days[:5]},
+                    "evidence": {**evidence, "missing_days": missing_days[:5]},
                 }
-            return {**base, "passed": True, "finding_text": None, "evidence": None}
+            return {
+                **base,
+                "passed": True,
+                "finding_text": f"Present all {total_days} days",
+                "evidence": evidence,
+            }
 
         if required_item:
             days_with = sum(
                 1 for dc in daily_categories
                 if any(required_item in str(item).lower() for _, item in dc["items"])
             )
+
+            expected = total_days
+            actual = days_with
+            comparison = _derive_comparison(actual, expected)
+
+            evidence = {
+                "expected_count": expected,
+                "actual_count": actual,
+                "comparison": comparison,
+                "days_with_item": days_with,
+                "total_days": total_days,
+            }
+
             if days_with == 0:
                 return {
                     **base,
                     "passed": False,
-                    "finding_text": f"Required item '{required_item}' not found in any day",
-                    "evidence": {"days_with_item": 0, "total_days": total_days},
+                    "finding_text": (
+                        f"Required item '{required_item}' not found in any day. "
+                        f"Expected: {expected}, Actual: 0"
+                    ),
+                    "evidence": evidence,
                 }
-            return {**base, "passed": True, "finding_text": None, "evidence": None}
+            return {
+                **base,
+                "passed": True,
+                "finding_text": f"Found on {days_with} of {total_days} days",
+                "evidence": evidence,
+            }
 
     # Default: if no specific check logic, check against rule description heuristically
     return {
         **base,
         "passed": True,
         "finding_text": None,
-        "evidence": {"note": "Rule evaluated by general compliance check"},
+        "evidence": {
+            "note": "Rule evaluated by general compliance check",
+            "expected_count": 0,
+            "actual_count": 0,
+            "comparison": "even",
+        },
     }

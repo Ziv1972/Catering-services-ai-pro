@@ -52,6 +52,9 @@ async def lifespan(app: FastAPI):
             ("supplier_budgets", "shift", "VARCHAR DEFAULT 'all'"),
             ("complaints", "fine_rule_id", "INTEGER"),
             ("complaints", "fine_amount", "FLOAT DEFAULT 0"),
+            ("menu_checks", "dishes_above", "INTEGER DEFAULT 0"),
+            ("menu_checks", "dishes_under", "INTEGER DEFAULT 0"),
+            ("menu_checks", "dishes_even", "INTEGER DEFAULT 0"),
         ]
         for table, column, col_type in migrations:
             try:

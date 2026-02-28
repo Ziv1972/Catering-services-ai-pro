@@ -75,6 +75,9 @@ class MenuCheckResponse(BaseModel):
     critical_findings: int
     warnings: int
     passed_rules: int
+    dishes_above: int = 0
+    dishes_under: int = 0
+    dishes_even: int = 0
     checked_at: date
     file_path: Optional[str]
 
@@ -120,6 +123,9 @@ async def list_checks(
             critical_findings=c.critical_findings,
             warnings=c.warnings,
             passed_rules=c.passed_rules,
+            dishes_above=c.dishes_above or 0,
+            dishes_under=c.dishes_under or 0,
+            dishes_even=c.dishes_even or 0,
             checked_at=c.checked_at,
             file_path=c.file_path,
             site_name=c.site.name if c.site else None,
@@ -155,6 +161,9 @@ async def get_check(
         "critical_findings": check.critical_findings,
         "warnings": check.warnings,
         "passed_rules": check.passed_rules,
+        "dishes_above": check.dishes_above or 0,
+        "dishes_under": check.dishes_under or 0,
+        "dishes_even": check.dishes_even or 0,
         "checked_at": check.checked_at.isoformat(),
         "file_path": check.file_path,
     }
@@ -195,6 +204,9 @@ async def get_compliance_stats(
             func.sum(MenuCheck.warnings).label("total_warnings"),
             func.sum(MenuCheck.passed_rules).label("total_passed"),
             func.sum(MenuCheck.total_findings).label("total_findings"),
+            func.sum(MenuCheck.dishes_above).label("total_above"),
+            func.sum(MenuCheck.dishes_under).label("total_under"),
+            func.sum(MenuCheck.dishes_even).label("total_even"),
         )
     )
     row = result.one()
@@ -205,6 +217,9 @@ async def get_compliance_stats(
         "total_warnings": row.total_warnings or 0,
         "total_passed": row.total_passed or 0,
         "total_findings": row.total_findings or 0,
+        "total_above": row.total_above or 0,
+        "total_under": row.total_under or 0,
+        "total_even": row.total_even or 0,
     }
 
 
