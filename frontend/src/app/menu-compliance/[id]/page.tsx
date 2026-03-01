@@ -10,7 +10,7 @@ import {
   TrendingUp, TrendingDown, Equal, ArrowUpCircle, ArrowDownCircle, MinusCircle,
   RefreshCw, Calendar, Search, Pencil, Check, X, Loader2
 } from 'lucide-react';
-import { menuComplianceAPI } from '@/lib/api';
+import { menuComplianceAPI, dishCatalogAPI } from '@/lib/api';
 import { format } from 'date-fns';
 
 type FilterType = 'all' | 'above' | 'under' | 'even';
@@ -25,6 +25,8 @@ export default function MenuCheckDetailPage() {
   const [loading, setLoading] = useState(true);
   const [rerunning, setRerunning] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [extractResult, setExtractResult] = useState<any>(null);
   const [filter, setFilter] = useState<FilterType>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -78,6 +80,20 @@ export default function MenuCheckDetailPage() {
     } catch (error) {
       console.error('Failed to delete check:', error);
       setDeleting(false);
+    }
+  };
+
+  const handleExtractDishes = async () => {
+    setExtracting(true);
+    setExtractResult(null);
+    try {
+      const result = await dishCatalogAPI.extractFromCheck(checkId);
+      setExtractResult(result);
+    } catch (error) {
+      console.error('Failed to extract dishes:', error);
+      setExtractResult({ error: true });
+    } finally {
+      setExtracting(false);
     }
   };
 
@@ -174,6 +190,19 @@ export default function MenuCheckDetailPage() {
             </Button>
             <Button
               variant="outline"
+              onClick={handleExtractDishes}
+              disabled={extracting}
+              className="gap-2"
+            >
+              {extracting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <FileText className="w-4 h-4" />
+              )}
+              {extracting ? 'Extracting...' : 'Extract Dishes'}
+            </Button>
+            <Button
+              variant="outline"
               onClick={handleRecheck}
               disabled={rerunning}
               className="gap-2"
@@ -197,6 +226,36 @@ export default function MenuCheckDetailPage() {
             )}
           </div>
         </div>
+
+        {/* Extract Dishes Result */}
+        {extractResult && !extractResult.error && (
+          <div className="mb-4 p-4 rounded-lg bg-green-50 border border-green-200 flex items-center justify-between">
+            <div>
+              <p className="text-green-800 font-medium">
+                ✅ Extracted {extractResult.total_dishes_in_menu} dishes from menu file
+              </p>
+              <p className="text-green-600 text-sm">
+                {extractResult.new_dishes_added} new dishes added to catalog
+                {extractResult.already_existed > 0 && ` · ${extractResult.already_existed} already existed`}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push('/menu-compliance/dish-catalog')}
+              className="text-green-700 border-green-300"
+            >
+              View Dish Catalog →
+            </Button>
+          </div>
+        )}
+        {extractResult?.error && (
+          <div className="mb-4 p-4 rounded-lg bg-red-50 border border-red-200">
+            <p className="text-red-800 font-medium">
+              Failed to extract dishes. The menu file may no longer be available — try re-uploading first.
+            </p>
+          </div>
+        )}
 
         {/* Summary Cards — clickable filters */}
         <div className="grid grid-cols-3 gap-4 mb-6">

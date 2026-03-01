@@ -9,6 +9,7 @@ import re
 import csv
 import io
 import json
+import logging
 from datetime import date, timedelta
 from typing import Optional
 from collections import Counter
@@ -19,6 +20,8 @@ from sqlalchemy import select
 from backend.models.menu_compliance import MenuCheck, MenuDay, CheckResult, ComplianceRule
 from backend.models.dish_catalog import DishCatalog
 from backend.services.claude_service import claude_service
+
+logger = logging.getLogger(__name__)
 
 
 AI_MENU_PARSE_PROMPT = """You are a menu parser for Israeli institutional catering.
@@ -49,30 +52,21 @@ Do not include Fridays/Saturdays (Shabbat).
 # File parsing
 # ---------------------------------------------------------------------------
 
-async def parse_menu_file(file_path: str, month: str, year: int) -> list[dict]:
-    """Parse a menu file (CSV, Excel, or text) into structured day data."""
+def _read_file_raw(file_path: str) -> str:
+    """Read raw text from a file (CSV, Excel, PDF, or text)."""
     raw_text = ""
-
     try:
         if file_path.endswith(".csv"):
-            with open(file_path, "r", encoding="utf-8-sig") as f:
-                raw_text = f.read()
+            for enc in ("utf-8-sig", "cp1255", "latin-1"):
+                try:
+                    with open(file_path, "r", encoding=enc) as f:
+                        raw_text = f.read()
+                    if raw_text.strip():
+                        break
+                except (UnicodeDecodeError, UnicodeError):
+                    continue
         elif file_path.endswith((".xlsx", ".xls")):
-            try:
-                import openpyxl
-                wb = openpyxl.load_workbook(file_path, read_only=True)
-                rows = []
-                for sheet in wb.sheetnames:
-                    ws = wb[sheet]
-                    if not hasattr(ws, 'iter_rows'):
-                        continue
-                    for row in ws.iter_rows(values_only=True):
-                        cells = [str(c) if c is not None else "" for c in row]
-                        rows.append(",".join(cells))
-                raw_text = "\n".join(rows)
-                wb.close()
-            except ImportError:
-                raw_text = ""
+            raw_text = _read_excel_structured(file_path)
         elif file_path.endswith(".pdf"):
             try:
                 import pdfplumber
@@ -80,21 +74,164 @@ async def parse_menu_file(file_path: str, month: str, year: int) -> list[dict]:
                     pages = [p.extract_text() or "" for p in pdf.pages]
                     raw_text = "\n".join(pages)
             except ImportError:
-                raw_text = ""
+                logger.warning("pdfplumber not installed — cannot parse PDF")
         else:
             with open(file_path, "r", encoding="utf-8-sig") as f:
                 raw_text = f.read()
-    except Exception:
-        raw_text = ""
+    except Exception as e:
+        logger.error(f"Failed to read file {file_path}: {e}")
+
+    return raw_text
+
+
+def _read_excel_structured(file_path: str) -> str:
+    """Read Excel file preserving column/row structure for AI parsing."""
+    try:
+        import openpyxl
+    except ImportError:
+        logger.warning("openpyxl not installed — cannot parse Excel")
+        return ""
+
+    try:
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        all_text_parts = []
+
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            if not hasattr(ws, "iter_rows"):
+                continue
+            all_text_parts.append(f"=== Sheet: {sheet_name} ===")
+            for row in ws.iter_rows(values_only=True):
+                cells = []
+                for c in row:
+                    if c is not None:
+                        val = str(c).strip()
+                        if val:
+                            cells.append(val)
+                if cells:
+                    all_text_parts.append(" | ".join(cells))
+
+        wb.close()
+        return "\n".join(all_text_parts)
+    except Exception as e:
+        logger.error(f"Excel parsing error: {e}")
+        return ""
+
+
+def extract_all_dishes_from_file(file_path: str) -> list[str]:
+    """Extract all unique dish-like text values directly from a menu file.
+    Returns a flat list of unique Hebrew dish names — no AI needed."""
+    dishes: set[str] = set()
+
+    try:
+        if file_path.endswith((".xlsx", ".xls")):
+            dishes = _extract_dishes_from_excel(file_path)
+        elif file_path.endswith(".csv"):
+            dishes = _extract_dishes_from_csv(file_path)
+        else:
+            # Plain text — extract Hebrew words/phrases
+            raw = _read_file_raw(file_path)
+            for line in raw.split("\n"):
+                line = line.strip()
+                if _is_dish_name(line):
+                    dishes.add(line)
+    except Exception as e:
+        logger.error(f"Dish extraction error: {e}")
+
+    return sorted(dishes)
+
+
+def _extract_dishes_from_excel(file_path: str) -> set[str]:
+    """Extract dish names from Excel cells directly."""
+    import openpyxl
+
+    dishes: set[str] = set()
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        if not hasattr(ws, "iter_rows"):
+            continue
+        for row in ws.iter_rows(values_only=True):
+            for cell in row:
+                if cell is None:
+                    continue
+                val = str(cell).strip()
+                if _is_dish_name(val):
+                    dishes.add(val)
+
+    wb.close()
+    return dishes
+
+
+def _extract_dishes_from_csv(file_path: str) -> set[str]:
+    """Extract dish names from CSV cells."""
+    dishes: set[str] = set()
+    for enc in ("utf-8-sig", "cp1255", "latin-1"):
+        try:
+            with open(file_path, "r", encoding=enc) as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    for cell in row:
+                        val = cell.strip()
+                        if _is_dish_name(val):
+                            dishes.add(val)
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    return dishes
+
+
+# Hebrew character range check
+_HEBREW_RE = re.compile(r'[\u0590-\u05FF]')
+# Skip patterns: dates, day names, headers, numbers-only, single chars
+_SKIP_PATTERNS = re.compile(
+    r'^(?:\d{1,2}[./]\d{1,2}[./]?\d{0,4}|'  # dates
+    r'יום\s+[א-ת]|'                           # day names like יום ראשון
+    r'None|'
+    r'\d+$|'                                    # numbers only
+    r'.{0,2}$)'                                 # too short
+)
+_HEADER_KEYWORDS = {
+    "תפריט", "חודש", "שבוע", "תאריך", "הערות", "עמדת שף",
+    "sheet", "page", "menu", "date", "week",
+}
+
+
+def _is_dish_name(val: str) -> bool:
+    """Heuristic: is this cell value likely a dish name?"""
+    if not val or len(val) < 3 or len(val) > 80:
+        return False
+    if not _HEBREW_RE.search(val):
+        return False
+    if _SKIP_PATTERNS.match(val):
+        return False
+    val_lower = val.lower()
+    if any(kw in val_lower for kw in _HEADER_KEYWORDS):
+        return False
+    # Must have at least 2 Hebrew characters
+    hebrew_chars = sum(1 for c in val if '\u0590' <= c <= '\u05FF')
+    if hebrew_chars < 2:
+        return False
+    return True
+
+
+async def parse_menu_file(file_path: str, month: str, year: int) -> list[dict]:
+    """Parse a menu file (CSV, Excel, or text) into structured day data."""
+    raw_text = _read_file_raw(file_path)
 
     if not raw_text.strip():
+        logger.warning(f"Empty raw text from file: {file_path}")
         return _generate_placeholder_days(month, year)
 
+    logger.info(f"Menu raw text: {len(raw_text)} chars from {file_path}")
+
+    # Send full text to Claude (up to 50K chars — Claude handles large context)
     try:
         parse_prompt = f"""Month: {month}, Year: {year}
 
 Raw menu text:
-{raw_text[:8000]}"""
+{raw_text[:50000]}"""
 
         result = await claude_service.generate_structured_response(
             prompt=parse_prompt,
@@ -103,11 +240,131 @@ Raw menu text:
         )
 
         if isinstance(result, list) and len(result) > 0:
-            return result
-    except Exception:
-        pass
+            # Verify the parsed data actually has items
+            items_count = sum(
+                len(items)
+                for day in result
+                for items in (day.get("items", {}).values())
+                if isinstance(items, list)
+            )
+            logger.info(f"Claude parsed {len(result)} days with {items_count} total items")
+            if items_count > 0:
+                return result
+            logger.warning("Claude returned days but with 0 items — falling back")
+    except Exception as e:
+        logger.error(f"Claude menu parsing failed: {e}")
 
-    return _generate_placeholder_days(month, year)
+    # Fallback: build days from direct extraction
+    logger.info("Using direct extraction fallback")
+    return _build_days_from_direct_extraction(file_path, month, year)
+
+
+def _build_days_from_direct_extraction(
+    file_path: str, month: str, year: int
+) -> list[dict]:
+    """Build day structures by extracting dishes directly from the file.
+    Distributes all found dishes across weekdays in the month."""
+    all_dishes = extract_all_dishes_from_file(file_path)
+    logger.info(f"Direct extraction found {len(all_dishes)} unique dishes")
+
+    if not all_dishes:
+        return _generate_placeholder_days(month, year)
+
+    # Generate weekdays for the month
+    days = _generate_placeholder_days(month, year)
+
+    # Try to detect column-based day structure from Excel
+    if file_path.endswith((".xlsx", ".xls")):
+        structured = _extract_days_from_excel_columns(file_path, month, year)
+        if structured and any(d.get("items") for d in structured):
+            return structured
+
+    # Fallback: put all dishes under "עיקרית" for each day
+    # (compliance engine uses substring matching across all items)
+    for day in days:
+        day["items"] = {"עיקרית": all_dishes}
+
+    return days
+
+
+def _extract_days_from_excel_columns(
+    file_path: str, month: str, year: int
+) -> list[dict]:
+    """Try to extract day-structured data from Excel where columns = days."""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        ws = wb[wb.sheetnames[0]]
+        if not hasattr(ws, "iter_rows"):
+            wb.close()
+            return []
+
+        all_rows = []
+        for row in ws.iter_rows(values_only=True):
+            all_rows.append([str(c).strip() if c is not None else "" for c in row])
+        wb.close()
+
+        if not all_rows:
+            return []
+
+        # Detect header row with day names or dates
+        day_col_indices: list[int] = []
+        day_labels: list[str] = []
+        hebrew_days = {"ראשון", "שני", "שלישי", "רביעי", "חמישי"}
+
+        for row_idx, row in enumerate(all_rows[:5]):
+            for col_idx, cell in enumerate(row):
+                if any(d in cell for d in hebrew_days) or re.match(r'\d{1,2}[./]\d{1,2}', cell):
+                    day_col_indices.append(col_idx)
+                    day_labels.append(cell)
+            if day_col_indices:
+                break
+
+        if not day_col_indices:
+            return []
+
+        # Extract dishes per column (day)
+        days_data = []
+        try:
+            month_num = int(month.split("-")[-1]) if "-" in month else int(month)
+        except ValueError:
+            month_num = 1
+
+        for i, col_idx in enumerate(day_col_indices):
+            items: list[str] = []
+            for row in all_rows:
+                if col_idx < len(row):
+                    val = row[col_idx].strip()
+                    if _is_dish_name(val):
+                        items.append(val)
+
+            if items:
+                # Try to determine date from label
+                day_date = None
+                label = day_labels[i] if i < len(day_labels) else ""
+                date_match = re.search(r'(\d{1,2})[./](\d{1,2})', label)
+                if date_match:
+                    try:
+                        d = int(date_match.group(1))
+                        m = int(date_match.group(2))
+                        day_date = date(year, m, d)
+                    except (ValueError, TypeError):
+                        pass
+
+                if not day_date:
+                    day_date = date(year, month_num, min(i + 1, 28))
+
+                days_data.append({
+                    "date": day_date.isoformat(),
+                    "day_of_week": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][day_date.weekday()],
+                    "items": {"עיקרית": items}
+                })
+
+        return days_data
+
+    except Exception as e:
+        logger.error(f"Excel column extraction error: {e}")
+        return []
 
 
 def _generate_placeholder_days(month: str, year: int) -> list[dict]:
@@ -393,7 +650,7 @@ async def run_compliance_check(
 
     # Auto-extract all unique dishes to the catalog
     extracted = await _auto_extract_dishes_to_catalog(
-        days_data, check.id, check_results, db
+        days_data, check.id, check_results, db, file_path=check.file_path
     )
 
     await db.commit()
@@ -421,26 +678,40 @@ async def _auto_extract_dishes_to_catalog(
     check_id: int,
     check_results: list[dict],
     db: AsyncSession,
+    file_path: str | None = None,
 ) -> int:
-    """Extract all unique dish names from parsed menu days and add to catalog.
+    """Extract all unique dish names and add to catalog.
+    Uses direct file extraction first (most reliable), then falls back to parsed days.
     Dishes that passed compliance checks are marked as approved."""
-    # Collect all unique dish names from menu
     unique_dishes: set[str] = set()
+
+    # 1. Try direct file extraction first (bypasses AI parsing issues)
+    if file_path:
+        import os
+        if os.path.exists(file_path):
+            file_dishes = extract_all_dishes_from_file(file_path)
+            unique_dishes.update(file_dishes)
+            logger.info(f"Direct file extraction: {len(file_dishes)} dishes from {file_path}")
+
+    # 2. Also collect from parsed days_data (may have additional items from AI parsing)
     for day in days_data:
         items = day.get("items", {})
         for _category, item_list in items.items():
             if isinstance(item_list, list):
                 for item in item_list:
                     name = str(item).strip()
-                    if name:
+                    if name and len(name) >= 3:
                         unique_dishes.add(name)
             elif isinstance(item_list, str):
                 name = item_list.strip()
-                if name:
+                if name and len(name) >= 3:
                     unique_dishes.add(name)
 
     if not unique_dishes:
+        logger.warning(f"No dishes found for check {check_id}")
         return 0
+
+    logger.info(f"Total unique dishes to catalog: {len(unique_dishes)}")
 
     # Get existing catalog entries
     existing_result = await db.execute(select(DishCatalog.dish_name))

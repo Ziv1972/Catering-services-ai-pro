@@ -13,7 +13,7 @@ from backend.database import get_db
 from backend.api.auth import get_current_user
 from backend.models.user import User
 from backend.models.dish_catalog import DishCatalog, DISH_CATEGORIES, DISH_CATEGORY_LABELS
-from backend.models.menu_compliance import MenuDay, ComplianceRule
+from backend.models.menu_compliance import MenuCheck, MenuDay, ComplianceRule
 
 router = APIRouter(prefix="/api/dish-catalog", tags=["dish-catalog"])
 
@@ -241,49 +241,73 @@ async def extract_dishes_from_check(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Extract all unique dish names from a menu check's parsed days
-    and add them to the catalog (skipping duplicates)."""
-    import json as json_lib
+    """Extract all unique dish names directly from the menu check's uploaded file
+    and add them to the catalog (skipping duplicates).
+    Falls back to parsed MenuDay data if file is unavailable."""
+    from backend.services.menu_analysis_service import extract_all_dishes_from_file
 
-    # Get all menu days for this check
-    result = await db.execute(
-        select(MenuDay).where(MenuDay.menu_check_id == check_id)
+    # Get the check to find the file path
+    check_result = await db.execute(
+        select(MenuCheck).where(MenuCheck.id == check_id)
     )
-    days = result.scalars().all()
+    check = check_result.scalar_one_or_none()
+    if not check:
+        raise HTTPException(status_code=404, detail="Menu check not found")
 
-    if not days:
-        raise HTTPException(status_code=404, detail="No menu days found for this check")
-
-    # Collect unique dishes
     unique_dishes: set[str] = set()
-    for day in days:
-        raw_items = day.menu_items
-        # Handle case where JSON is stored as string
-        if isinstance(raw_items, str):
-            try:
-                raw_items = json_lib.loads(raw_items)
-            except (json_lib.JSONDecodeError, TypeError):
-                raw_items = {}
-        items = raw_items or {}
-        for category, dish_list in items.items():
-            if isinstance(dish_list, list):
-                for dish in dish_list:
-                    name = str(dish).strip()
+
+    # Try direct file extraction first (most reliable)
+    if check.file_path:
+        import os
+        if os.path.exists(check.file_path):
+            file_dishes = extract_all_dishes_from_file(check.file_path)
+            unique_dishes.update(file_dishes)
+
+    # Fallback: extract from stored MenuDay records
+    if not unique_dishes:
+        import json as json_lib
+        result = await db.execute(
+            select(MenuDay).where(MenuDay.menu_check_id == check_id)
+        )
+        days = result.scalars().all()
+
+        for day in days:
+            raw_items = day.menu_items
+            if isinstance(raw_items, str):
+                try:
+                    raw_items = json_lib.loads(raw_items)
+                except (json_lib.JSONDecodeError, TypeError):
+                    raw_items = {}
+            items = raw_items or {}
+            for _category, dish_list in items.items():
+                if isinstance(dish_list, list):
+                    for dish in dish_list:
+                        name = str(dish).strip()
+                        if name:
+                            unique_dishes.add(name)
+                elif isinstance(dish_list, str):
+                    name = dish_list.strip()
                     if name:
                         unique_dishes.add(name)
-            elif isinstance(dish_list, str):
-                name = dish_list.strip()
-                if name:
-                    unique_dishes.add(name)
 
-    # Get existing dish names to skip duplicates
+    if not unique_dishes:
+        raise HTTPException(
+            status_code=404,
+            detail="No dishes could be extracted from this check"
+        )
+
+    # Get existing catalog entries
     existing_result = await db.execute(select(DishCatalog.dish_name))
     existing_names = {row[0] for row in existing_result.all()}
 
     new_count = 0
     for dish_name in sorted(unique_dishes):
         if dish_name not in existing_names:
-            db.add(DishCatalog(dish_name=dish_name))
+            db.add(DishCatalog(
+                dish_name=dish_name,
+                source_check_id=check_id,
+            ))
+            existing_names.add(dish_name)
             new_count += 1
 
     await db.commit()
