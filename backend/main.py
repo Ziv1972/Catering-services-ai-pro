@@ -24,7 +24,7 @@ from backend.api.auth import get_password_hash
 from backend.api import auth, meetings, chat, dashboard, complaints
 from backend.api import menu_compliance, proformas, historical, anomalies, webhooks, suppliers
 from backend.api import supplier_budgets, projects, maintenance, todos, price_lists, fine_rules
-from backend.api import category_analysis, attachments
+from backend.api import category_analysis, attachments, dish_catalog
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -580,6 +580,7 @@ app.include_router(price_lists.router, prefix="/api/price-lists", tags=["Price L
 app.include_router(fine_rules.router, prefix="/api/fine-rules", tags=["Fine Rules"])
 app.include_router(category_analysis.router, prefix="/api/category-analysis", tags=["Category Analysis"])
 app.include_router(attachments.router, prefix="/api/attachments", tags=["Attachments"])
+app.include_router(dish_catalog.router, tags=["Dish Catalog"])
 
 
 @app.get("/")

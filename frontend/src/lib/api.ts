@@ -221,6 +221,44 @@ export const menuComplianceAPI = {
   },
 };
 
+// Dish Catalog
+export const dishCatalogAPI = {
+  list: async (params?: { category?: string; unassigned?: boolean; search?: string }) => {
+    const response = await api.get('/api/dish-catalog', { params });
+    return response.data;
+  },
+
+  getCategories: async () => {
+    const response = await api.get('/api/dish-catalog/categories');
+    return response.data;
+  },
+
+  create: async (data: { dish_name: string; category?: string; compliance_rule_id?: number }) => {
+    const response = await api.post('/api/dish-catalog', data);
+    return response.data;
+  },
+
+  update: async (id: number, data: { category?: string; compliance_rule_id?: number | null }) => {
+    const response = await api.put(`/api/dish-catalog/${id}`, data);
+    return response.data;
+  },
+
+  delete: async (id: number) => {
+    const response = await api.delete(`/api/dish-catalog/${id}`);
+    return response.data;
+  },
+
+  extractFromCheck: async (checkId: number) => {
+    const response = await api.post(`/api/dish-catalog/extract/${checkId}`);
+    return response.data;
+  },
+
+  getStats: async () => {
+    const response = await api.get('/api/dish-catalog/stats');
+    return response.data;
+  },
+};
+
 // Proformas
 export const proformasAPI = {
   list: async (params?: {

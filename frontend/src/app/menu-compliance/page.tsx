@@ -154,6 +154,10 @@ export default function MenuCompliancePage() {
             </p>
           </div>
           <div className="flex gap-2">
+            <Button variant="outline" onClick={() => router.push('/menu-compliance/dish-catalog')}>
+              <FileText className="w-4 h-4 mr-2" />
+              Dish Catalog
+            </Button>
             <Button variant="outline" onClick={() => setShowRules(!showRules)}>
               <BookOpen className="w-4 h-4 mr-2" />
               Rules ({rules.length})
