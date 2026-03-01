@@ -183,6 +183,8 @@ async def extract_dishes_from_check(
 ):
     """Extract all unique dish names from a menu check's parsed days
     and add them to the catalog (skipping duplicates)."""
+    import json as json_lib
+
     # Get all menu days for this check
     result = await db.execute(
         select(MenuDay).where(MenuDay.menu_check_id == check_id)
@@ -195,13 +197,24 @@ async def extract_dishes_from_check(
     # Collect unique dishes
     unique_dishes: set[str] = set()
     for day in days:
-        items = day.menu_items or {}
+        raw_items = day.menu_items
+        # Handle case where JSON is stored as string
+        if isinstance(raw_items, str):
+            try:
+                raw_items = json_lib.loads(raw_items)
+            except (json_lib.JSONDecodeError, TypeError):
+                raw_items = {}
+        items = raw_items or {}
         for category, dish_list in items.items():
             if isinstance(dish_list, list):
                 for dish in dish_list:
                     name = str(dish).strip()
                     if name:
                         unique_dishes.add(name)
+            elif isinstance(dish_list, str):
+                name = dish_list.strip()
+                if name:
+                    unique_dishes.add(name)
 
     # Get existing dish names to skip duplicates
     existing_result = await db.execute(select(DishCatalog.dish_name))
@@ -215,10 +228,18 @@ async def extract_dishes_from_check(
 
     await db.commit()
 
+    # Debug: include sample of first day items
+    sample_day = days[0] if days else None
+    sample_items_type = type(sample_day.menu_items).__name__ if sample_day else "none"
+    sample_items_preview = str(sample_day.menu_items)[:200] if sample_day and sample_day.menu_items else "empty"
+
     return {
         "total_dishes_in_menu": len(unique_dishes),
         "new_dishes_added": new_count,
         "already_existed": len(unique_dishes) - new_count,
+        "debug_days_count": len(days),
+        "debug_items_type": sample_items_type,
+        "debug_items_preview": sample_items_preview,
     }
 
 
