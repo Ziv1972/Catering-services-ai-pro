@@ -2,12 +2,12 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
-  ArrowLeft, Search, Download, Check, X, Loader2,
-  UtensilsCrossed, Filter, BookOpen
+  ArrowLeft, Search, Check, X, Loader2,
+  UtensilsCrossed, BookOpen, ShieldCheck, AlertTriangle
 } from 'lucide-react';
 import { dishCatalogAPI, menuComplianceAPI } from '@/lib/api';
 
@@ -17,6 +17,8 @@ interface DishEntry {
   category: string | null;
   compliance_rule_id: number | null;
   rule_name: string | null;
+  approved: boolean;
+  source_check_id: number | null;
 }
 
 interface CategoryOption {
@@ -36,9 +38,7 @@ export default function DishCatalogPage() {
   const [dishes, setDishes] = useState<DishEntry[]>([]);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [rules, setRules] = useState<RuleOption[]>([]);
-  const [checks, setChecks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [extracting, setExtracting] = useState(false);
   const [filterCategory, setFilterCategory] = useState<string>('');
   const [filterSearch, setFilterSearch] = useState<string>('');
   const [showUnassigned, setShowUnassigned] = useState(false);
@@ -47,7 +47,7 @@ export default function DishCatalogPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [dishData, catData, ruleData, checkData, statsData] = await Promise.all([
+      const [dishData, catData, ruleData, statsData] = await Promise.all([
         dishCatalogAPI.list({
           category: filterCategory || undefined,
           unassigned: showUnassigned || undefined,
@@ -55,13 +55,11 @@ export default function DishCatalogPage() {
         }),
         dishCatalogAPI.getCategories(),
         menuComplianceAPI.listRules(),
-        menuComplianceAPI.listChecks({ limit: 10 }),
         dishCatalogAPI.getStats().catch(() => null),
       ]);
       setDishes(dishData);
       setCategories(catData);
       setRules(ruleData);
-      setChecks(checkData);
       setStats(statsData);
     } catch (error) {
       console.error('Failed to load data:', error);
@@ -73,19 +71,6 @@ export default function DishCatalogPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
-
-  const handleExtract = async (checkId: number) => {
-    setExtracting(true);
-    try {
-      const result = await dishCatalogAPI.extractFromCheck(checkId);
-      alert(`Extracted: ${result.new_dishes_added} new dishes added (${result.already_existed} already existed)`);
-      await loadData();
-    } catch (error) {
-      console.error('Failed to extract dishes:', error);
-    } finally {
-      setExtracting(false);
-    }
-  };
 
   const handleCategoryChange = async (dishId: number, category: string) => {
     setSavingId(dishId);
@@ -131,6 +116,7 @@ export default function DishCatalogPage() {
 
   const categorized = dishes.filter(d => d.category).length;
   const linked = dishes.filter(d => d.compliance_rule_id).length;
+  const approvedCount = dishes.filter(d => d.approved).length;
 
   return (
     <div>
@@ -152,66 +138,13 @@ export default function DishCatalogPage() {
               Dish Catalog
             </h2>
             <p className="text-gray-500 text-sm mt-1">
-              Map menu dishes to categories and compliance rules.
+              Dishes are automatically extracted when running compliance checks.
               {dishes.length > 0 && (
-                <> {dishes.length} dishes &middot; {categorized} categorized &middot; {linked} linked to rules</>
+                <> {dishes.length} dishes &middot; {approvedCount} approved &middot; {categorized} categorized &middot; {linked} linked to rules</>
               )}
             </p>
           </div>
         </div>
-
-        {/* Extract from menu check */}
-        {dishes.length === 0 && checks.length > 0 && (
-          <Card className="mb-6 border-orange-200 bg-orange-50">
-            <CardContent className="p-6">
-              <h3 className="font-semibold text-orange-800 mb-2 flex items-center gap-2">
-                <Download className="w-4 h-4" />
-                Import Dishes from Menu Check
-              </h3>
-              <p className="text-sm text-orange-700 mb-3">
-                Extract all unique dish names from an existing menu check to populate the catalog.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {checks.map((c: any) => (
-                  <Button
-                    key={c.id}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleExtract(c.id)}
-                    disabled={extracting}
-                    className="border-orange-300 hover:bg-orange-100"
-                  >
-                    {extracting ? (
-                      <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                    ) : (
-                      <Download className="w-3 h-3 mr-1" />
-                    )}
-                    {c.site_name} {c.month} {c.year}
-                  </Button>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Quick extract button when dishes exist */}
-        {dishes.length > 0 && checks.length > 0 && (
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-sm text-gray-500">Extract from:</span>
-            {checks.slice(0, 3).map((c: any) => (
-              <Button
-                key={c.id}
-                variant="outline"
-                size="sm"
-                onClick={() => handleExtract(c.id)}
-                disabled={extracting}
-              >
-                {extracting ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Download className="w-3 h-3 mr-1" />}
-                {c.site_name} {c.month}/{c.year}
-              </Button>
-            ))}
-          </div>
-        )}
 
         {/* Filters */}
         {dishes.length > 0 && (
@@ -273,16 +206,19 @@ export default function DishCatalogPage() {
                 <table className="w-full">
                   <thead>
                     <tr className="border-b bg-gray-50">
-                      <th className="text-right px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider w-2/5">
+                      <th className="text-right px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider w-[35%]">
                         Dish Name
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider w-1/4">
+                      <th className="text-center px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider w-[8%]">
+                        Status
+                      </th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider w-[22%]">
                         Category
                       </th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider w-1/3">
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider w-[30%]">
                         Rule to Match
                       </th>
-                      <th className="px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider w-12">
+                      <th className="px-4 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider w-[5%]">
                       </th>
                     </tr>
                   </thead>
@@ -300,6 +236,19 @@ export default function DishCatalogPage() {
                           <span className="font-medium text-gray-900 text-sm" dir="rtl">
                             {dish.dish_name}
                           </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-center">
+                          {dish.approved ? (
+                            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-xs">
+                              <ShieldCheck className="w-3 h-3 mr-1" />
+                              Approved
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs">
+                              <AlertTriangle className="w-3 h-3 mr-1" />
+                              Review
+                            </Badge>
+                          )}
                         </td>
                         <td className="px-4 py-2.5">
                           <select
@@ -358,17 +307,21 @@ export default function DishCatalogPage() {
             <BookOpen className="w-12 h-12 text-gray-300 mx-auto mb-3" />
             <p className="text-gray-500 text-lg mb-2">No dishes in catalog yet</p>
             <p className="text-gray-400 text-sm">
-              Extract dishes from a menu check above to get started.
+              Dishes are automatically extracted when you upload and run a compliance check.
             </p>
           </Card>
         )}
 
         {/* Stats */}
         {stats && stats.total > 0 && (
-          <div className="mt-6 grid grid-cols-4 gap-4">
+          <div className="mt-6 grid grid-cols-5 gap-4">
             <div className="bg-white rounded-lg border p-4 text-center">
               <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
               <p className="text-xs text-gray-500">Total Dishes</p>
+            </div>
+            <div className="bg-white rounded-lg border p-4 text-center">
+              <p className="text-2xl font-bold text-green-600">{approvedCount}</p>
+              <p className="text-xs text-gray-500">Approved</p>
             </div>
             <div className="bg-white rounded-lg border p-4 text-center">
               <p className="text-2xl font-bold text-green-600">{stats.categorized}</p>

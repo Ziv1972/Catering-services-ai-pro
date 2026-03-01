@@ -27,6 +27,8 @@ class DishCatalogResponse(BaseModel):
     category: Optional[str] = None
     compliance_rule_id: Optional[int] = None
     rule_name: Optional[str] = None
+    approved: bool = False
+    source_check_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -93,6 +95,8 @@ async def list_dishes(
             category=d.category,
             compliance_rule_id=d.compliance_rule_id,
             rule_name=d.compliance_rule.name if d.compliance_rule else None,
+            approved=d.approved or False,
+            source_check_id=d.source_check_id,
         )
         for d in dishes
     ]
@@ -126,6 +130,8 @@ async def create_dish(
         category=dish.category,
         compliance_rule_id=dish.compliance_rule_id,
         rule_name=dish.compliance_rule.name if dish.compliance_rule else None,
+        approved=dish.approved or False,
+        source_check_id=dish.source_check_id,
     )
 
 
@@ -155,6 +161,8 @@ async def update_dish(
         category=dish.category,
         compliance_rule_id=dish.compliance_rule_id,
         rule_name=dish.compliance_rule.name if dish.compliance_rule else None,
+        approved=dish.approved or False,
+        source_check_id=dish.source_check_id,
     )
 
 
@@ -173,6 +181,39 @@ async def delete_dish(
     await db.delete(dish)
     await db.commit()
     return {"message": "Dish deleted"}
+
+
+class BulkAddDishes(BaseModel):
+    dish_names: list[str]
+
+
+@router.post("/bulk-add")
+async def bulk_add_dishes(
+    data: BulkAddDishes,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Add multiple dishes at once (skipping duplicates).
+    Accepts a list of dish name strings."""
+    # Get existing dish names to skip duplicates
+    existing_result = await db.execute(select(DishCatalog.dish_name))
+    existing_names = {row[0] for row in existing_result.all()}
+
+    new_count = 0
+    for name in data.dish_names:
+        clean = name.strip()
+        if clean and clean not in existing_names:
+            db.add(DishCatalog(dish_name=clean))
+            existing_names.add(clean)
+            new_count += 1
+
+    await db.commit()
+
+    return {
+        "submitted": len(data.dish_names),
+        "new_dishes_added": new_count,
+        "already_existed": len(data.dish_names) - new_count,
+    }
 
 
 @router.post("/extract/{check_id}")
@@ -228,18 +269,10 @@ async def extract_dishes_from_check(
 
     await db.commit()
 
-    # Debug: include sample of first day items
-    sample_day = days[0] if days else None
-    sample_items_type = type(sample_day.menu_items).__name__ if sample_day else "none"
-    sample_items_preview = str(sample_day.menu_items)[:200] if sample_day and sample_day.menu_items else "empty"
-
     return {
         "total_dishes_in_menu": len(unique_dishes),
         "new_dishes_added": new_count,
         "already_existed": len(unique_dishes) - new_count,
-        "debug_days_count": len(days),
-        "debug_items_type": sample_items_type,
-        "debug_items_preview": sample_items_preview,
     }
 
 

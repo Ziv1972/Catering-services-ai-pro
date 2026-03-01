@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from backend.models.menu_compliance import MenuCheck, MenuDay, CheckResult, ComplianceRule
+from backend.models.dish_catalog import DishCatalog
 from backend.services.claude_service import claude_service
 
 
@@ -390,6 +391,11 @@ async def run_compliance_check(
     check.dishes_under = under_count
     check.dishes_even = even_count
 
+    # Auto-extract all unique dishes to the catalog
+    extracted = await _auto_extract_dishes_to_catalog(
+        days_data, check.id, check_results, db
+    )
+
     await db.commit()
 
     return {
@@ -402,7 +408,69 @@ async def run_compliance_check(
         "dishes_above": above_count,
         "dishes_under": under_count,
         "dishes_even": even_count,
+        "dishes_extracted": extracted,
     }
+
+
+# ---------------------------------------------------------------------------
+# Auto-extract dishes to catalog
+# ---------------------------------------------------------------------------
+
+async def _auto_extract_dishes_to_catalog(
+    days_data: list[dict],
+    check_id: int,
+    check_results: list[dict],
+    db: AsyncSession,
+) -> int:
+    """Extract all unique dish names from parsed menu days and add to catalog.
+    Dishes that passed compliance checks are marked as approved."""
+    # Collect all unique dish names from menu
+    unique_dishes: set[str] = set()
+    for day in days_data:
+        items = day.get("items", {})
+        for _category, item_list in items.items():
+            if isinstance(item_list, list):
+                for item in item_list:
+                    name = str(item).strip()
+                    if name:
+                        unique_dishes.add(name)
+            elif isinstance(item_list, str):
+                name = item_list.strip()
+                if name:
+                    unique_dishes.add(name)
+
+    if not unique_dishes:
+        return 0
+
+    # Get existing catalog entries
+    existing_result = await db.execute(select(DishCatalog.dish_name))
+    existing_names = {row[0] for row in existing_result.all()}
+
+    # Collect items that passed compliance (approved)
+    approved_keywords: set[str] = set()
+    for cr in check_results:
+        if cr.get("passed"):
+            evidence = cr.get("evidence") or {}
+            item = evidence.get("item_searched") or evidence.get("category_keyword", "")
+            if item:
+                approved_keywords.add(item.lower())
+
+    new_count = 0
+    for dish_name in sorted(unique_dishes):
+        if dish_name not in existing_names:
+            is_approved = any(
+                kw in dish_name.lower() for kw in approved_keywords
+            ) if approved_keywords else False
+
+            db.add(DishCatalog(
+                dish_name=dish_name,
+                approved=is_approved,
+                source_check_id=check_id,
+            ))
+            existing_names.add(dish_name)
+            new_count += 1
+
+    return new_count
 
 
 # ---------------------------------------------------------------------------

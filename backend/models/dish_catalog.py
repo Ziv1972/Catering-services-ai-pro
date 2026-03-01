@@ -3,7 +3,7 @@ Dish catalog — maps menu dish names to categories and compliance rules.
 Users assign categories and rule links so the compliance engine
 can match dishes accurately instead of guessing from Hebrew keywords.
 """
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, func
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, func
 from sqlalchemy.orm import relationship
 from backend.database import Base
 
@@ -53,6 +53,8 @@ class DishCatalog(Base):
     compliance_rule_id = Column(
         Integer, ForeignKey("compliance_rules.id"), nullable=True
     )
+    approved = Column(Boolean, default=False, nullable=False)
+    source_check_id = Column(Integer, nullable=True)  # which check extracted this dish
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

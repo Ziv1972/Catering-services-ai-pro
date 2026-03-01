@@ -253,6 +253,11 @@ export const dishCatalogAPI = {
     return response.data;
   },
 
+  bulkAdd: async (dishNames: string[]) => {
+    const response = await api.post('/api/dish-catalog/bulk-add', { dish_names: dishNames });
+    return response.data;
+  },
+
   getStats: async () => {
     const response = await api.get('/api/dish-catalog/stats');
     return response.data;
