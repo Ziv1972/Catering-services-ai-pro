@@ -59,4 +59,4 @@ class DishCatalog(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    compliance_rule = relationship("ComplianceRule", lazy="joined")
+    compliance_rule = relationship("ComplianceRule", lazy="noload")

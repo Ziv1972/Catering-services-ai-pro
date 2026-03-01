@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
             ("menu_checks", "dishes_above", "INTEGER DEFAULT 0"),
             ("menu_checks", "dishes_under", "INTEGER DEFAULT 0"),
             ("menu_checks", "dishes_even", "INTEGER DEFAULT 0"),
-            ("dish_catalog", "approved", "BOOLEAN DEFAULT 0"),
+            ("dish_catalog", "approved", "BOOLEAN NOT NULL DEFAULT FALSE"),
             ("dish_catalog", "source_check_id", "INTEGER"),
         ]
         for table, column, col_type in migrations:

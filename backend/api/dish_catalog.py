@@ -5,6 +5,7 @@ Includes extraction of unique dishes from existing menu checks.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from typing import Optional
 
@@ -74,7 +75,7 @@ async def list_dishes(
     current_user: User = Depends(get_current_user),
 ):
     """List all dishes in the catalog with optional filters."""
-    query = select(DishCatalog).order_by(DishCatalog.dish_name)
+    query = select(DishCatalog).options(selectinload(DishCatalog.compliance_rule)).order_by(DishCatalog.dish_name)
 
     if category:
         query = query.where(DishCatalog.category == category)
@@ -124,12 +125,20 @@ async def create_dish(
     await db.commit()
     await db.refresh(dish)
 
+    # Fetch rule name if linked
+    rule_name = None
+    if dish.compliance_rule_id:
+        rule_result = await db.execute(
+            select(ComplianceRule.name).where(ComplianceRule.id == dish.compliance_rule_id)
+        )
+        rule_name = rule_result.scalar_one_or_none()
+
     return DishCatalogResponse(
         id=dish.id,
         dish_name=dish.dish_name,
         category=dish.category,
         compliance_rule_id=dish.compliance_rule_id,
-        rule_name=dish.compliance_rule.name if dish.compliance_rule else None,
+        rule_name=rule_name,
         approved=dish.approved or False,
         source_check_id=dish.source_check_id,
     )
@@ -143,7 +152,9 @@ async def update_dish(
     current_user: User = Depends(get_current_user),
 ):
     """Update category and/or rule assignment for a dish."""
-    result = await db.execute(select(DishCatalog).where(DishCatalog.id == dish_id))
+    result = await db.execute(
+        select(DishCatalog).options(selectinload(DishCatalog.compliance_rule)).where(DishCatalog.id == dish_id)
+    )
     dish = result.scalar_one_or_none()
     if not dish:
         raise HTTPException(status_code=404, detail="Dish not found")
@@ -155,12 +166,20 @@ async def update_dish(
     await db.commit()
     await db.refresh(dish)
 
+    # Fetch rule name if linked
+    rule_name = None
+    if dish.compliance_rule_id:
+        rule_result = await db.execute(
+            select(ComplianceRule.name).where(ComplianceRule.id == dish.compliance_rule_id)
+        )
+        rule_name = rule_result.scalar_one_or_none()
+
     return DishCatalogResponse(
         id=dish.id,
         dish_name=dish.dish_name,
         category=dish.category,
         compliance_rule_id=dish.compliance_rule_id,
-        rule_name=dish.compliance_rule.name if dish.compliance_rule else None,
+        rule_name=rule_name,
         approved=dish.approved or False,
         source_check_id=dish.source_check_id,
     )
