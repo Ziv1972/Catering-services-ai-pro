@@ -286,35 +286,58 @@ async def run_compliance_check(
     )
     rules = rules_result.scalars().all()
 
-    # Parse the menu file
+    # Parse the menu file (or re-use existing days if file unavailable)
     days_data = []
     if check.file_path:
-        days_data = await parse_menu_file(check.file_path, check.month, check.year)
-
-    # Store parsed menu days
-    week_num = 1
-    prev_day = None
-    for day_info in days_data:
-        day_date_str = day_info.get("date", "")
         try:
-            day_date = date.fromisoformat(day_date_str)
-        except (ValueError, TypeError):
-            continue
+            days_data = await parse_menu_file(check.file_path, check.month, check.year)
+        except Exception:
+            days_data = []
 
-        if prev_day and day_date.isocalendar()[1] != prev_day.isocalendar()[1]:
-            week_num += 1
-        prev_day = day_date
-
-        menu_day = MenuDay(
-            menu_check_id=check.id,
-            date=day_date,
-            day_of_week=day_info.get("day_of_week", ""),
-            week_number=week_num,
-            is_holiday=False,
-            is_theme_day=False,
-            menu_items=day_info.get("items", {})
+    if days_data:
+        # Fresh parse succeeded — delete old days and store new ones
+        from sqlalchemy import delete as sql_delete
+        await db.execute(
+            sql_delete(MenuDay).where(MenuDay.menu_check_id == check.id)
         )
-        db.add(menu_day)
+
+        week_num = 1
+        prev_day = None
+        for day_info in days_data:
+            day_date_str = day_info.get("date", "")
+            try:
+                day_date = date.fromisoformat(day_date_str)
+            except (ValueError, TypeError):
+                continue
+
+            if prev_day and day_date.isocalendar()[1] != prev_day.isocalendar()[1]:
+                week_num += 1
+            prev_day = day_date
+
+            menu_day = MenuDay(
+                menu_check_id=check.id,
+                date=day_date,
+                day_of_week=day_info.get("day_of_week", ""),
+                week_number=week_num,
+                is_holiday=False,
+                is_theme_day=False,
+                menu_items=day_info.get("items", {})
+            )
+            db.add(menu_day)
+    else:
+        # File unavailable — re-use existing stored MenuDay data
+        existing_days = await db.execute(
+            select(MenuDay).where(MenuDay.menu_check_id == check.id)
+        )
+        stored_days = existing_days.scalars().all()
+        for md in stored_days:
+            items = md.menu_items or {}
+            day_info = {
+                "date": md.date.isoformat() if md.date else "",
+                "day_of_week": md.day_of_week or "",
+                "items": items,
+            }
+            days_data.append(day_info)
 
     # Run rules against menu data
     check_results = _evaluate_rules(rules, days_data)

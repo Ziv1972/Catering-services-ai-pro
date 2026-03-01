@@ -292,13 +292,10 @@ async def rerun_check(
     if not check:
         raise HTTPException(status_code=404, detail="Menu check not found")
 
-    # Clear old results
+    # Clear old results (days are handled by run_compliance_check)
     from sqlalchemy import delete
     await db.execute(
         delete(CheckResult).where(CheckResult.menu_check_id == check_id)
-    )
-    await db.execute(
-        delete(MenuDay).where(MenuDay.menu_check_id == check_id)
     )
     await db.commit()
 
