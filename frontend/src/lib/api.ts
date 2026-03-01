@@ -219,6 +219,22 @@ export const menuComplianceAPI = {
     const response = await api.post(`/api/menu-compliance/checks/${checkId}/run`);
     return response.data;
   },
+
+  deleteCheck: async (checkId: number) => {
+    const response = await api.delete(`/api/menu-compliance/checks/${checkId}`);
+    return response.data;
+  },
+
+  reuploadFile: async (checkId: number, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post(
+      `/api/menu-compliance/checks/${checkId}/reupload`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
+    return response.data;
+  },
 };
 
 // Dish Catalog

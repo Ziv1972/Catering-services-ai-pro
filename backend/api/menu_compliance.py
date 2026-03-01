@@ -307,6 +307,92 @@ async def rerun_check(
     }
 
 
+@router.post("/checks/{check_id}/reupload")
+async def reupload_menu_file(
+    check_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Re-upload a menu file for an existing check, then re-parse and re-run."""
+    import os
+    from sqlalchemy import delete as sql_delete
+    from backend.services.menu_analysis_service import run_compliance_check
+
+    result = await db.execute(
+        select(MenuCheck).where(MenuCheck.id == check_id)
+    )
+    check = result.scalar_one_or_none()
+    if not check:
+        raise HTTPException(status_code=404, detail="Menu check not found")
+
+    # Save new file
+    upload_dir = "uploads/menus"
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = f"{upload_dir}/{check.site_id}_{check.year}_{check.month}_{file.filename}"
+    content = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Update check with new file path
+    check.file_path = file_path
+    check.checked_at = date.today()
+
+    # Clear old results AND old days (force fresh parse)
+    await db.execute(
+        sql_delete(CheckResult).where(CheckResult.menu_check_id == check_id)
+    )
+    await db.execute(
+        sql_delete(MenuDay).where(MenuDay.menu_check_id == check_id)
+    )
+    await db.commit()
+
+    # Run fresh compliance analysis (will parse the new file)
+    try:
+        analysis = await run_compliance_check(check_id, db)
+        return {
+            "id": check_id,
+            "message": "File re-uploaded and compliance check completed.",
+            "file_path": file_path,
+            "analysis": analysis,
+        }
+    except Exception as e:
+        return {
+            "id": check_id,
+            "message": f"File re-uploaded. Compliance check failed: {str(e)}",
+            "file_path": file_path,
+        }
+
+
+@router.delete("/checks/{check_id}")
+async def delete_check(
+    check_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a menu compliance check and all its results and days."""
+    from sqlalchemy import delete as sql_delete
+
+    result = await db.execute(
+        select(MenuCheck).where(MenuCheck.id == check_id)
+    )
+    check = result.scalar_one_or_none()
+    if not check:
+        raise HTTPException(status_code=404, detail="Menu check not found")
+
+    # Delete related data
+    await db.execute(
+        sql_delete(CheckResult).where(CheckResult.menu_check_id == check_id)
+    )
+    await db.execute(
+        sql_delete(MenuDay).where(MenuDay.menu_check_id == check_id)
+    )
+    await db.delete(check)
+    await db.commit()
+
+    return {"message": "Check deleted successfully"}
+
+
 # --- Compliance Rules CRUD ---
 
 

@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
-  ArrowLeft, CheckCircle2, XCircle, FileText,
+  ArrowLeft, CheckCircle2, XCircle, FileText, Upload, Trash2,
   TrendingUp, TrendingDown, Equal, ArrowUpCircle, ArrowDownCircle, MinusCircle,
   RefreshCw, Calendar, Search, Pencil, Check, X, Loader2
 } from 'lucide-react';
@@ -24,7 +24,9 @@ export default function MenuCheckDetailPage() {
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [rerunning, setRerunning] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [filter, setFilter] = useState<FilterType>('all');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadCheckData();
@@ -45,15 +47,37 @@ export default function MenuCheckDetailPage() {
     }
   };
 
-  const handleRerun = async () => {
+  const handleRecheck = () => {
+    // Trigger file input to re-upload menu file
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
     setRerunning(true);
     try {
-      await menuComplianceAPI.rerunCheck(checkId);
+      await menuComplianceAPI.reuploadFile(checkId, file);
       await loadCheckData();
     } catch (error) {
-      console.error('Failed to re-run check:', error);
+      console.error('Failed to re-upload and check:', error);
     } finally {
       setRerunning(false);
+      // Reset file input
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm('Delete this compliance check? This cannot be undone.')) return;
+    setDeleting(true);
+    try {
+      await menuComplianceAPI.deleteCheck(checkId);
+      router.push('/menu-compliance');
+    } catch (error) {
+      console.error('Failed to delete check:', error);
+      setDeleting(false);
     }
   };
 
@@ -131,14 +155,35 @@ export default function MenuCheckDetailPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Hidden file input for re-upload */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls,.pdf,.txt"
+              onChange={handleFileSelected}
+              className="hidden"
+            />
             <Button
               variant="outline"
-              onClick={handleRerun}
+              onClick={handleDelete}
+              disabled={deleting}
+              className="gap-2 text-red-600 border-red-200 hover:bg-red-50"
+            >
+              <Trash2 className="w-4 h-4" />
+              {deleting ? 'Deleting...' : 'Delete'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleRecheck}
               disabled={rerunning}
               className="gap-2"
             >
-              <RefreshCw className={`w-4 h-4 ${rerunning ? 'animate-spin' : ''}`} />
-              {rerunning ? 'Re-running...' : 'Re-run Check'}
+              {rerunning ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Upload className="w-4 h-4" />
+              )}
+              {rerunning ? 'Checking...' : 'Re-check (Upload File)'}
             </Button>
             {check.critical_findings > 0 ? (
               <Badge variant="destructive" className="text-lg px-4 py-2">

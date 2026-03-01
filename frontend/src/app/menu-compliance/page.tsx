@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   FileText, AlertTriangle, CheckCircle2, Upload, X, Plus, Pencil, BookOpen, Check, Search,
-  TrendingUp, TrendingDown, Equal
+  TrendingUp, TrendingDown, Equal, Trash2
 } from 'lucide-react';
 import { menuComplianceAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -122,6 +122,17 @@ export default function MenuCompliancePage() {
       await loadRules();
     } catch (error) {
       console.error('Failed to delete rule:', error);
+    }
+  };
+
+  const handleDeleteCheck = async (e: React.MouseEvent, checkId: number) => {
+    e.stopPropagation(); // Don't navigate to check detail
+    if (!confirm('Delete this compliance check? This cannot be undone.')) return;
+    try {
+      await menuComplianceAPI.deleteCheck(checkId);
+      await loadChecks();
+    } catch (error) {
+      console.error('Failed to delete check:', error);
     }
   };
 
@@ -455,9 +466,18 @@ export default function MenuCompliancePage() {
                   {periodChecks.map((check: any) => (
                     <Card
                       key={check.id}
-                      className="p-6 hover:shadow-lg transition-shadow cursor-pointer"
+                      className="p-6 hover:shadow-lg transition-shadow cursor-pointer relative group"
                       onClick={() => router.push(`/menu-compliance/${check.id}`)}
                     >
+                      {/* Delete button */}
+                      <button
+                        onClick={(e) => handleDeleteCheck(e, check.id)}
+                        className="absolute top-3 right-3 p-1.5 rounded-md text-gray-300 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+                        title="Delete check"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+
                       <div className="flex justify-between items-start mb-4">
                         <div>
                           <h4 className="font-semibold text-lg text-gray-900">
