@@ -28,6 +28,7 @@ import csv
 import io
 import logging
 import re
+from html.parser import HTMLParser
 
 from backend.config import get_settings
 from backend.database import AsyncSessionLocal
@@ -74,28 +75,46 @@ def _extract_csv_from_attachment(msg: email_lib.message.Message) -> Optional[str
 
 def _extract_excel_from_attachment(msg: email_lib.message.Message) -> Optional[list[dict]]:
     """Walk MIME parts looking for an Excel attachment (.xlsx/.xls).
-    Returns parsed rows [{name, quantity}] or None."""
+    Returns parsed rows [{name, quantity}] or None.
+    Also checks by content type for emails that don't set Content-Disposition."""
+    all_rows: list[dict] = []
+
     for part in msg.walk():
         content_disp = str(part.get("Content-Disposition") or "")
+        content_type = part.get_content_type() or ""
         filename = part.get_filename()
         if filename:
             filename = _decode_header_value(filename)
 
-        if not filename:
-            continue
+        # Match by filename extension
+        is_excel_by_name = (
+            filename and (
+                filename.lower().endswith(".xlsx")
+                or filename.lower().endswith(".xls")
+            )
+        )
 
-        ext = filename.lower()
-        if "attachment" in content_disp and (ext.endswith(".xlsx") or ext.endswith(".xls")):
+        # Match by MIME type (handles cases without Content-Disposition)
+        is_excel_by_type = content_type in (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+            "application/octet-stream",
+        )
+
+        if is_excel_by_name or (is_excel_by_type and filename):
             payload = part.get_payload(decode=True)
             if not payload:
                 continue
 
             try:
-                return _parse_excel_bytes(payload, filename)
+                parsed = _parse_excel_bytes(payload, filename or "unknown.xlsx")
+                if parsed:
+                    all_rows.extend(parsed)
             except Exception as e:
                 logger.error(f"Error parsing Excel attachment {filename}: {e}")
                 continue
-    return None
+
+    return all_rows if all_rows else None
 
 
 def _parse_excel_bytes(data: bytes, filename: str = "") -> list[dict]:
@@ -128,9 +147,15 @@ def _parse_excel_bytes(data: bytes, filename: str = "") -> list[dict]:
             # Detect header row
             if header_row is None:
                 for i, cell in enumerate(str_cells):
-                    if any(kw in cell for kw in ["שם", "מסעדה", "name", "restaurant", "description"]):
+                    if any(kw in cell for kw in [
+                        "שם", "מסעדה", "name", "restaurant", "description",
+                        "תיאור", "שם מסעדה", "שם עסק", "vendor", "supplier",
+                    ]):
                         name_col = i
-                    if any(kw in cell for kw in ["כמות", "quantity", "count", "סכום", "total", "מספר"]):
+                    if any(kw in cell for kw in [
+                        "כמות", "quantity", "count", "סכום", "total", "מספר",
+                        "עסקאות", "transactions", "סה\"כ", "סהכ",
+                    ]):
                         qty_col = i
                 if name_col is not None and qty_col is not None:
                     header_row = row_idx
@@ -201,6 +226,127 @@ def _extract_csv_from_body(msg: email_lib.message.Message) -> Optional[str]:
             if "מסעדה" in text or "עסקאות" in text:
                 return text
     return None
+
+
+class _HTMLTableParser(HTMLParser):
+    """Minimal HTML table parser that extracts rows as lists of cell text."""
+
+    def __init__(self):
+        super().__init__()
+        self._tables: list[list[list[str]]] = []
+        self._current_table: list[list[str]] = []
+        self._current_row: list[str] = []
+        self._current_cell: str = ""
+        self._in_cell = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._current_table = []
+        elif tag == "tr":
+            self._current_row = []
+        elif tag in ("td", "th"):
+            self._current_cell = ""
+            self._in_cell = True
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th"):
+            self._in_cell = False
+            self._current_row.append(self._current_cell.strip())
+        elif tag == "tr":
+            if self._current_row:
+                self._current_table.append(self._current_row)
+        elif tag == "table":
+            if self._current_table:
+                self._tables.append(self._current_table)
+
+    def handle_data(self, data):
+        if self._in_cell:
+            self._current_cell += data
+
+
+def _extract_html_tables(msg: email_lib.message.Message) -> list[dict]:
+    """Parse HTML email body for table data with meal counts."""
+    for part in msg.walk():
+        ctype = part.get_content_type()
+        if ctype != "text/html":
+            continue
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+
+        for enc in ["utf-8", "cp1255", "windows-1255", "utf-8-sig", "iso-8859-8"]:
+            try:
+                html = payload.decode(enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        else:
+            continue
+
+        parser = _HTMLTableParser()
+        try:
+            parser.feed(html)
+        except Exception as e:
+            logger.warning(f"HTML table parse error: {e}")
+            continue
+
+        rows: list[dict] = []
+        for table in parser._tables:
+            if len(table) < 2:
+                continue
+
+            # Auto-detect name/quantity columns from header row
+            header = [c.lower().strip() for c in table[0]]
+            name_col = None
+            qty_col = None
+
+            name_keywords = ["שם", "מסעדה", "תיאור", "name", "restaurant", "description"]
+            qty_keywords = ["כמות", "quantity", "count", "סכום", "total", "מספר", "עסקאות"]
+
+            for i, cell in enumerate(header):
+                if any(kw in cell for kw in name_keywords):
+                    name_col = i
+                if any(kw in cell for kw in qty_keywords):
+                    qty_col = i
+
+            if name_col is None or qty_col is None:
+                # Fallback: first text col + first numeric col
+                for data_row in table[1:]:
+                    if len(data_row) < 2:
+                        continue
+                    for i, c in enumerate(data_row):
+                        if c and not c.replace(",", "").replace(".", "").replace("-", "").isdigit():
+                            name_col = i
+                            break
+                    for i, c in enumerate(data_row):
+                        try:
+                            float(c.replace(",", ""))
+                            qty_col = i
+                            break
+                        except (ValueError, AttributeError):
+                            continue
+                    break
+
+            if name_col is None or qty_col is None:
+                continue
+
+            for data_row in table[1:]:
+                if len(data_row) <= max(name_col, qty_col):
+                    continue
+                name_val = data_row[name_col].strip()
+                if not name_val:
+                    continue
+                try:
+                    qty_val = float(data_row[qty_col].replace(",", ""))
+                    if qty_val > 0:
+                        rows.append({"name": name_val, "quantity": qty_val})
+                except (ValueError, TypeError, IndexError):
+                    continue
+
+        if rows:
+            return rows
+
+    return []
 
 
 def _parse_csv_text(text: str) -> list[dict]:
@@ -308,7 +454,8 @@ def _fetch_meal_emails(
 
         for uid in uids:
             try:
-                status, msg_data = mail.uid("fetch", uid, "(RFC822)")
+                # Use BODY.PEEK[] to avoid auto-marking as \Seen
+                status, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[])")
                 if status != "OK" or not msg_data[0]:
                     continue
 
@@ -318,7 +465,19 @@ def _fetch_meal_emails(
                 subject = _decode_header_value(msg.get("Subject", ""))
                 logger.info(f"Processing meal email: {subject}")
 
-                # Try Excel attachment first, then CSV attachment, then body
+                # Log email parts for debugging
+                parts_info = []
+                for part in msg.walk():
+                    ct = part.get_content_type()
+                    fn = part.get_filename()
+                    if fn:
+                        fn = _decode_header_value(fn)
+                    disp = str(part.get("Content-Disposition") or "")
+                    size = len(part.get_payload(decode=True) or b"")
+                    parts_info.append(f"{ct} fn={fn} disp={disp[:30]} size={size}")
+                logger.info(f"Email parts: {parts_info}")
+
+                # Try Excel attachment first, then CSV, then HTML tables, then body
                 rows = None
 
                 # 1. Try Excel attachment
@@ -332,15 +491,27 @@ def _fetch_meal_emails(
                     csv_text = _extract_csv_from_attachment(msg)
                     if csv_text:
                         rows = _parse_csv_text(csv_text)
+                        if rows:
+                            logger.info(f"Parsed {len(rows)} rows from CSV attachment")
 
-                # 3. Try CSV-like data in body
+                # 3. Try HTML tables in email body
+                if not rows:
+                    html_rows = _extract_html_tables(msg)
+                    if html_rows:
+                        rows = html_rows
+                        logger.info(f"Parsed {len(rows)} rows from HTML table")
+
+                # 4. Try CSV-like data in body
                 if not rows:
                     csv_text = _extract_csv_from_body(msg)
                     if csv_text:
                         rows = _parse_csv_text(csv_text)
+                        if rows:
+                            logger.info(f"Parsed {len(rows)} rows from body CSV")
 
                 if not rows:
                     logger.warning(f"No parseable data found in email: {subject}")
+                    # Don't mark as read — will retry on next poll
                     continue
 
                 meal_date = _extract_date_from_email(msg)
@@ -352,7 +523,7 @@ def _fetch_meal_emails(
                     "subject": subject,
                 })
 
-                # Mark as read
+                # Only mark as read after successful parse
                 mail.uid("store", uid, "+FLAGS", "\\Seen")
 
             except Exception as e:
