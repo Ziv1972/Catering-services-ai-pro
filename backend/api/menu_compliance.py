@@ -429,14 +429,24 @@ async def search_menu_items(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Search for a keyword across all parsed menu items.
+    """Search for a keyword across parsed menu items AND raw file.
 
-    Returns ALL potential matches (substring, prefix-stripped, fuzzy) so
-    the user can review and approve/reject each match.
+    Two-pass search:
+    1. Parsed data (MenuDay items) — structured matches
+    2. Raw file search (like Excel Ctrl+F) — catches items AI parsing missed
     """
+    import os
     from backend.services.menu_analysis_service import (
         _normalize_hebrew, _strip_hebrew_prefixes
     )
+
+    # Get the check to access file_path
+    check_result = await db.execute(
+        select(MenuCheck).where(MenuCheck.id == check_id)
+    )
+    check = check_result.scalar_one_or_none()
+    if not check:
+        raise HTTPException(status_code=404, detail="Menu check not found")
 
     result = await db.execute(
         select(MenuDay)
@@ -445,33 +455,55 @@ async def search_menu_items(
     )
     days = result.scalars().all()
 
-    if not days:
-        raise HTTPException(status_code=404, detail="No parsed menu days found")
-
     keyword_lower = keyword.lower().strip()
-    variants = _normalize_hebrew(keyword_lower)
+    # Also strip Hebrew prefixes from the keyword itself for broader search
+    keyword_stems = _strip_hebrew_prefixes(keyword_lower)
+    variants = []
+    for stem in keyword_stems:
+        for v in _normalize_hebrew(stem):
+            if v not in variants:
+                variants.append(v)
 
+    # --- Pass 1: Search parsed MenuDay data ---
     matches = []
-    for day in days:
-        items = day.menu_items or {}
-        for category, item_list in items.items():
-            if not isinstance(item_list, list):
-                continue
-            for item in item_list:
-                item_str = str(item).lower()
-                match_type = _classify_match(keyword_lower, variants, item_str)
-                if match_type:
-                    matches.append({
-                        "date": day.date,
-                        "day_of_week": day.day_of_week,
-                        "category": category,
-                        "item": item,
-                        "match_type": match_type,
-                    })
+    if days:
+        for day in days:
+            items = day.menu_items or {}
+            for category, item_list in items.items():
+                if not isinstance(item_list, list):
+                    continue
+                for item in item_list:
+                    item_str = str(item).lower()
+                    match_type = _classify_match(keyword_lower, variants, item_str)
+                    if match_type:
+                        matches.append({
+                            "date": day.date,
+                            "day_of_week": day.day_of_week,
+                            "category": category,
+                            "item": item,
+                            "match_type": match_type,
+                            "source": "parsed",
+                        })
 
-    # Sort: exact first, then contains, then prefix, then fuzzy
-    type_order = {"exact": 0, "contains": 1, "prefix": 2, "fuzzy": 3}
-    matches.sort(key=lambda m: (type_order.get(m["match_type"], 9), m["date"]))
+    # --- Pass 2: Search raw file (like Ctrl+F) ---
+    raw_file_matches = []
+    if check.file_path and os.path.exists(check.file_path):
+        raw_file_matches = _search_raw_file(
+            check.file_path, keyword_lower, variants
+        )
+
+    # Merge: add raw file matches that weren't already found in parsed data
+    parsed_items_lower = {m["item"].lower() for m in matches}
+    for rfm in raw_file_matches:
+        if rfm["item"].lower() not in parsed_items_lower:
+            matches.append(rfm)
+
+    # Sort: exact first, then contains, then prefix, then raw_file, then fuzzy
+    type_order = {
+        "exact": 0, "contains": 1, "prefix": 2,
+        "raw_file": 3, "fuzzy": 4,
+    }
+    matches.sort(key=lambda m: (type_order.get(m["match_type"], 9), m.get("date", "")))
 
     # Get unique items for summary
     unique_items = {}
@@ -481,9 +513,12 @@ async def search_menu_items(
             unique_items[key] = {
                 "item": m["item"],
                 "match_type": m["match_type"],
+                "source": m.get("source", "parsed"),
                 "days": [],
             }
-        unique_items[key]["days"].append(m["date"])
+        day_val = m.get("date", "")
+        if day_val and day_val not in unique_items[key]["days"]:
+            unique_items[key]["days"].append(day_val)
 
     return {
         "keyword": keyword,
@@ -491,7 +526,177 @@ async def search_menu_items(
         "total_matches": len(matches),
         "unique_items": list(unique_items.values()),
         "matches_by_day": matches,
+        "raw_file_searched": bool(raw_file_matches) or (
+            check.file_path and os.path.exists(check.file_path)
+        ),
     }
+
+
+def _search_raw_file(
+    file_path: str, keyword: str, variants: list[str]
+) -> list[dict]:
+    """Search the actual uploaded file for keyword (like Excel Ctrl+F).
+
+    Reads the raw file and finds every cell/line containing the keyword.
+    Tries to associate matches with dates from column headers.
+    """
+    import re
+    matches = []
+
+    try:
+        if file_path.endswith((".xlsx", ".xls")):
+            matches = _search_excel_file(file_path, keyword, variants)
+        elif file_path.endswith(".csv"):
+            matches = _search_csv_file(file_path, keyword, variants)
+        else:
+            matches = _search_text_file(file_path, keyword, variants)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Raw file search error: {e}")
+
+    return matches
+
+
+def _search_excel_file(
+    file_path: str, keyword: str, variants: list[str]
+) -> list[dict]:
+    """Search Excel file cell by cell, tracking column dates."""
+    try:
+        import openpyxl
+    except ImportError:
+        return []
+
+    matches = []
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        if not hasattr(ws, "iter_rows"):
+            continue
+
+        all_rows = list(ws.iter_rows(values_only=True))
+        if not all_rows:
+            continue
+
+        # Detect date row — look for dates in first 5 rows
+        col_dates: dict[int, str] = {}
+        import re
+        from datetime import date as date_type
+        for row in all_rows[:5]:
+            for col_idx, cell in enumerate(row):
+                if cell is None:
+                    continue
+                cell_str = str(cell).strip()
+                # Try date patterns: "3/19/2026", "19.3.2026", "2026-03-19"
+                date_match = re.search(
+                    r'(\d{1,2})[./](\d{1,2})[./](\d{2,4})', cell_str
+                )
+                if date_match:
+                    parts = [int(x) for x in date_match.groups()]
+                    # Try M/D/Y and D/M/Y
+                    for m, d, y in [(parts[0], parts[1], parts[2]),
+                                    (parts[1], parts[0], parts[2])]:
+                        if y < 100:
+                            y += 2000
+                        try:
+                            dt = date_type(y, m, d)
+                            col_dates[col_idx] = dt.isoformat()
+                            break
+                        except (ValueError, TypeError):
+                            continue
+                # Also try ISO format
+                iso_match = re.match(r'(\d{4})-(\d{2})-(\d{2})', cell_str)
+                if iso_match and col_idx not in col_dates:
+                    col_dates[col_idx] = cell_str[:10]
+
+        # Search all cells for keyword
+        for row in all_rows:
+            for col_idx, cell in enumerate(row):
+                if cell is None:
+                    continue
+                cell_str = str(cell).strip()
+                cell_lower = cell_str.lower()
+
+                # Check if any variant is a substring of this cell
+                found = False
+                for var in variants:
+                    if var in cell_lower:
+                        found = True
+                        break
+
+                if found and len(cell_str) >= 3:
+                    # Find the date for this column
+                    matched_date = col_dates.get(col_idx, "")
+                    matches.append({
+                        "date": matched_date,
+                        "day_of_week": "",
+                        "category": f"Sheet: {sheet_name}",
+                        "item": cell_str,
+                        "match_type": "raw_file",
+                        "source": "raw_file",
+                    })
+
+    wb.close()
+    return matches
+
+
+def _search_csv_file(
+    file_path: str, keyword: str, variants: list[str]
+) -> list[dict]:
+    """Search CSV file line by line."""
+    import csv
+    matches = []
+
+    for enc in ("utf-8-sig", "cp1255", "latin-1"):
+        try:
+            with open(file_path, "r", encoding=enc) as f:
+                reader = csv.reader(f)
+                for row_idx, row in enumerate(reader):
+                    for cell in row:
+                        cell_str = cell.strip()
+                        cell_lower = cell_str.lower()
+                        for var in variants:
+                            if var in cell_lower and len(cell_str) >= 3:
+                                matches.append({
+                                    "date": "",
+                                    "day_of_week": "",
+                                    "category": f"Row {row_idx + 1}",
+                                    "item": cell_str,
+                                    "match_type": "raw_file",
+                                    "source": "raw_file",
+                                })
+                                break
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+
+    return matches
+
+
+def _search_text_file(
+    file_path: str, keyword: str, variants: list[str]
+) -> list[dict]:
+    """Search plain text file line by line."""
+    matches = []
+    try:
+        with open(file_path, "r", encoding="utf-8-sig") as f:
+            for line_num, line in enumerate(f, 1):
+                line_str = line.strip()
+                line_lower = line_str.lower()
+                for var in variants:
+                    if var in line_lower and len(line_str) >= 3:
+                        matches.append({
+                            "date": "",
+                            "day_of_week": "",
+                            "category": f"Line {line_num}",
+                            "item": line_str,
+                            "match_type": "raw_file",
+                            "source": "raw_file",
+                        })
+                        break
+    except Exception:
+        pass
+    return matches
 
 
 def _classify_match(keyword: str, variants: list[str], item_text: str) -> str | None:
@@ -501,7 +706,6 @@ def _classify_match(keyword: str, variants: list[str], item_text: str) -> str | 
     - "exact": keyword equals item or item word
     - "contains": keyword is a substring of item
     - "prefix": keyword matches after stripping Hebrew prefix letters
-    - "fuzzy": keyword is similar (≥60% character overlap)
     """
     from backend.services.menu_analysis_service import _strip_hebrew_prefixes
 
@@ -529,15 +733,8 @@ def _classify_match(keyword: str, variants: list[str], item_text: str) -> str | 
                     if len(var) >= 3 and len(stem) >= 3:
                         return "prefix"
 
-    # Fuzzy match — character overlap for Hebrew
-    for word in words:
-        for var in variants:
-            if len(var) >= 3 and len(word) >= 3:
-                overlap = len(set(var) & set(word))
-                max_len = max(len(set(var)), len(set(word)))
-                if max_len > 0 and overlap / max_len >= 0.6:
-                    return "fuzzy"
-
+    # No fuzzy matching — too many false positives with Hebrew
+    # Raw file search handles the cases fuzzy was meant to catch
     return None
 
 
