@@ -407,6 +407,7 @@ export default function MenuCheckDetailPage() {
                         result={result}
                         checkId={checkId}
                         onKeywordUpdate={handleKeywordUpdate}
+                        onApplied={loadCheckData}
                       />
                     ))}
                   </div>
@@ -564,10 +565,12 @@ function ResultRow({
   result,
   checkId,
   onKeywordUpdate,
+  onApplied,
 }: {
   result: any;
   checkId: number;
   onKeywordUpdate: (ruleId: number, keyword: string) => Promise<void>;
+  onApplied?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -764,7 +767,12 @@ function ResultRow({
               <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
             </div>
           ) : searchResults ? (
-            <InlineSearchResults results={searchResults} />
+            <InlineSearchResults
+              results={searchResults}
+              resultId={result.id}
+              checkId={checkId}
+              onApplied={onApplied}
+            />
           ) : (
             <p className="text-xs text-gray-500">No data</p>
           )}
@@ -835,12 +843,59 @@ function ResultRow({
 
 /* ─── Inline Search Results ─── */
 
-function InlineSearchResults({ results }: { results: any }) {
+function InlineSearchResults({
+  results,
+  resultId,
+  checkId,
+  onApplied,
+}: {
+  results: any;
+  resultId?: number;
+  checkId?: number;
+  onApplied?: () => void;
+}) {
+  const [approved, setApproved] = useState<Record<number, boolean>>({});
+  const [applying, setApplying] = useState(false);
+  const [applied, setApplied] = useState(false);
+
   const matchTypeStyle: Record<string, { label: string; color: string }> = {
     exact: { label: 'Exact', color: 'bg-green-100 text-green-800' },
     contains: { label: 'Contains', color: 'bg-blue-100 text-blue-800' },
     prefix: { label: 'Prefix', color: 'bg-purple-100 text-purple-800' },
     raw_file: { label: 'File Match', color: 'bg-amber-100 text-amber-800' },
+  };
+
+  const items: any[] = results.unique_items || [];
+
+  // Auto-approve exact and contains matches on first render
+  useEffect(() => {
+    const initial: Record<number, boolean> = {};
+    items.forEach((item: any, idx: number) => {
+      initial[idx] = item.match_type === 'exact' || item.match_type === 'contains';
+    });
+    setApproved(initial);
+  }, [results]);
+
+  const toggleApproval = (idx: number) => {
+    setApproved(prev => ({ ...prev, [idx]: !prev[idx] }));
+    setApplied(false);
+  };
+
+  const approvedItems = items.filter((_: any, idx: number) => approved[idx]);
+  const approvedCount = approvedItems.length;
+
+  const handleApply = async () => {
+    if (!resultId || !checkId || approvedCount === 0) return;
+    setApplying(true);
+    try {
+      await menuComplianceAPI.approveMatches(checkId, resultId, approvedItems);
+      setApplied(true);
+      if (onApplied) onApplied();
+    } catch {
+      // keep panel open
+    } finally {
+      setApplying(false);
+    }
   };
 
   if (results.total_matches === 0) {
@@ -851,14 +906,14 @@ function InlineSearchResults({ results }: { results: any }) {
     );
   }
 
-  const rawFileItems = (results.unique_items || []).filter((i: any) => i.source === 'raw_file');
-  const parsedItems = (results.unique_items || []).filter((i: any) => i.source !== 'raw_file');
+  const rawFileItems = items.filter((i: any) => i.source === 'raw_file');
+  const parsedItems = items.filter((i: any) => i.source !== 'raw_file');
 
   return (
     <div>
       <div className="flex gap-1.5 mb-2">
         {Object.entries(matchTypeStyle).map(([type, { label, color }]) => {
-          const count = (results.unique_items || []).filter((i: any) => i.match_type === type).length;
+          const count = items.filter((i: any) => i.match_type === type).length;
           if (count === 0) return null;
           return (
             <span key={type} className={`px-1.5 py-0.5 text-[10px] rounded-full font-medium ${color}`}>
@@ -867,29 +922,45 @@ function InlineSearchResults({ results }: { results: any }) {
           );
         })}
         <span className="text-[10px] text-gray-400 ml-auto">
-          {results.total_matches} total on {results.unique_items?.length || 0} items
+          {results.total_matches} total on {items.length} items
         </span>
       </div>
       {rawFileItems.length > 0 && parsedItems.length === 0 && (
         <div className="mb-2 px-2 py-1.5 bg-amber-50 border border-amber-200 rounded text-[10px] text-amber-800">
-          ⚠️ Found only in raw file — AI parser missed these items
+          Items found only in raw file — AI parser missed these
         </div>
       )}
       <div className="space-y-1 max-h-48 overflow-y-auto">
-        {(results.unique_items || []).map((item: any, idx: number) => {
+        {items.map((item: any, idx: number) => {
           const mt = matchTypeStyle[item.match_type] || { label: '?', color: 'bg-gray-100 text-gray-600' };
           const isRawFile = item.source === 'raw_file';
+          const isApproved = approved[idx] ?? false;
           return (
-            <div key={idx} className={`flex items-center justify-between py-1 px-2 rounded hover:bg-gray-50 text-xs ${isRawFile ? 'border-l-2 border-amber-400' : ''}`}>
+            <div key={idx} className={`flex items-center justify-between py-1.5 px-2 rounded text-xs transition-colors ${
+              isApproved ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'
+            } ${isRawFile ? 'border-l-2 border-l-amber-400' : ''}`}>
               <div className="flex items-center gap-2">
+                {resultId && (
+                  <button
+                    onClick={() => toggleApproval(idx)}
+                    className={`w-5 h-5 rounded flex items-center justify-center shrink-0 transition-colors ${
+                      isApproved
+                        ? 'bg-green-500 text-white hover:bg-green-600'
+                        : 'bg-white border border-gray-300 text-gray-400 hover:border-red-400 hover:text-red-500'
+                    }`}
+                    title={isApproved ? 'Click to reject' : 'Click to approve'}
+                  >
+                    {isApproved ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                  </button>
+                )}
                 <span className={`px-1 py-0.5 text-[9px] rounded font-medium shrink-0 ${mt.color}`}>
                   {mt.label}
                 </span>
-                <span className="font-medium text-gray-900" dir="rtl">{item.item}</span>
+                <span className={`font-medium ${isApproved ? 'text-gray-900' : 'text-gray-400 line-through'}`} dir="rtl">{item.item}</span>
               </div>
               <div className="flex items-center gap-1 ml-2 shrink-0">
-                {item.days.length > 0 ? item.days.map((d: string) => (
-                  <span key={d} className="px-1.5 py-0.5 text-[10px] bg-blue-50 text-blue-700 rounded font-medium">
+                {item.days.filter((d: string) => d).length > 0 ? item.days.filter((d: string) => d).map((d: string) => (
+                  <span key={d} className={`px-1.5 py-0.5 text-[10px] rounded font-medium ${isApproved ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-400'}`}>
                     {formatDate(d)}
                   </span>
                 )) : (
@@ -900,6 +971,31 @@ function InlineSearchResults({ results }: { results: any }) {
           );
         })}
       </div>
+
+      {/* Apply button */}
+      {resultId && checkId && (
+        <div className="mt-3 flex items-center justify-between border-t pt-2.5">
+          <span className="text-[11px] text-gray-500">
+            {approvedCount} of {items.length} approved
+            {approvedCount > 0 && ` — ${new Set(approvedItems.flatMap((i: any) => i.days.filter((d: string) => d))).size} unique days`}
+          </span>
+          <div className="flex items-center gap-2">
+            {applied && (
+              <span className="text-[11px] text-green-600 font-medium flex items-center gap-1">
+                <Check className="w-3 h-3" /> Updated
+              </span>
+            )}
+            <button
+              onClick={handleApply}
+              disabled={applying || approvedCount === 0}
+              className="px-3 py-1 text-xs font-medium bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
+            >
+              {applying ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              {applying ? 'Saving...' : `Apply ${approvedCount} approved`}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

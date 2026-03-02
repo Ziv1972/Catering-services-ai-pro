@@ -237,6 +237,14 @@ export const menuComplianceAPI = {
     return response.data;
   },
 
+  approveMatches: async (checkId: number, resultId: number, approvedItems: any[]) => {
+    const response = await api.put(
+      `/api/menu-compliance/checks/${checkId}/results/${resultId}/approve-matches`,
+      { approved_items: approvedItems }
+    );
+    return response.data;
+  },
+
   reuploadFile: async (checkId: number, file: File) => {
     const formData = new FormData();
     formData.append('file', file);

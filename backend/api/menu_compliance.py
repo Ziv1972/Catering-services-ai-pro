@@ -738,6 +738,133 @@ def _classify_match(keyword: str, variants: list[str], item_text: str) -> str | 
     return None
 
 
+# --- Match Approval ---
+
+
+class ApproveMatchesRequest(BaseModel):
+    approved_items: list[dict]  # [{"item": "...", "days": [...], "source": "..."}]
+
+
+@router.put("/checks/{check_id}/results/{result_id}/approve-matches")
+async def approve_matches(
+    check_id: int,
+    result_id: int,
+    data: ApproveMatchesRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Approve/reject search matches and update the CheckResult actual count.
+
+    The user reviews search results (parsed + raw file) and approves
+    the items they confirm are valid matches. This updates the actual
+    count to reflect the user's review.
+    """
+    result = await db.execute(
+        select(CheckResult).where(
+            CheckResult.id == result_id,
+            CheckResult.menu_check_id == check_id
+        )
+    )
+    check_result = result.scalar_one_or_none()
+    if not check_result:
+        raise HTTPException(status_code=404, detail="Check result not found")
+
+    evidence = check_result.evidence or {}
+
+    # Count unique dates across all approved items
+    approved_days = set()
+    for item in data.approved_items:
+        for day in item.get("days", []):
+            if day:
+                approved_days.add(day)
+
+    new_actual = len(approved_days)
+    expected = evidence.get("expected_count", 0)
+    is_max = evidence.get("is_max_rule", False)
+
+    # Re-derive comparison and passed
+    if new_actual > expected:
+        new_comparison = "above"
+    elif new_actual < expected:
+        new_comparison = "under"
+    else:
+        new_comparison = "even"
+
+    if is_max:
+        new_passed = new_actual <= expected
+    else:
+        new_passed = new_actual >= expected
+
+    # Build updated evidence (immutable pattern)
+    updated_evidence = {
+        **evidence,
+        "actual_count": new_actual,
+        "comparison": new_comparison,
+        "found_on_days": sorted(approved_days),
+        "user_approved_items": data.approved_items,
+        "user_reviewed": True,
+    }
+
+    item_keyword = evidence.get("item_searched", evidence.get("category_keyword", ""))
+    freq_key = "monthly_freq" if "monthly_freq" in evidence else "weekly_freq"
+    is_monthly = "monthly_freq" in evidence
+
+    new_finding = (
+        f"'{item_keyword}': Expected "
+        f"{'≤' if is_max else '≥'}{expected}"
+        f"{'/' + ('month' if is_monthly else 'week') if freq_key in evidence else ''}, "
+        f"Actual {new_actual} (user-reviewed)"
+    )
+
+    # Update the result
+    check_result.evidence = updated_evidence
+    check_result.actual_count = new_actual
+    check_result.passed = new_passed
+    check_result.finding_text = new_finding
+    check_result.severity = "info" if new_passed else "critical"
+    check_result.reviewed = True
+    check_result.review_status = "approved"
+
+    await db.commit()
+
+    # Recalculate parent MenuCheck summary counts
+    all_results = await db.execute(
+        select(CheckResult).where(CheckResult.menu_check_id == check_id)
+    )
+    all_cr = all_results.scalars().all()
+
+    above_count = sum(1 for cr in all_cr if (cr.evidence or {}).get("comparison") == "above")
+    under_count = sum(1 for cr in all_cr if (cr.evidence or {}).get("comparison") == "under")
+    even_count = sum(1 for cr in all_cr if (cr.evidence or {}).get("comparison") == "even")
+    critical_count = sum(1 for cr in all_cr if cr.severity == "critical")
+    warning_count = sum(1 for cr in all_cr if cr.severity == "warning")
+    passed_count = sum(1 for cr in all_cr if cr.passed)
+
+    check_obj = await db.execute(
+        select(MenuCheck).where(MenuCheck.id == check_id)
+    )
+    menu_check = check_obj.scalar_one_or_none()
+    if menu_check:
+        menu_check.dishes_above = above_count
+        menu_check.dishes_under = under_count
+        menu_check.dishes_even = even_count
+        menu_check.critical_findings = critical_count
+        menu_check.warnings = warning_count
+        menu_check.passed_rules = passed_count
+        menu_check.total_findings = critical_count + warning_count
+        await db.commit()
+
+    return {
+        "result_id": result_id,
+        "old_actual": evidence.get("actual_count", 0),
+        "new_actual": new_actual,
+        "expected": expected,
+        "passed": new_passed,
+        "comparison": new_comparison,
+        "approved_days": sorted(approved_days),
+    }
+
+
 # --- Compliance Rules CRUD ---
 
 
