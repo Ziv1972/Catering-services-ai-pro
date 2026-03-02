@@ -1,16 +1,21 @@
 """
-Automated IMAP email poller for daily FoodHouse meal reports.
+Automated IMAP email poller for daily meal reports.
 
 Connects to an IMAP mailbox (Gmail, Outlook, etc.), searches for
-unread meal-report emails, extracts CSV attachments or inline tables,
+unread meal-report emails, extracts CSV/Excel attachments or inline tables,
 and upserts them into the daily_meal_counts table.
+
+Supports:
+- Cibus Pluxee salary reports (noreply@notifications.pluxee.co.il)
+- FoodHouse daily meal reports
+- Forwarded emails (searches body for original sender)
 
 Config (in .env):
     IMAP_HOST=imap.gmail.com
     IMAP_EMAIL=your@gmail.com
     IMAP_PASSWORD=abcd efgh ijkl mnop   # Gmail app password
-    MEAL_EMAIL_SENDER=noreply@foodhouse  # partial match on From
-    MEAL_EMAIL_SUBJECT=Hadri_Ochel       # partial match on Subject
+    MEAL_EMAIL_SENDER=pluxee             # partial match on From or body
+    MEAL_EMAIL_SUBJECT=Salary Report     # partial match on Subject
     MEAL_POLL_INTERVAL_MIN=60
 """
 import asyncio
@@ -67,6 +72,115 @@ def _extract_csv_from_attachment(msg: email_lib.message.Message) -> Optional[str
     return None
 
 
+def _extract_excel_from_attachment(msg: email_lib.message.Message) -> Optional[list[dict]]:
+    """Walk MIME parts looking for an Excel attachment (.xlsx/.xls).
+    Returns parsed rows [{name, quantity}] or None."""
+    for part in msg.walk():
+        content_disp = str(part.get("Content-Disposition") or "")
+        filename = part.get_filename()
+        if filename:
+            filename = _decode_header_value(filename)
+
+        if not filename:
+            continue
+
+        ext = filename.lower()
+        if "attachment" in content_disp and (ext.endswith(".xlsx") or ext.endswith(".xls")):
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+
+            try:
+                return _parse_excel_bytes(payload, filename)
+            except Exception as e:
+                logger.error(f"Error parsing Excel attachment {filename}: {e}")
+                continue
+    return None
+
+
+def _parse_excel_bytes(data: bytes, filename: str = "") -> list[dict]:
+    """Parse Excel bytes into [{name, quantity}] rows."""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(
+            io.BytesIO(data), read_only=True, data_only=True
+        )
+    except ImportError:
+        logger.warning("openpyxl not installed — cannot parse Excel attachment")
+        return []
+    except Exception as e:
+        logger.error(f"Failed to open Excel {filename}: {e}")
+        return []
+
+    rows: list[dict] = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        if not hasattr(ws, "iter_rows"):
+            continue
+
+        header_row = None
+        name_col = None
+        qty_col = None
+
+        for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
+            str_cells = [str(c).strip().lower() if c else "" for c in row]
+
+            # Detect header row
+            if header_row is None:
+                for i, cell in enumerate(str_cells):
+                    if any(kw in cell for kw in ["שם", "מסעדה", "name", "restaurant", "description"]):
+                        name_col = i
+                    if any(kw in cell for kw in ["כמות", "quantity", "count", "סכום", "total", "מספר"]):
+                        qty_col = i
+                if name_col is not None and qty_col is not None:
+                    header_row = row_idx
+                    continue
+
+                # Fallback: if first row has text + number pattern
+                if row_idx == 0 and len(row) >= 2:
+                    for i, c in enumerate(row):
+                        if c and isinstance(c, str) and len(c) > 2:
+                            name_col = i
+                            break
+                    for i, c in enumerate(row):
+                        if isinstance(c, (int, float)) and c > 0:
+                            qty_col = i
+                            break
+                    if name_col is not None and qty_col is not None:
+                        # First row is data, not header
+                        header_row = -1
+                        try:
+                            name_val = str(row[name_col]).strip()
+                            qty_val = float(row[qty_col])
+                            if name_val and qty_val > 0:
+                                rows.append({"name": name_val, "quantity": qty_val})
+                        except (ValueError, TypeError, IndexError):
+                            pass
+                        continue
+
+                continue
+
+            # Data rows
+            if name_col is not None and qty_col is not None:
+                try:
+                    raw_cells = list(row) if not isinstance(row, (list, tuple)) else row
+                    name_val = str(raw_cells[name_col]).strip() if raw_cells[name_col] else ""
+                    qty_raw = raw_cells[qty_col]
+
+                    if not name_val or name_val.lower() == "none":
+                        continue
+
+                    qty_val = float(str(qty_raw).replace(",", "")) if qty_raw else 0
+                    if qty_val > 0:
+                        rows.append({"name": name_val, "quantity": qty_val})
+                except (ValueError, TypeError, IndexError):
+                    continue
+
+    wb.close()
+    logger.info(f"Excel parsed {len(rows)} rows from {filename}")
+    return rows
+
+
 def _extract_csv_from_body(msg: email_lib.message.Message) -> Optional[str]:
     """Fallback: look for CSV-like data in the email body (plain text)."""
     for part in msg.walk():
@@ -105,7 +219,38 @@ def _parse_csv_text(text: str) -> list[dict]:
 
 
 def _extract_date_from_email(msg: email_lib.message.Message) -> date:
-    """Try to extract the meal date from the email Date header."""
+    """Try to extract the meal date from subject line first, then Date header.
+
+    Subject examples:
+        "FW: Salary Report 2026-03-02 3185" → 2026-03-02
+        "Hadri_Ochel_2026-03-01"            → 2026-03-01
+    """
+    # 1. Try subject line (most reliable for meal date)
+    subject = _decode_header_value(msg.get("Subject", ""))
+    date_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', subject)
+    if date_match:
+        try:
+            return date(
+                int(date_match.group(1)),
+                int(date_match.group(2)),
+                int(date_match.group(3)),
+            )
+        except (ValueError, TypeError):
+            pass
+
+    # 2. Try DD/MM/YYYY or DD.MM.YYYY in subject
+    date_match = re.search(r'(\d{1,2})[./](\d{1,2})[./](\d{4})', subject)
+    if date_match:
+        try:
+            return date(
+                int(date_match.group(3)),
+                int(date_match.group(2)),
+                int(date_match.group(1)),
+            )
+        except (ValueError, TypeError):
+            pass
+
+    # 3. Fall back to email Date header
     date_str = msg.get("Date", "")
     if date_str:
         try:
@@ -113,6 +258,7 @@ def _extract_date_from_email(msg: email_lib.message.Message) -> date:
             return parsed.date()
         except Exception:
             pass
+
     return date.today()
 
 
@@ -136,14 +282,22 @@ def _fetch_meal_emails(
         mail.select("INBOX")
 
         # Build IMAP search criteria
+        # For forwarded emails, the From might be the forwarder, not the original sender.
+        # We search by subject first (more reliable), and optionally also by From.
         criteria_parts = ["UNSEEN"]
-        if sender_filter:
-            criteria_parts.append(f'FROM "{sender_filter}"')
         if subject_filter:
             criteria_parts.append(f'SUBJECT "{subject_filter}"')
+        if sender_filter:
+            criteria_parts.append(f'FROM "{sender_filter}"')
 
         search_criteria = "(" + " ".join(criteria_parts) + ")"
         status, data = mail.uid("search", None, search_criteria)
+
+        # If no results with both filters, try subject-only (handles forwarded emails)
+        if (status != "OK" or not data[0]) and sender_filter and subject_filter:
+            logger.info("No results with sender+subject filter, trying subject-only")
+            fallback_criteria = f'(UNSEEN SUBJECT "{subject_filter}")'
+            status, data = mail.uid("search", None, fallback_criteria)
 
         if status != "OK" or not data[0]:
             mail.logout()
@@ -164,18 +318,29 @@ def _fetch_meal_emails(
                 subject = _decode_header_value(msg.get("Subject", ""))
                 logger.info(f"Processing meal email: {subject}")
 
-                # Try attachment first, then body
-                csv_text = _extract_csv_from_attachment(msg)
-                if not csv_text:
-                    csv_text = _extract_csv_from_body(msg)
+                # Try Excel attachment first, then CSV attachment, then body
+                rows = None
 
-                if not csv_text:
-                    logger.warning(f"No CSV data found in email: {subject}")
-                    continue
+                # 1. Try Excel attachment
+                excel_rows = _extract_excel_from_attachment(msg)
+                if excel_rows:
+                    rows = excel_rows
+                    logger.info(f"Parsed {len(rows)} rows from Excel attachment")
 
-                rows = _parse_csv_text(csv_text)
+                # 2. Try CSV attachment
                 if not rows:
-                    logger.warning(f"No valid rows parsed from email: {subject}")
+                    csv_text = _extract_csv_from_attachment(msg)
+                    if csv_text:
+                        rows = _parse_csv_text(csv_text)
+
+                # 3. Try CSV-like data in body
+                if not rows:
+                    csv_text = _extract_csv_from_body(msg)
+                    if csv_text:
+                        rows = _parse_csv_text(csv_text)
+
+                if not rows:
+                    logger.warning(f"No parseable data found in email: {subject}")
                     continue
 
                 meal_date = _extract_date_from_email(msg)

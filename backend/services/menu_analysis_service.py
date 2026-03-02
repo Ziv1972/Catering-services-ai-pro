@@ -23,6 +23,78 @@ from backend.services.claude_service import claude_service
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Month name → number mapping (English + Hebrew)
+# ---------------------------------------------------------------------------
+MONTH_NAME_MAP = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4,
+    "jun": 6, "jul": 7, "aug": 8, "sep": 9,
+    "oct": 10, "nov": 11, "dec": 12,
+    # Hebrew month names
+    "ינואר": 1, "פברואר": 2, "מרץ": 3, "אפריל": 4,
+    "מאי": 5, "יוני": 6, "יולי": 7, "אוגוסט": 8,
+    "ספטמבר": 9, "אוקטובר": 10, "נובמבר": 11, "דצמבר": 12,
+}
+
+# Hebrew plural → singular stems for category matching
+HEBREW_PLURAL_MAP = {
+    "סלטים": "סלט",
+    "מרקים": "מרק",
+    "ירקות": "ירק",
+    "קינוחים": "קינוח",
+    "תוספות": "תוספת",
+    "פירות": "פרי",
+    "עוגות": "עוגה",
+    "לחמים": "לחם",
+    "מנות": "מנה",
+    "שתיות": "שתיה",
+    "דגים": "דג",
+    "עופות": "עוף",
+    "בשרים": "בשר",
+    "קטניות": "קטנית",
+    "פחמימות": "פחמימה",
+}
+
+
+def _parse_month_number(month: str) -> int:
+    """Convert month string (name or number, possibly with prefix) to int.
+
+    Examples:
+        "3" → 3, "03" → 3, "March" → 3, "march" → 3,
+        "2025-03" → 3, "מרץ" → 3
+    """
+    if not month:
+        return 1
+
+    # Try "YYYY-MM" format
+    if "-" in month:
+        part = month.split("-")[-1].strip()
+        try:
+            return int(part)
+        except ValueError:
+            pass
+
+    # Try direct int
+    try:
+        return int(month)
+    except ValueError:
+        pass
+
+    # Try month name lookup
+    cleaned = month.strip().lower()
+    if cleaned in MONTH_NAME_MAP:
+        return MONTH_NAME_MAP[cleaned]
+
+    # Try Hebrew (no lowering needed — already in map)
+    if month.strip() in MONTH_NAME_MAP:
+        return MONTH_NAME_MAP[month.strip()]
+
+    logger.warning(f"Could not parse month '{month}', defaulting to 1")
+    return 1
+
 
 AI_MENU_PARSE_PROMPT = """You are a menu parser for Israeli institutional catering.
 Parse the following raw menu text into structured JSON.
@@ -325,10 +397,7 @@ def _extract_days_from_excel_columns(
 
         # Extract dishes per column (day)
         days_data = []
-        try:
-            month_num = int(month.split("-")[-1]) if "-" in month else int(month)
-        except ValueError:
-            month_num = 1
+        month_num = _parse_month_number(month)
 
         for i, col_idx in enumerate(day_col_indices):
             items: list[str] = []
@@ -370,8 +439,8 @@ def _extract_days_from_excel_columns(
 def _generate_placeholder_days(month: str, year: int) -> list[dict]:
     """Generate placeholder weekday entries when parsing fails."""
     try:
-        month_num = int(month.split("-")[-1]) if "-" in month else int(month)
-    except ValueError:
+        month_num = _parse_month_number(month)
+    except (ValueError, TypeError):
         month_num = 1
 
     start = date(year, month_num, 1)
@@ -409,7 +478,7 @@ def _extract_item_and_freq(name: str) -> tuple:
         "המבורגר פעם בשבוע"         → ("המבורגר", 1.0, False)
         "נקניקיות מקסימום פעם בשבוע" → ("נקניקיות", 1.0, True)
         "חזה עוף בגריל 5 פעמים בשבוע" → ("חזה עוף בגריל", 5.0, False)
-        "כנאפה אסאדו"              → ("כנאפה אסאדו", 1.0, False)
+        "כנאפה אסאדו"              → ("כנאפה", 1.0, False)  # split compound
     """
     is_max = "מקסימום" in name
     clean = name.replace("מקסימום", "").strip()
@@ -417,15 +486,65 @@ def _extract_item_and_freq(name: str) -> tuple:
     # Pattern: "ITEM X.Y פעמ..."
     match = re.match(r'^(.+?)\s+(\d+(?:\.\d+)?)\s+פעמ', clean)
     if match:
-        return match.group(1).strip(), float(match.group(2)), is_max
+        return _clean_keyword(match.group(1).strip()), float(match.group(2)), is_max
 
     # Pattern: "ITEM פעם ב..."
     match = re.match(r'^(.+?)\s+פעם\s+ב', clean)
     if match:
-        return match.group(1).strip(), 1.0, is_max
+        return _clean_keyword(match.group(1).strip()), 1.0, is_max
 
-    # No frequency pattern — use full name as item keyword, default freq 1
-    return clean, 1.0, is_max
+    # No frequency pattern — extract meaningful keyword from compound name
+    keyword = _extract_short_keyword(clean)
+    return keyword, 1.0, is_max
+
+
+def _clean_keyword(keyword: str) -> str:
+    """Clean up extracted keyword — strip trailing noise words."""
+    # Strip trailing "ביום" / "בשבוע" / "בחודש"
+    keyword = re.sub(r'\s+(ביום|בשבוע|בחודש|בחודשי|בשבועי)$', '', keyword)
+    # Strip trailing "סוגי" (e.g. "11 סוגי סלטים" → already handled by count)
+    keyword = re.sub(r'\s+סוגי$', '', keyword)
+    return keyword.strip()
+
+
+def _extract_short_keyword(name: str) -> str:
+    """Extract a meaningful short keyword from a compound rule name.
+
+    When there's no frequency pattern, the rule name itself is compound.
+    Split on common delimiters and extract the first meaningful Hebrew part.
+
+    Examples:
+        "כנאפה אסאדו"               → "כנאפה"  (first word)
+        "אין חזרה על מרק"            → "מרק"    (last noun)
+        "סלט חומוס יומי"            → "חומוס"   (after prefix strip)
+        "לחם שום"                   → "לחם שום" (short enough, keep)
+    """
+    # Strip "ביום" suffix
+    clean = re.sub(r'\s+(ביום|בשבוע|בחודש)$', '', name).strip()
+
+    # Strip common rule prefixes
+    prefix_patterns = [
+        r'^אין\s+(לחזור|חזרה)\s+(על\s+)?',  # "אין לחזור על..."
+        r'^אין\s+אותו\s+',                    # "אין אותו..."
+        r'^אין\s+',                            # "אין..."
+    ]
+    for pattern in prefix_patterns:
+        clean = re.sub(pattern, '', clean).strip()
+
+    # If "או" (or) present, split and take first part
+    if " או " in clean:
+        clean = clean.split(" או ")[0].strip()
+
+    # If "/" present, take first part
+    if "/" in clean:
+        clean = clean.split("/")[0].strip()
+
+    # If still longer than 3 words, take first 2 meaningful words
+    words = clean.split()
+    if len(words) > 3:
+        clean = " ".join(words[:2])
+
+    return clean.strip() if clean.strip() else name
 
 
 def _extract_daily_count(name: str) -> tuple:
@@ -463,8 +582,10 @@ def _extract_item_present_keyword(name: str) -> str:
         "גריל יומי"           → "גריל"
         "מנת בקר יומית"       → "בקר"
         "קרוטונים יומיים"     → "קרוטונים"
+        "סלט ירקות ביום"      → "ירקות"
     """
-    clean = re.sub(r'\s+(יומי|יומית|יומיים|יומיות)$', '', name).strip()
+    # Strip trailing "ביום", "יומי", "יומית", etc.
+    clean = re.sub(r'\s+(יומי|יומית|יומיים|יומיות|ביום)$', '', name).strip()
     # Remove common prefixes like "סלט", "מנת", "מנה"
     for prefix in ["סלט ", "מנת ", "מנה "]:
         if clean.startswith(prefix):
@@ -489,36 +610,153 @@ def _derive_comparison(actual: int, expected: int) -> str:
     return "even"
 
 
-def _count_item_occurrences(item_keyword: str, item_counter: Counter) -> int:
-    """Count how many times an item appears using substring match."""
-    keyword = item_keyword.lower()
-    return sum(v for k, v in item_counter.items() if keyword in k)
+# Mapping from Hebrew keywords in rules → dish catalog categories
+KEYWORD_TO_CATALOG_CATEGORY = {
+    "בקר": ["protein_beef"],
+    "עוף": ["protein_chicken", "chicken_breast", "schnitzel"],
+    "שניצל": ["schnitzel"],
+    "חזה עוף": ["chicken_breast"],
+    "דג": ["fish"],
+    "מרק": ["soup"],
+    "סלט": ["salads"],
+    "סלטים": ["salads"],
+    "קינוח": ["desserts"],
+    "קינוחים": ["desserts"],
+    "טבעוני": ["vegan"],
+    "קטניות": ["legumes"],
+    "פחמימ": ["carbs"],
+    "תוספ": ["side_dish"],
+}
+
+
+def _count_catalog_matches(
+    keyword: str,
+    item_counter: Counter,
+    catalog_map: dict[str, str],
+) -> int:
+    """Count items matching keyword via catalog category lookup.
+
+    If keyword maps to known catalog categories, also count items
+    whose catalog category matches — even if the keyword doesn't
+    appear as a substring in the dish name."""
+    # Find matching catalog categories
+    matched_categories: list[str] = []
+    for kw, cats in KEYWORD_TO_CATALOG_CATEGORY.items():
+        if kw in keyword.lower() or keyword.lower() in kw:
+            matched_categories.extend(cats)
+
+    if not matched_categories:
+        return 0
+
+    # Count items whose catalog entry matches these categories
+    extra = 0
+    for item_name, count in item_counter.items():
+        if item_name in catalog_map:
+            if catalog_map[item_name] in matched_categories:
+                extra += count
+
+    return extra
+
+
+def _normalize_hebrew(keyword: str) -> list[str]:
+    """Return keyword + its singular/plural variants for matching.
+
+    Examples:
+        "סלטים" → ["סלטים", "סלט"]
+        "סלט"   → ["סלט", "סלטים"]
+        "בשר"   → ["בשר", "בשרים"]
+        "מרק"   → ["מרק", "מרקים"]
+    """
+    variants = [keyword]
+
+    # Check if keyword IS a plural form → add singular
+    if keyword in HEBREW_PLURAL_MAP:
+        variants.append(HEBREW_PLURAL_MAP[keyword])
+
+    # Check if keyword IS a singular form → add plural
+    for plural, singular in HEBREW_PLURAL_MAP.items():
+        if keyword == singular and plural not in variants:
+            variants.append(plural)
+
+    # Common Hebrew plural suffixes heuristic
+    if keyword.endswith("ים") and len(keyword) > 3:
+        stem = keyword[:-2]
+        if stem not in variants:
+            variants.append(stem)
+    elif keyword.endswith("ות") and len(keyword) > 3:
+        stem = keyword[:-2]
+        if stem not in variants:
+            variants.append(stem)
+
+    return variants
+
+
+def _count_item_occurrences(
+    item_keyword: str,
+    item_counter: Counter,
+    catalog_map: dict[str, str] | None = None,
+) -> int:
+    """Count how many times an item appears using substring match with plural/singular awareness.
+
+    Also checks catalog categories for enhanced matching."""
+    variants = _normalize_hebrew(item_keyword.lower())
+    matched_items: set[str] = set()
+    total = 0
+
+    # 1. Substring match with variants
+    for k, v in item_counter.items():
+        if any(var in k for var in variants):
+            total += v
+            matched_items.add(k)
+
+    # 2. Catalog-enhanced matching (only for items not already matched)
+    if catalog_map:
+        catalog_extra = 0
+        for item_name, count in item_counter.items():
+            if item_name in matched_items:
+                continue  # already counted
+            if item_name in catalog_map:
+                cat = catalog_map[item_name]
+                # Check if rule keyword maps to this catalog category
+                for kw, cats in KEYWORD_TO_CATALOG_CATEGORY.items():
+                    if (kw in item_keyword.lower() or item_keyword.lower() in kw) and cat in cats:
+                        catalog_extra += count
+                        break
+        total += catalog_extra
+
+    return total
+
+
+def _matches_any_variant(variants: list[str], text: str) -> bool:
+    """Check if any keyword variant appears in the text."""
+    text_lower = text.lower()
+    return any(var in text_lower for var in variants)
 
 
 def _count_daily_item_presence(item_keyword: str, daily_categories: list) -> int:
-    """Count how many days an item appears on."""
-    keyword = item_keyword.lower()
+    """Count how many days an item appears on (with plural/singular awareness)."""
+    variants = _normalize_hebrew(item_keyword.lower())
     return sum(
         1 for dc in daily_categories
-        if any(keyword in str(item).lower() for _, item in dc["items"])
+        if any(_matches_any_variant(variants, str(item)) for _, item in dc["items"])
     )
 
 
 def _find_item_days(item_keyword: str, daily_categories: list) -> list[str]:
     """Return list of dates where the item appears."""
-    keyword = item_keyword.lower()
+    variants = _normalize_hebrew(item_keyword.lower())
     return [
         dc["date"] for dc in daily_categories
-        if any(keyword in str(item).lower() for _, item in dc["items"])
+        if any(_matches_any_variant(variants, str(item)) for _, item in dc["items"])
     ]
 
 
 def _find_missing_days(item_keyword: str, daily_categories: list) -> list[str]:
     """Return list of dates where the item does NOT appear."""
-    keyword = item_keyword.lower()
+    variants = _normalize_hebrew(item_keyword.lower())
     return [
         dc["date"] for dc in daily_categories
-        if not any(keyword in str(item).lower() for _, item in dc["items"])
+        if not any(_matches_any_variant(variants, str(item)) for _, item in dc["items"])
     ]
 
 
@@ -597,8 +835,20 @@ async def run_compliance_check(
             }
             days_data.append(day_info)
 
-    # Run rules against menu data
-    check_results = _evaluate_rules(rules, days_data)
+    # Load dish catalog for enhanced matching
+    catalog_result = await db.execute(
+        select(DishCatalog).where(DishCatalog.category.isnot(None))
+    )
+    catalog_entries = catalog_result.scalars().all()
+    catalog_map = {
+        entry.dish_name.lower(): entry.category
+        for entry in catalog_entries
+        if entry.category
+    }
+    logger.info(f"Loaded {len(catalog_map)} categorized dishes from catalog")
+
+    # Run rules against menu data (with catalog enhancement)
+    check_results = _evaluate_rules(rules, days_data, catalog_map=catalog_map)
 
     critical_count = 0
     warning_count = 0
@@ -748,9 +998,42 @@ async def _auto_extract_dishes_to_catalog(
 # Rule evaluation
 # ---------------------------------------------------------------------------
 
-def _evaluate_rules(rules: list, days_data: list[dict]) -> list[dict]:
+def _detect_fallback_mode(days_data: list[dict]) -> bool:
+    """Detect if all days have identical items (fallback mode).
+
+    When the direct extraction fallback is used, every day gets the same
+    set of dishes. In this mode, no_repeat / no_consecutive rules should
+    be treated as "not evaluable" rather than penalized."""
+    if len(days_data) < 2:
+        return False
+
+    # Compare items of first two days
+    items_0 = sorted(
+        str(item)
+        for item_list in days_data[0].get("items", {}).values()
+        if isinstance(item_list, list)
+        for item in item_list
+    )
+    items_1 = sorted(
+        str(item)
+        for item_list in days_data[1].get("items", {}).values()
+        if isinstance(item_list, list)
+        for item in item_list
+    )
+
+    return items_0 == items_1 and len(items_0) > 10
+
+
+def _evaluate_rules(
+    rules: list,
+    days_data: list[dict],
+    catalog_map: dict[str, str] | None = None,
+) -> list[dict]:
     """Evaluate compliance rules against parsed menu days."""
     results = []
+    is_fallback = _detect_fallback_mode(days_data)
+    if catalog_map is None:
+        catalog_map = {}
 
     all_items_flat = []
     daily_categories = []
@@ -774,7 +1057,9 @@ def _evaluate_rules(rules: list, days_data: list[dict]) -> list[dict]:
 
     for rule in rules:
         rule_result = _check_single_rule(
-            rule, days_data, daily_categories, item_counter, total_days
+            rule, days_data, daily_categories, item_counter, total_days,
+            is_fallback=is_fallback,
+            catalog_map=catalog_map,
         )
         results.append(rule_result)
 
@@ -786,7 +1071,9 @@ def _check_single_rule(
     days_data: list[dict],
     daily_categories: list[dict],
     item_counter: Counter,
-    total_days: int
+    total_days: int,
+    is_fallback: bool = False,
+    catalog_map: dict[str, str] | None = None,
 ) -> dict:
     """Check a single compliance rule — handles all Hebrew rule types."""
     params = rule.parameters or {}
@@ -831,7 +1118,7 @@ def _check_single_rule(
             freq = params["max_per_week"]
             is_max = True
 
-        actual = _count_item_occurrences(item_keyword, item_counter)
+        actual = _count_item_occurrences(item_keyword, item_counter, catalog_map)
         expected = round(freq * weeks_in_month)
         comparison = _derive_comparison(actual, expected)
         found_days = _find_item_days(item_keyword, daily_categories)
@@ -873,7 +1160,7 @@ def _check_single_rule(
             freq = params["max_per_month"]
             is_max = True
 
-        actual = _count_item_occurrences(item_keyword, item_counter)
+        actual = _count_item_occurrences(item_keyword, item_counter, catalog_map)
         expected = round(freq)
         comparison = _derive_comparison(actual, expected)
         found_days = _find_item_days(item_keyword, daily_categories)
@@ -911,14 +1198,18 @@ def _check_single_rule(
 
         if has_min_pattern:
             # Daily variety check — how many distinct items per day match category
+            cat_variants = _normalize_hebrew(cat_keyword.lower())
             daily_counts = []
             met_days = []
             unmet_days = []
             for dc in daily_categories:
                 day_count = sum(
                     1 for _, item in dc["items"]
-                    if cat_keyword.lower() in str(item).lower()
-                    or any(cat_keyword.lower() in c.lower() for c in dc["categories"])
+                    if _matches_any_variant(cat_variants, str(item))
+                    or any(
+                        any(var in c.lower() for var in cat_variants)
+                        for c in dc["categories"]
+                    )
                 )
                 daily_counts.append(day_count)
                 if day_count >= min_count:
@@ -1058,6 +1349,18 @@ def _check_single_rule(
     # no_repeat_weekly — "אין אותו מרק פעמיים בשבוע"
     # =================================================================
     if rule_type == "no_repeat_weekly":
+        if is_fallback:
+            return {
+                **base,
+                "passed": True,
+                "finding_text": "Cannot evaluate — menu parsed in fallback mode (same items on all days). Re-upload with structured data.",
+                "evidence": {
+                    "expected_count": 0,
+                    "actual_count": 0,
+                    "comparison": "even",
+                    "note": "Skipped: fallback mode",
+                },
+            }
         repeats = 0
         weeks: dict[int, list] = {}
         for dc in daily_categories:
@@ -1097,6 +1400,18 @@ def _check_single_rule(
     # no_repeat_daily — "אין לחזור על אותו סלט פעמיים ביום"
     # =================================================================
     if rule_type == "no_repeat_daily":
+        if is_fallback:
+            return {
+                **base,
+                "passed": True,
+                "finding_text": "Cannot evaluate — menu parsed in fallback mode. Re-upload with structured data.",
+                "evidence": {
+                    "expected_count": 0,
+                    "actual_count": 0,
+                    "comparison": "even",
+                    "note": "Skipped: fallback mode",
+                },
+            }
         repeats = 0
         for dc in daily_categories:
             items_lower = [str(item).lower() for _, item in dc["items"]]
@@ -1125,6 +1440,18 @@ def _check_single_rule(
     # no_consecutive — "אין לחזור על אותו פריט יום אחר יום"
     # =================================================================
     if rule_type == "no_consecutive":
+        if is_fallback:
+            return {
+                **base,
+                "passed": True,
+                "finding_text": "Cannot evaluate — menu parsed in fallback mode. Re-upload with structured data.",
+                "evidence": {
+                    "expected_count": 0,
+                    "actual_count": 0,
+                    "comparison": "even",
+                    "note": "Skipped: fallback mode",
+                },
+            }
         consecutive_repeats = 0
         prev_items: set = set()
         for dc in daily_categories:
@@ -1160,7 +1487,7 @@ def _check_single_rule(
         target_item = params.get("item", "").lower()
 
         if target_item:
-            actual = _count_item_occurrences(target_item, item_counter)
+            actual = _count_item_occurrences(target_item, item_counter, catalog_map)
             weekly_avg = actual / weeks_in_month
 
             if min_per_week is not None:
@@ -1280,7 +1607,7 @@ def _check_single_rule(
     # =================================================================
     item_keyword, freq, is_max = _extract_item_and_freq(name)
     if freq > 0 and item_keyword:
-        actual = _count_item_occurrences(item_keyword, item_counter)
+        actual = _count_item_occurrences(item_keyword, item_counter, catalog_map)
         expected = round(freq)
         comparison = _derive_comparison(actual, expected)
         passed = actual <= expected if is_max else actual >= expected
