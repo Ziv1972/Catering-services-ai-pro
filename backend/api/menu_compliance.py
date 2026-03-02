@@ -393,6 +393,154 @@ async def delete_check(
     return {"message": "Check deleted successfully"}
 
 
+@router.get("/checks/{check_id}/menu-items")
+async def get_menu_items(
+    check_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all parsed menu items for a check, grouped by day."""
+    result = await db.execute(
+        select(MenuDay)
+        .where(MenuDay.menu_check_id == check_id)
+        .order_by(MenuDay.date)
+    )
+    days = result.scalars().all()
+
+    if not days:
+        raise HTTPException(status_code=404, detail="No parsed menu days found for this check")
+
+    return [
+        {
+            "id": day.id,
+            "date": day.date,
+            "day_of_week": day.day_of_week,
+            "week_number": day.week_number,
+            "items": day.menu_items or {},
+        }
+        for day in days
+    ]
+
+
+@router.get("/checks/{check_id}/search-items")
+async def search_menu_items(
+    check_id: int,
+    keyword: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Search for a keyword across all parsed menu items.
+
+    Returns ALL potential matches (substring, prefix-stripped, fuzzy) so
+    the user can review and approve/reject each match.
+    """
+    from backend.services.menu_analysis_service import (
+        _normalize_hebrew, _strip_hebrew_prefixes
+    )
+
+    result = await db.execute(
+        select(MenuDay)
+        .where(MenuDay.menu_check_id == check_id)
+        .order_by(MenuDay.date)
+    )
+    days = result.scalars().all()
+
+    if not days:
+        raise HTTPException(status_code=404, detail="No parsed menu days found")
+
+    keyword_lower = keyword.lower().strip()
+    variants = _normalize_hebrew(keyword_lower)
+
+    matches = []
+    for day in days:
+        items = day.menu_items or {}
+        for category, item_list in items.items():
+            if not isinstance(item_list, list):
+                continue
+            for item in item_list:
+                item_str = str(item).lower()
+                match_type = _classify_match(keyword_lower, variants, item_str)
+                if match_type:
+                    matches.append({
+                        "date": day.date,
+                        "day_of_week": day.day_of_week,
+                        "category": category,
+                        "item": item,
+                        "match_type": match_type,
+                    })
+
+    # Sort: exact first, then contains, then prefix, then fuzzy
+    type_order = {"exact": 0, "contains": 1, "prefix": 2, "fuzzy": 3}
+    matches.sort(key=lambda m: (type_order.get(m["match_type"], 9), m["date"]))
+
+    # Get unique items for summary
+    unique_items = {}
+    for m in matches:
+        key = m["item"]
+        if key not in unique_items:
+            unique_items[key] = {
+                "item": m["item"],
+                "match_type": m["match_type"],
+                "days": [],
+            }
+        unique_items[key]["days"].append(m["date"])
+
+    return {
+        "keyword": keyword,
+        "variants_searched": variants,
+        "total_matches": len(matches),
+        "unique_items": list(unique_items.values()),
+        "matches_by_day": matches,
+    }
+
+
+def _classify_match(keyword: str, variants: list[str], item_text: str) -> str | None:
+    """Classify how well a keyword matches an item.
+
+    Returns match type or None if no match:
+    - "exact": keyword equals item or item word
+    - "contains": keyword is a substring of item
+    - "prefix": keyword matches after stripping Hebrew prefix letters
+    - "fuzzy": keyword is similar (≥60% character overlap)
+    """
+    from backend.services.menu_analysis_service import _strip_hebrew_prefixes
+
+    # Exact match (whole item or any word)
+    words = item_text.split()
+    for var in variants:
+        if var == item_text:
+            return "exact"
+        if var in words:
+            return "exact"
+
+    # Contains (substring)
+    for var in variants:
+        if var in item_text:
+            return "contains"
+
+    # Prefix-stripped match
+    for word in words:
+        stems = _strip_hebrew_prefixes(word)
+        for stem in stems:
+            for var in variants:
+                if var == stem:
+                    return "prefix"
+                if var in stem or stem in var:
+                    if len(var) >= 3 and len(stem) >= 3:
+                        return "prefix"
+
+    # Fuzzy match — character overlap for Hebrew
+    for word in words:
+        for var in variants:
+            if len(var) >= 3 and len(word) >= 3:
+                overlap = len(set(var) & set(word))
+                max_len = max(len(set(var)), len(set(word)))
+                if max_len > 0 and overlap / max_len >= 0.6:
+                    return "fuzzy"
+
+    return None
+
+
 # --- Compliance Rules CRUD ---
 
 

@@ -658,14 +658,49 @@ def _count_catalog_matches(
     return extra
 
 
+def _strip_hebrew_prefixes(word: str) -> list[str]:
+    """Strip common Hebrew prefix letters and return all possible stems.
+
+    Hebrew has single-letter prefixes that attach directly to words:
+    ב (in/with), ה (the), ו (and), ל (to/for), מ (from), כ (like), ש (that)
+    And two-letter combos: וב, ול, וה, מה, שב, של, כש, etc.
+
+    Examples:
+        "בחריימה"  → ["בחריימה", "חריימה"]
+        "והחריימה" → ["והחריימה", "החריימה", "חריימה"]
+        "שניצל"    → ["שניצל", "ניצל"]  (but "שניצל" IS a word, so we keep both)
+    """
+    stems = [word]
+    if len(word) <= 2:
+        return stems
+
+    # Two-letter prefix combos (check first)
+    two_prefixes = ["וב", "ול", "וה", "ומ", "וכ", "וש", "מה", "שב", "של", "כש", "לב"]
+    for prefix in two_prefixes:
+        if word.startswith(prefix) and len(word) > len(prefix) + 1:
+            stem = word[len(prefix):]
+            if stem not in stems:
+                stems.append(stem)
+
+    # Single-letter prefixes
+    single_prefixes = "בהולמכש"
+    if word[0] in single_prefixes and len(word) > 2:
+        stem = word[1:]
+        if stem not in stems:
+            stems.append(stem)
+
+    return stems
+
+
 def _normalize_hebrew(keyword: str) -> list[str]:
-    """Return keyword + its singular/plural variants for matching.
+    """Return keyword + its singular/plural variants + prefix-stripped forms.
 
     Examples:
         "סלטים" → ["סלטים", "סלט"]
         "סלט"   → ["סלט", "סלטים"]
         "בשר"   → ["בשר", "בשרים"]
         "מרק"   → ["מרק", "מרקים"]
+        "חריימה" → ["חריימה"]  (no plural form)
     """
     variants = [keyword]
 
@@ -728,9 +763,28 @@ def _count_item_occurrences(
 
 
 def _matches_any_variant(variants: list[str], text: str) -> bool:
-    """Check if any keyword variant appears in the text."""
+    """Check if any keyword variant appears in the text.
+
+    Uses substring matching AND Hebrew prefix stripping for robust matching.
+    E.g., keyword "חריימה" matches text "דג בחריימה" because:
+    1. Substring: "חריימה" is in "דג בחריימה" → True
+    2. Prefix strip: words ["דג", "בחריימה"] → stems include "חריימה" → True
+    """
     text_lower = text.lower()
-    return any(var in text_lower for var in variants)
+    # 1. Direct substring match (handles most cases)
+    if any(var in text_lower for var in variants):
+        return True
+
+    # 2. Word-level prefix stripping — for cases where substring fails
+    #    (e.g., very short keywords that might cause false positives with substring)
+    words = text_lower.split()
+    for word in words:
+        stems = _strip_hebrew_prefixes(word)
+        for stem in stems:
+            if any(var == stem or var in stem or stem in var for var in variants):
+                return True
+
+    return False
 
 
 def _count_daily_item_presence(item_keyword: str, daily_categories: list) -> int:

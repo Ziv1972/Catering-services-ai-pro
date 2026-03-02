@@ -225,6 +225,18 @@ export const menuComplianceAPI = {
     return response.data;
   },
 
+  getMenuItems: async (checkId: number) => {
+    const response = await api.get(`/api/menu-compliance/checks/${checkId}/menu-items`);
+    return response.data;
+  },
+
+  searchItems: async (checkId: number, keyword: string) => {
+    const response = await api.get(`/api/menu-compliance/checks/${checkId}/search-items`, {
+      params: { keyword },
+    });
+    return response.data;
+  },
+
   reuploadFile: async (checkId: number, file: File) => {
     const formData = new FormData();
     formData.append('file', file);

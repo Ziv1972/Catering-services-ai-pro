@@ -86,6 +86,10 @@ def _extract_excel_from_attachment(msg: email_lib.message.Message) -> Optional[l
         if filename:
             filename = _decode_header_value(filename)
 
+        # Skip CSV files — handled by CSV extractor
+        if filename and filename.lower().endswith(".csv"):
+            continue
+
         # Match by filename extension
         is_excel_by_name = (
             filename and (
@@ -95,11 +99,11 @@ def _extract_excel_from_attachment(msg: email_lib.message.Message) -> Optional[l
         )
 
         # Match by MIME type (handles cases without Content-Disposition)
-        is_excel_by_type = content_type in (
+        excel_mime_types = (
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "application/vnd.ms-excel",
-            "application/octet-stream",
         )
+        is_excel_by_type = content_type in excel_mime_types
 
         if is_excel_by_name or (is_excel_by_type and filename):
             payload = part.get_payload(decode=True)

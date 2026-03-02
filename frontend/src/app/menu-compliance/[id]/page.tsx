@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, CheckCircle2, XCircle, FileText, Upload, Trash2,
   TrendingUp, TrendingDown, Equal, ArrowUpCircle, ArrowDownCircle, MinusCircle,
-  RefreshCw, Calendar, Search, Pencil, Check, X, Loader2
+  RefreshCw, Calendar, Search, Pencil, Check, X, Loader2,
+  Eye, ChevronDown, ChevronUp, ListChecks
 } from 'lucide-react';
 import { menuComplianceAPI, dishCatalogAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -30,6 +31,11 @@ export default function MenuCheckDetailPage() {
   const [filter, setFilter] = useState<FilterType>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Global search state
+  const [globalSearch, setGlobalSearch] = useState('');
+  const [globalSearchResults, setGlobalSearchResults] = useState<any>(null);
+  const [globalSearching, setGlobalSearching] = useState(false);
+
   useEffect(() => {
     loadCheckData();
   }, [checkId]);
@@ -43,14 +49,13 @@ export default function MenuCheckDetailPage() {
       setCheck(checkData);
       setResults(resultsData);
     } catch (error) {
-      console.error('Failed to load check:', error);
+      // Error loading check data
     } finally {
       setLoading(false);
     }
   };
 
   const handleRecheck = () => {
-    // Trigger file input to re-upload menu file
     fileInputRef.current?.click();
   };
 
@@ -63,10 +68,9 @@ export default function MenuCheckDetailPage() {
       await menuComplianceAPI.reuploadFile(checkId, file);
       await loadCheckData();
     } catch (error) {
-      console.error('Failed to re-upload and check:', error);
+      // Error re-uploading
     } finally {
       setRerunning(false);
-      // Reset file input
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -78,7 +82,6 @@ export default function MenuCheckDetailPage() {
       await menuComplianceAPI.deleteCheck(checkId);
       router.push('/menu-compliance');
     } catch (error) {
-      console.error('Failed to delete check:', error);
       setDeleting(false);
     }
   };
@@ -90,10 +93,22 @@ export default function MenuCheckDetailPage() {
       const result = await dishCatalogAPI.extractFromCheck(checkId);
       setExtractResult(result);
     } catch (error) {
-      console.error('Failed to extract dishes:', error);
       setExtractResult({ error: true });
     } finally {
       setExtracting(false);
+    }
+  };
+
+  const handleGlobalSearch = async () => {
+    if (!globalSearch.trim()) return;
+    setGlobalSearching(true);
+    try {
+      const data = await menuComplianceAPI.searchItems(checkId, globalSearch.trim());
+      setGlobalSearchResults(data);
+    } catch (error) {
+      setGlobalSearchResults({ error: true });
+    } finally {
+      setGlobalSearching(false);
     }
   };
 
@@ -135,7 +150,6 @@ export default function MenuCheckDetailPage() {
         parameters: { item: newKeyword },
       });
     } catch (error) {
-      console.error('Failed to update keyword:', error);
       throw error;
     }
   };
@@ -171,7 +185,6 @@ export default function MenuCheckDetailPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Hidden file input for re-upload */}
             <input
               ref={fileInputRef}
               type="file"
@@ -256,6 +269,51 @@ export default function MenuCheckDetailPage() {
             </p>
           </div>
         )}
+
+        {/* Search Menu Items */}
+        <Card className="mb-6">
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-3">
+              <Search className="w-5 h-5 text-gray-400 shrink-0" />
+              <input
+                type="text"
+                value={globalSearch}
+                onChange={(e) => setGlobalSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleGlobalSearch(); }}
+                placeholder="Search menu items... (e.g. חריימה, שניצל, דג)"
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                dir="rtl"
+              />
+              <Button
+                onClick={handleGlobalSearch}
+                disabled={globalSearching || !globalSearch.trim()}
+                size="sm"
+                className="gap-1.5"
+              >
+                {globalSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                Find All Matches
+              </Button>
+              {globalSearchResults && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => { setGlobalSearchResults(null); setGlobalSearch(''); }}
+                  className="text-gray-400"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              )}
+            </div>
+
+            {/* Search Results */}
+            {globalSearchResults && !globalSearchResults.error && (
+              <SearchResultsPanel results={globalSearchResults} />
+            )}
+            {globalSearchResults?.error && (
+              <p className="text-red-600 text-sm mt-3">Search failed — no parsed menu data found. Try re-uploading the menu file first.</p>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Summary Cards — clickable filters */}
         <div className="grid grid-cols-3 gap-4 mb-6">
@@ -347,6 +405,7 @@ export default function MenuCheckDetailPage() {
                       <ResultRow
                         key={result.id}
                         result={result}
+                        checkId={checkId}
                         onKeywordUpdate={handleKeywordUpdate}
                       />
                     ))}
@@ -361,6 +420,89 @@ export default function MenuCheckDetailPage() {
   );
 }
 
+
+/* ─── Search Results Panel ─── */
+
+function SearchResultsPanel({ results }: { results: any }) {
+  const [expandedItem, setExpandedItem] = useState<string | null>(null);
+
+  const matchTypeLabel: Record<string, { label: string; color: string }> = {
+    exact: { label: 'Exact', color: 'bg-green-100 text-green-800' },
+    contains: { label: 'Contains', color: 'bg-blue-100 text-blue-800' },
+    prefix: { label: 'Prefix', color: 'bg-purple-100 text-purple-800' },
+    fuzzy: { label: 'Fuzzy', color: 'bg-orange-100 text-orange-800' },
+  };
+
+  return (
+    <div className="mt-4 border-t pt-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <ListChecks className="w-4 h-4 text-gray-500" />
+          <span className="text-sm font-medium text-gray-700">
+            Found {results.total_matches} matches across {results.unique_items?.length || 0} unique items
+          </span>
+        </div>
+        <div className="flex gap-1.5">
+          {Object.entries(matchTypeLabel).map(([type, { label, color }]) => {
+            const count = (results.unique_items || []).filter((i: any) => i.match_type === type).length;
+            if (count === 0) return null;
+            return (
+              <span key={type} className={`px-2 py-0.5 text-xs rounded-full font-medium ${color}`}>
+                {label}: {count}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+
+      {results.total_matches === 0 ? (
+        <p className="text-sm text-gray-500 py-2">
+          No matches found for &quot;{results.keyword}&quot; in the parsed menu.
+        </p>
+      ) : (
+        <div className="space-y-1.5 max-h-80 overflow-y-auto">
+          {(results.unique_items || []).map((item: any, idx: number) => {
+            const isExpanded = expandedItem === item.item;
+            const mt = matchTypeLabel[item.match_type] || { label: '?', color: 'bg-gray-100 text-gray-600' };
+            return (
+              <div key={idx} className="border rounded-lg overflow-hidden">
+                <button
+                  onClick={() => setExpandedItem(isExpanded ? null : item.item)}
+                  className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={`px-1.5 py-0.5 text-[10px] rounded font-medium ${mt.color}`}>
+                      {mt.label}
+                    </span>
+                    <span className="font-medium text-sm text-gray-900" dir="rtl">{item.item}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">{item.days.length} day{item.days.length !== 1 ? 's' : ''}</span>
+                    {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+                  </div>
+                </button>
+                {isExpanded && (
+                  <div className="px-3 pb-2 bg-gray-50 border-t">
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {item.days.map((d: string) => (
+                        <span key={d} className="px-2 py-0.5 text-xs bg-blue-100 text-blue-800 rounded-md font-medium">
+                          {formatDate(d)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ─── Helpers ─── */
 
 function ComparisonBadge({ comparison }: { comparison: string }) {
   if (comparison === 'above') {
@@ -394,17 +536,24 @@ function formatDate(dateStr: string) {
 }
 
 
+/* ─── Result Row with inline search ─── */
+
 function ResultRow({
   result,
+  checkId,
   onKeywordUpdate,
 }: {
   result: any;
+  checkId: number;
   onKeywordUpdate: (ruleId: number, keyword: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchResults, setSearchResults] = useState<any>(null);
+  const [searching, setSearching] = useState(false);
 
   const evidence = result.evidence || {};
   const hasComparison = evidence.expected_count !== undefined && evidence.actual_count !== undefined;
@@ -453,6 +602,20 @@ function ResultRow({
     }
   };
 
+  const handleInlineSearch = async () => {
+    if (!searchedKeyword) return;
+    setShowSearch(true);
+    setSearching(true);
+    try {
+      const data = await menuComplianceAPI.searchItems(checkId, searchedKeyword);
+      setSearchResults(data);
+    } catch (error) {
+      setSearchResults(null);
+    } finally {
+      setSearching(false);
+    }
+  };
+
   return (
     <div className={`p-4 rounded-lg border-l-4 ${borderColor} ${bgColor}`}>
       {/* Header row */}
@@ -461,8 +624,8 @@ function ResultRow({
         <ComparisonBadge comparison={comparison} />
       </div>
 
-      {/* Searched keyword — shown for under-standard items */}
-      {comparison === 'under' && searchedKeyword && (
+      {/* Searched keyword + search button */}
+      {searchedKeyword && (
         <div className="flex items-center gap-2 mb-2">
           <div className="flex items-center gap-1.5 text-xs text-gray-500">
             <Search className="w-3 h-3" />
@@ -477,11 +640,19 @@ function ResultRow({
                 <button
                   onClick={handleStartEdit}
                   className="p-0.5 text-gray-400 hover:text-orange-600 transition-colors"
-                  title="Wrong word? Paste the correct one"
+                  title="Edit search keyword"
                 >
                   <Pencil className="w-3 h-3" />
                 </button>
               )}
+              <button
+                onClick={handleInlineSearch}
+                className="ml-1 px-2 py-0.5 text-[11px] font-medium bg-white border border-gray-300 rounded-md hover:bg-gray-50 hover:border-gray-400 transition-colors flex items-center gap-1 text-gray-600"
+                title="Find all matches in menu"
+              >
+                <Eye className="w-3 h-3" />
+                Find in Menu
+              </button>
               {saved && (
                 <span className="text-xs text-green-600 font-medium flex items-center gap-0.5">
                   <Check className="w-3 h-3" /> Saved — re-run to apply
@@ -551,8 +722,35 @@ function ResultRow({
         </div>
       )}
 
-      {/* Menu locations for UNDER standard items */}
-      {comparison === 'under' && foundDays.length > 0 && (
+      {/* Inline search results panel */}
+      {showSearch && (
+        <div className="mt-2 mb-2 p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+              <ListChecks className="w-3.5 h-3.5" />
+              All Menu Matches for &quot;{searchedKeyword}&quot;
+            </span>
+            <button
+              onClick={() => { setShowSearch(false); setSearchResults(null); }}
+              className="text-gray-400 hover:text-gray-600 p-0.5"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          {searching ? (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+            </div>
+          ) : searchResults ? (
+            <InlineSearchResults results={searchResults} />
+          ) : (
+            <p className="text-xs text-gray-500">No data</p>
+          )}
+        </div>
+      )}
+
+      {/* Menu locations for items */}
+      {comparison === 'under' && foundDays.length > 0 && !showSearch && (
         <div className="mt-2 p-2.5 bg-white/70 rounded-md">
           <div className="flex items-center gap-1.5 text-xs font-medium text-gray-700 mb-1.5">
             <Calendar className="w-3.5 h-3.5" />
@@ -568,7 +766,7 @@ function ResultRow({
         </div>
       )}
 
-      {comparison === 'under' && foundDays.length === 0 && actual === 0 && (
+      {comparison === 'under' && foundDays.length === 0 && actual === 0 && !showSearch && (
         <div className="mt-2 p-2.5 bg-white/70 rounded-md">
           <p className="text-xs text-red-600 font-medium">
             Not found anywhere in the menu
@@ -576,7 +774,7 @@ function ResultRow({
         </div>
       )}
 
-      {comparison === 'under' && missingDays.length > 0 && missingDays.length <= 10 && (
+      {comparison === 'under' && missingDays.length > 0 && missingDays.length <= 10 && !showSearch && (
         <div className="mt-2 p-2.5 bg-white/70 rounded-md">
           <div className="flex items-center gap-1.5 text-xs font-medium text-gray-700 mb-1.5">
             <Calendar className="w-3.5 h-3.5 text-red-500" />
@@ -593,7 +791,7 @@ function ResultRow({
       )}
 
       {/* Above standard — show where found */}
-      {comparison === 'above' && foundDays.length > 0 && (
+      {comparison === 'above' && foundDays.length > 0 && !showSearch && (
         <div className="mt-2 p-2.5 bg-white/70 rounded-md">
           <div className="flex items-center gap-1.5 text-xs font-medium text-gray-700 mb-1.5">
             <Calendar className="w-3.5 h-3.5" />
@@ -608,6 +806,67 @@ function ResultRow({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+
+/* ─── Inline Search Results ─── */
+
+function InlineSearchResults({ results }: { results: any }) {
+  const matchTypeStyle: Record<string, { label: string; color: string }> = {
+    exact: { label: 'Exact', color: 'bg-green-100 text-green-800' },
+    contains: { label: 'Contains', color: 'bg-blue-100 text-blue-800' },
+    prefix: { label: 'Prefix', color: 'bg-purple-100 text-purple-800' },
+    fuzzy: { label: 'Fuzzy ~', color: 'bg-orange-100 text-orange-800' },
+  };
+
+  if (results.total_matches === 0) {
+    return (
+      <p className="text-xs text-gray-500 py-1">
+        No matches found. The dish may be spelled differently in the menu or not parsed.
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex gap-1.5 mb-2">
+        {Object.entries(matchTypeStyle).map(([type, { label, color }]) => {
+          const count = (results.unique_items || []).filter((i: any) => i.match_type === type).length;
+          if (count === 0) return null;
+          return (
+            <span key={type} className={`px-1.5 py-0.5 text-[10px] rounded-full font-medium ${color}`}>
+              {label}: {count}
+            </span>
+          );
+        })}
+        <span className="text-[10px] text-gray-400 ml-auto">
+          {results.total_matches} total on {results.unique_items?.length || 0} items
+        </span>
+      </div>
+      <div className="space-y-1 max-h-48 overflow-y-auto">
+        {(results.unique_items || []).map((item: any, idx: number) => {
+          const mt = matchTypeStyle[item.match_type] || { label: '?', color: 'bg-gray-100 text-gray-600' };
+          return (
+            <div key={idx} className="flex items-center justify-between py-1 px-2 rounded hover:bg-gray-50 text-xs">
+              <div className="flex items-center gap-2">
+                <span className={`px-1 py-0.5 text-[9px] rounded font-medium shrink-0 ${mt.color}`}>
+                  {mt.label}
+                </span>
+                <span className="font-medium text-gray-900" dir="rtl">{item.item}</span>
+              </div>
+              <div className="flex items-center gap-1 ml-2 shrink-0">
+                {item.days.map((d: string) => (
+                  <span key={d} className="px-1.5 py-0.5 text-[10px] bg-blue-50 text-blue-700 rounded font-medium">
+                    {formatDate(d)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
