@@ -5,11 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import date
 from pydantic import BaseModel
+import logging
 
+from sqlalchemy.orm.attributes import flag_modified
 from backend.database import get_db
+
+logger = logging.getLogger(__name__)
 from backend.models.user import User
 from backend.models.menu_compliance import MenuCheck, MenuDay, CheckResult, ComplianceRule
 from backend.api.auth import get_current_user
@@ -742,7 +746,7 @@ def _classify_match(keyword: str, variants: list[str], item_text: str) -> str | 
 
 
 class ApproveMatchesRequest(BaseModel):
-    approved_items: list[dict]  # [{"item": "...", "days": [...], "source": "..."}]
+    approved_items: List[Dict[str, Any]]
 
 
 @router.put("/checks/{check_id}/results/{result_id}/approve-matches")
@@ -759,110 +763,132 @@ async def approve_matches(
     the items they confirm are valid matches. This updates the actual
     count to reflect the user's review.
     """
-    result = await db.execute(
-        select(CheckResult).where(
-            CheckResult.id == result_id,
-            CheckResult.menu_check_id == check_id
+    try:
+        result = await db.execute(
+            select(CheckResult).where(
+                CheckResult.id == result_id,
+                CheckResult.menu_check_id == check_id
+            )
         )
-    )
-    check_result = result.scalar_one_or_none()
-    if not check_result:
-        raise HTTPException(status_code=404, detail="Check result not found")
+        check_result = result.scalar_one_or_none()
+        if not check_result:
+            raise HTTPException(status_code=404, detail="Check result not found")
 
-    evidence = check_result.evidence or {}
+        evidence = dict(check_result.evidence or {})
 
-    # Count unique dates across all approved items
-    approved_days = set()
-    for item in data.approved_items:
-        for day in item.get("days", []):
-            if day:
-                approved_days.add(day)
+        # Count unique dates across all approved items
+        approved_days: set[str] = set()
+        for item in data.approved_items:
+            days_list = item.get("days", [])
+            if isinstance(days_list, list):
+                for day in days_list:
+                    if day and isinstance(day, str) and len(day) >= 8:
+                        approved_days.add(day)
 
-    new_actual = len(approved_days)
-    expected = evidence.get("expected_count", 0)
-    is_max = evidence.get("is_max_rule", False)
+        new_actual = len(approved_days)
 
-    # Re-derive comparison and passed
-    if new_actual > expected:
-        new_comparison = "above"
-    elif new_actual < expected:
-        new_comparison = "under"
-    else:
-        new_comparison = "even"
+        # Fallback: if no dates detected but items were approved, count items
+        if new_actual == 0 and len(data.approved_items) > 0:
+            new_actual = len(data.approved_items)
 
-    if is_max:
-        new_passed = new_actual <= expected
-    else:
-        new_passed = new_actual >= expected
+        expected = evidence.get("expected_count", 0)
+        is_max = evidence.get("is_max_rule", False)
 
-    # Build updated evidence (immutable pattern)
-    updated_evidence = {
-        **evidence,
-        "actual_count": new_actual,
-        "comparison": new_comparison,
-        "found_on_days": sorted(approved_days),
-        "user_approved_items": data.approved_items,
-        "user_reviewed": True,
-    }
+        # Re-derive comparison and passed
+        if new_actual > expected:
+            new_comparison = "above"
+        elif new_actual < expected:
+            new_comparison = "under"
+        else:
+            new_comparison = "even"
 
-    item_keyword = evidence.get("item_searched", evidence.get("category_keyword", ""))
-    freq_key = "monthly_freq" if "monthly_freq" in evidence else "weekly_freq"
-    is_monthly = "monthly_freq" in evidence
+        if is_max:
+            new_passed = new_actual <= expected
+        else:
+            new_passed = new_actual >= expected
 
-    new_finding = (
-        f"'{item_keyword}': Expected "
-        f"{'≤' if is_max else '≥'}{expected}"
-        f"{'/' + ('month' if is_monthly else 'week') if freq_key in evidence else ''}, "
-        f"Actual {new_actual} (user-reviewed)"
-    )
+        # Build updated evidence (new dict for SQLAlchemy change detection)
+        sorted_days = sorted(approved_days) if approved_days else []
+        updated_evidence = dict(evidence)
+        updated_evidence["actual_count"] = new_actual
+        updated_evidence["comparison"] = new_comparison
+        updated_evidence["found_on_days"] = sorted_days
+        updated_evidence["user_approved_items"] = [
+            {"item": it.get("item", ""), "days": it.get("days", []), "source": it.get("source", "")}
+            for it in data.approved_items
+        ]
+        updated_evidence["user_reviewed"] = True
 
-    # Update the result
-    check_result.evidence = updated_evidence
-    check_result.actual_count = new_actual
-    check_result.passed = new_passed
-    check_result.finding_text = new_finding
-    check_result.severity = "info" if new_passed else "critical"
-    check_result.reviewed = True
-    check_result.review_status = "approved"
+        item_keyword = evidence.get("item_searched", evidence.get("category_keyword", ""))
+        freq_key = "monthly_freq" if "monthly_freq" in evidence else "weekly_freq"
+        is_monthly = "monthly_freq" in evidence
 
-    await db.commit()
+        new_finding = (
+            f"'{item_keyword}': Expected "
+            f"{'≤' if is_max else '≥'}{expected}"
+            f"{'/' + ('month' if is_monthly else 'week') if freq_key in evidence else ''}, "
+            f"Actual {new_actual} (user-reviewed)"
+        )
 
-    # Recalculate parent MenuCheck summary counts
-    all_results = await db.execute(
-        select(CheckResult).where(CheckResult.menu_check_id == check_id)
-    )
-    all_cr = all_results.scalars().all()
+        # Update the result columns
+        check_result.evidence = updated_evidence
+        flag_modified(check_result, "evidence")
+        check_result.passed = new_passed
+        check_result.finding_text = new_finding
+        check_result.severity = "info" if new_passed else "critical"
+        check_result.reviewed = True
+        check_result.review_status = "approved"
 
-    above_count = sum(1 for cr in all_cr if (cr.evidence or {}).get("comparison") == "above")
-    under_count = sum(1 for cr in all_cr if (cr.evidence or {}).get("comparison") == "under")
-    even_count = sum(1 for cr in all_cr if (cr.evidence or {}).get("comparison") == "even")
-    critical_count = sum(1 for cr in all_cr if cr.severity == "critical")
-    warning_count = sum(1 for cr in all_cr if cr.severity == "warning")
-    passed_count = sum(1 for cr in all_cr if cr.passed)
-
-    check_obj = await db.execute(
-        select(MenuCheck).where(MenuCheck.id == check_id)
-    )
-    menu_check = check_obj.scalar_one_or_none()
-    if menu_check:
-        menu_check.dishes_above = above_count
-        menu_check.dishes_under = under_count
-        menu_check.dishes_even = even_count
-        menu_check.critical_findings = critical_count
-        menu_check.warnings = warning_count
-        menu_check.passed_rules = passed_count
-        menu_check.total_findings = critical_count + warning_count
         await db.commit()
+        await db.refresh(check_result)
 
-    return {
-        "result_id": result_id,
-        "old_actual": evidence.get("actual_count", 0),
-        "new_actual": new_actual,
-        "expected": expected,
-        "passed": new_passed,
-        "comparison": new_comparison,
-        "approved_days": sorted(approved_days),
-    }
+        logger.info(
+            f"Approve matches: result={result_id}, "
+            f"approved={len(data.approved_items)} items, "
+            f"days={sorted_days}, actual={new_actual}, expected={expected}"
+        )
+
+        # Recalculate parent MenuCheck summary counts
+        all_results = await db.execute(
+            select(CheckResult).where(CheckResult.menu_check_id == check_id)
+        )
+        all_cr = all_results.scalars().all()
+
+        above_count = sum(1 for cr in all_cr if (cr.evidence or {}).get("comparison") == "above")
+        under_count = sum(1 for cr in all_cr if (cr.evidence or {}).get("comparison") == "under")
+        even_count = sum(1 for cr in all_cr if (cr.evidence or {}).get("comparison") == "even")
+        critical_count = sum(1 for cr in all_cr if cr.severity == "critical")
+        warning_count = sum(1 for cr in all_cr if cr.severity == "warning")
+        passed_count = sum(1 for cr in all_cr if cr.passed)
+
+        check_obj = await db.execute(
+            select(MenuCheck).where(MenuCheck.id == check_id)
+        )
+        menu_check = check_obj.scalar_one_or_none()
+        if menu_check:
+            menu_check.dishes_above = above_count
+            menu_check.dishes_under = under_count
+            menu_check.dishes_even = even_count
+            menu_check.critical_findings = critical_count
+            menu_check.warnings = warning_count
+            menu_check.passed_rules = passed_count
+            menu_check.total_findings = critical_count + warning_count
+            await db.commit()
+
+        return {
+            "result_id": result_id,
+            "old_actual": evidence.get("actual_count", 0),
+            "new_actual": new_actual,
+            "expected": expected,
+            "passed": new_passed,
+            "comparison": new_comparison,
+            "approved_days": sorted_days,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error approving matches: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save: {str(e)}")
 
 
 # --- Compliance Rules CRUD ---

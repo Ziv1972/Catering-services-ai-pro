@@ -620,6 +620,18 @@ function ResultRow({
       await onKeywordUpdate(ruleId, editValue.trim());
       setSaved(true);
       setEditing(false);
+
+      // Auto-search with the new keyword so user sees results immediately
+      setShowSearch(true);
+      setSearching(true);
+      try {
+        const data = await menuComplianceAPI.searchItems(checkId, editValue.trim());
+        setSearchResults(data);
+      } catch {
+        setSearchResults(null);
+      } finally {
+        setSearching(false);
+      }
     } catch {
       // keep editing open on failure
     } finally {
@@ -857,6 +869,7 @@ function InlineSearchResults({
   const [approved, setApproved] = useState<Record<number, boolean>>({});
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
+  const [applyError, setApplyError] = useState('');
 
   const matchTypeStyle: Record<string, { label: string; color: string }> = {
     exact: { label: 'Exact', color: 'bg-green-100 text-green-800' },
@@ -887,12 +900,14 @@ function InlineSearchResults({
   const handleApply = async () => {
     if (!resultId || !checkId || approvedCount === 0) return;
     setApplying(true);
+    setApplyError('');
     try {
-      await menuComplianceAPI.approveMatches(checkId, resultId, approvedItems);
+      const res = await menuComplianceAPI.approveMatches(checkId, resultId, approvedItems);
       setApplied(true);
       if (onApplied) onApplied();
-    } catch {
-      // keep panel open
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || err?.message || 'Unknown error';
+      setApplyError(msg);
     } finally {
       setApplying(false);
     }
@@ -980,6 +995,11 @@ function InlineSearchResults({
             {approvedCount > 0 && ` — ${new Set(approvedItems.flatMap((i: any) => i.days.filter((d: string) => d))).size} unique days`}
           </span>
           <div className="flex items-center gap-2">
+            {applyError && (
+              <span className="text-[11px] text-red-600 font-medium">
+                Error: {applyError}
+              </span>
+            )}
             {applied && (
               <span className="text-[11px] text-green-600 font-medium flex items-center gap-1">
                 <Check className="w-3 h-3" /> Updated
