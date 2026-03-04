@@ -21,6 +21,53 @@ from backend.api.auth import get_current_user
 router = APIRouter()
 
 
+def _normalize_special_chars(text: str) -> str:
+    """Normalize special characters and whitespace for matching.
+
+    Handles:
+    - '&' with varying spaces: 'פיש & ציפס', 'פיש& ציפס', 'פיש&ציפס' → all same
+    - Multiple spaces → single space
+    - Various dash types → standard dash
+    - Trim whitespace
+    """
+    import re
+    # Normalize spaces around & (remove all spaces around &, then add exactly one on each side)
+    text = re.sub(r'\s*&\s*', ' & ', text)
+    # Normalize various dash types
+    text = re.sub(r'[–—−]', '-', text)
+    # Normalize spaces around dashes
+    text = re.sub(r'\s*-\s*', ' - ', text)
+    # Collapse multiple spaces to single
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def _generate_ampersand_variants(text: str) -> list:
+    """Generate variants with different & spacing for substring matching.
+
+    For 'פיש & ציפס' generates:
+    - 'פיש & ציפס'  (normalized with spaces)
+    - 'פיש& ציפס'   (no space before &)
+    - 'פיש &ציפס'   (no space after &)
+    - 'פיש&ציפס'    (no spaces around &)
+    """
+    if '&' not in text:
+        return [text]
+    # Start with the normalized form
+    normalized = _normalize_special_chars(text)
+    variants = [normalized]
+    # Generate spacing variants around &
+    # Split on ' & ' and rejoin with different spacing
+    parts = normalized.split(' & ')
+    if len(parts) == 2:
+        left, right = parts[0], parts[1]
+        for fmt in ['{}&{}', '{}& {}', '{} &{}']:
+            v = fmt.format(left, right)
+            if v not in variants:
+                variants.append(v)
+    return variants
+
+
 class ComplianceRuleResponse(BaseModel):
     id: int
     name: str
@@ -460,13 +507,21 @@ async def search_menu_items(
     days = result.scalars().all()
 
     keyword_lower = keyword.lower().strip()
+    # Normalize special chars (& spacing, dashes, etc.)
+    keyword_lower = _normalize_special_chars(keyword_lower)
+
     # Also strip Hebrew prefixes from the keyword itself for broader search
     keyword_stems = _strip_hebrew_prefixes(keyword_lower)
     variants = []
     for stem in keyword_stems:
         for v in _normalize_hebrew(stem):
+            # Add the base variant
             if v not in variants:
                 variants.append(v)
+            # Add ampersand spacing variants
+            for av in _generate_ampersand_variants(v):
+                if av not in variants:
+                    variants.append(av)
 
     # --- Pass 1: Search parsed MenuDay data ---
     matches = []
@@ -620,11 +675,13 @@ def _search_excel_file(
                     continue
                 cell_str = str(cell).strip()
                 cell_lower = cell_str.lower()
+                # Also check normalized form for & and spacing differences
+                cell_normalized = _normalize_special_chars(cell_lower)
 
                 # Check if any variant is a substring of this cell
                 found = False
                 for var in variants:
-                    if var in cell_lower:
+                    if var in cell_lower or var in cell_normalized:
                         found = True
                         break
 
@@ -659,8 +716,9 @@ def _search_csv_file(
                     for cell in row:
                         cell_str = cell.strip()
                         cell_lower = cell_str.lower()
+                        cell_normalized = _normalize_special_chars(cell_lower)
                         for var in variants:
-                            if var in cell_lower and len(cell_str) >= 3:
+                            if (var in cell_lower or var in cell_normalized) and len(cell_str) >= 3:
                                 matches.append({
                                     "date": "",
                                     "day_of_week": "",
@@ -687,8 +745,9 @@ def _search_text_file(
             for line_num, line in enumerate(f, 1):
                 line_str = line.strip()
                 line_lower = line_str.lower()
+                line_normalized = _normalize_special_chars(line_lower)
                 for var in variants:
-                    if var in line_lower and len(line_str) >= 3:
+                    if (var in line_lower or var in line_normalized) and len(line_str) >= 3:
                         matches.append({
                             "date": "",
                             "day_of_week": "",
@@ -713,21 +772,26 @@ def _classify_match(keyword: str, variants: list[str], item_text: str) -> str | 
     """
     from backend.services.menu_analysis_service import _strip_hebrew_prefixes
 
+    # Also compare using normalized forms (handles & spacing, dashes, etc.)
+    item_normalized = _normalize_special_chars(item_text)
+
     # Exact match (whole item or any word)
     words = item_text.split()
+    words_normalized = item_normalized.split()
     for var in variants:
-        if var == item_text:
+        if var == item_text or var == item_normalized:
             return "exact"
-        if var in words:
+        if var in words or var in words_normalized:
             return "exact"
 
     # Contains (substring)
     for var in variants:
-        if var in item_text:
+        if var in item_text or var in item_normalized:
             return "contains"
 
     # Prefix-stripped match
-    for word in words:
+    all_words = set(words + words_normalized)
+    for word in all_words:
         stems = _strip_hebrew_prefixes(word)
         for stem in stems:
             for var in variants:
