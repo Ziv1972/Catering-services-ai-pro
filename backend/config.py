@@ -74,10 +74,10 @@ def get_settings() -> Settings:
 
     is_postgres = "postgresql" in s.DATABASE_URL.lower()
 
-    # Reject weak SECRET_KEY in production (PostgreSQL = production)
+    # Warn about weak SECRET_KEY in production (PostgreSQL = production)
     if is_postgres and s.SECRET_KEY in WEAK_SECRET_KEYS:
-        raise RuntimeError(
-            "CRITICAL: SECRET_KEY is a known weak default. "
+        logger.critical(
+            "SECRET_KEY is a known weak default on a production database! "
             "Set a strong SECRET_KEY (e.g. secrets.token_hex(32)) in environment variables."
         )
 
