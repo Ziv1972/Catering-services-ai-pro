@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -8,9 +8,10 @@ import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, AlertTriangle, TrendingUp,
   CheckCircle2, Clock, Plus, X, DollarSign,
-  Pencil, Trash2, ListFilter
+  Pencil, Trash2, ListFilter, Upload, FileText,
+  Download, Loader2, Brain
 } from 'lucide-react';
-import { complaintsAPI, fineRulesAPI } from '@/lib/api';
+import { complaintsAPI, fineRulesAPI, attachmentsAPI } from '@/lib/api';
 import { format } from 'date-fns';
 
 const SOURCES = ['manual', 'email', 'whatsapp', 'slack', 'form'];
@@ -56,9 +57,75 @@ export default function ComplaintsPage() {
   const [filterSeverity, setFilterSeverity] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
 
+  // Fine document upload
+  const [fineDocuments, setFineDocuments] = useState<any[]>([]);
+  const [uploadingFineDoc, setUploadingFineDoc] = useState(false);
+  const [processingFineDoc, setProcessingFineDoc] = useState<number | null>(null);
+  const fineDocInputRef = useRef<HTMLInputElement>(null);
+
+  const loadFineDocuments = useCallback(async () => {
+    try {
+      const docs = await attachmentsAPI.list('fine_catalog', 0);
+      setFineDocuments(docs);
+    } catch {
+      // silently handle
+    }
+  }, []);
+
+  const handleFineDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingFineDoc(true);
+    try {
+      await attachmentsAPI.upload('fine_catalog', 0, file);
+      await loadFineDocuments();
+    } catch {
+      // silently handle
+    } finally {
+      setUploadingFineDoc(false);
+      if (fineDocInputRef.current) fineDocInputRef.current.value = '';
+    }
+  };
+
+  const handleFineDocDownload = async (att: any) => {
+    try {
+      const blob = await attachmentsAPI.download(att.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = att.original_filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // silently handle
+    }
+  };
+
+  const handleFineDocDelete = async (attId: number) => {
+    try {
+      await attachmentsAPI.delete(attId);
+      setFineDocuments(prev => prev.filter(d => d.id !== attId));
+    } catch {
+      // silently handle
+    }
+  };
+
+  const handleFineDocProcess = async (attId: number) => {
+    setProcessingFineDoc(attId);
+    try {
+      await attachmentsAPI.process(attId, 'both');
+      await loadFineDocuments();
+    } catch {
+      // silently handle
+    } finally {
+      setProcessingFineDoc(null);
+    }
+  };
+
   useEffect(() => {
     loadData();
-  }, []);
+    loadFineDocuments();
+  }, [loadFineDocuments]);
 
   const loadData = async () => {
     try {
@@ -478,6 +545,101 @@ export default function ComplaintsPage() {
                 ))}
               </div>
             )}
+
+            {/* Fine Documents Upload Section */}
+            <div className="mt-6 pt-5 border-t border-purple-100">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-purple-600" />
+                  Fine Documents
+                </h4>
+                <div>
+                  <input
+                    ref={fineDocInputRef}
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.doc,.docx,.xlsx,.xls,.csv,.txt,.jpg,.jpeg,.png"
+                    onChange={handleFineDocUpload}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={uploadingFineDoc}
+                    onClick={() => fineDocInputRef.current?.click()}
+                    className="border-purple-200 text-purple-700 hover:bg-purple-50"
+                  >
+                    {uploadingFineDoc ? (
+                      <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> Uploading...</>
+                    ) : (
+                      <><Upload className="w-3.5 h-3.5 mr-1" /> Upload Document</>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {fineDocuments.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-3">
+                  Upload your fine schedule, contract, or penalty document (PDF, Word, Excel)
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {fineDocuments.map((doc: any) => (
+                    <div key={doc.id} className="flex items-center justify-between p-3 bg-purple-50 rounded-lg border border-purple-100">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <FileText className="w-5 h-5 text-purple-500 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">
+                            {doc.original_filename}
+                          </p>
+                          <div className="flex items-center gap-2 text-xs text-gray-500">
+                            <span>{doc.file_size ? `${(doc.file_size / 1024).toFixed(0)} KB` : ''}</span>
+                            {doc.created_at && (
+                              <span>{format(new Date(doc.created_at), 'MMM d, yyyy')}</span>
+                            )}
+                            {doc.processing_status === 'done' && (
+                              <Badge className="bg-green-100 text-green-700 text-[10px] px-1.5 py-0">
+                                AI Analyzed
+                              </Badge>
+                            )}
+                          </div>
+                          {doc.ai_summary && (
+                            <p className="text-xs text-purple-700 mt-1 line-clamp-2">{doc.ai_summary}</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 ml-2 shrink-0">
+                        <button
+                          onClick={() => handleFineDocProcess(doc.id)}
+                          disabled={processingFineDoc === doc.id}
+                          className="p-1.5 hover:bg-purple-100 rounded transition-colors"
+                          title="AI Analyze"
+                        >
+                          {processingFineDoc === doc.id ? (
+                            <Loader2 className="w-3.5 h-3.5 text-purple-500 animate-spin" />
+                          ) : (
+                            <Brain className="w-3.5 h-3.5 text-purple-500" />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => handleFineDocDownload(doc)}
+                          className="p-1.5 hover:bg-purple-100 rounded transition-colors"
+                          title="Download"
+                        >
+                          <Download className="w-3.5 h-3.5 text-purple-500" />
+                        </button>
+                        <button
+                          onClick={() => handleFineDocDelete(doc.id)}
+                          className="p-1.5 hover:bg-red-100 rounded transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}

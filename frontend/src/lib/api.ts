@@ -877,3 +877,35 @@ export const attachmentsAPI = {
     return response.data;
   },
 };
+
+// Agent Crew
+export const agentCrewAPI = {
+  getCrewInfo: async () => {
+    const response = await api.get('/api/agent-crew');
+    return response.data;
+  },
+  chat: async (message: string, sessionId?: string) => {
+    const response = await api.post('/api/agent-crew/chat', { message, session_id: sessionId });
+    return response.data;
+  },
+  getAgent: async (agentId: string) => {
+    const response = await api.get(`/api/agent-crew/agents/${agentId}`);
+    return response.data;
+  },
+  runAgent: async (agentId: string, action: string, context: Record<string, unknown> = {}) => {
+    const response = await api.post(`/api/agent-crew/agents/${agentId}/run`, {
+      agent_id: agentId,
+      action,
+      context,
+    });
+    return response.data;
+  },
+  getRoles: async () => {
+    const response = await api.get('/api/agent-crew/roles');
+    return response.data;
+  },
+  getSession: async (sessionId: string) => {
+    const response = await api.get(`/api/agent-crew/sessions/${sessionId}`);
+    return response.data;
+  },
+};

@@ -206,9 +206,14 @@ async def get_dashboard(
     projects = projects_result.scalars().all()
 
     project_summary = []
+    today = date.today()
     for p in projects:
         tasks = list(p.tasks) if p.tasks else []
         done = sum(1 for t in tasks if t.status == "done")
+        overdue = sum(
+            1 for t in tasks
+            if t.due_date and t.due_date < today and t.status != "done"
+        )
         project_summary.append({
             "id": p.id,
             "name": p.name,
@@ -217,6 +222,7 @@ async def get_dashboard(
             "site_name": p.site.name if p.site else None,
             "task_count": len(tasks),
             "done_count": done,
+            "overdue_count": overdue,
             "progress": round(done / len(tasks) * 100) if tasks else 0,
             "target_end_date": p.target_end_date.isoformat() if p.target_end_date else None,
         })

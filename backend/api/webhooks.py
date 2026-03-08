@@ -1,7 +1,7 @@
 """
 Webhook endpoints for Power Automate integration
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from datetime import datetime, date
@@ -11,6 +11,7 @@ import logging
 import re
 import io
 import csv
+import hmac
 
 from backend.database import get_db
 from backend.models.complaint import Complaint, ComplaintSource, ComplaintStatus
@@ -18,9 +19,22 @@ from backend.models.meeting import Meeting, MeetingType
 from backend.models.site import Site
 from backend.models.daily_meal_count import DailyMealCount
 from backend.agents.complaint_intelligence.agent import ComplaintIntelligenceAgent
+from backend.config import get_settings
+from backend.api.auth import get_current_user
+from backend.models.user import User
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+settings = get_settings()
+
+
+def _verify_webhook_secret(x_webhook_secret: Optional[str] = Header(default=None)):
+    """Verify shared-secret header for webhook endpoints."""
+    if not settings.WEBHOOK_SECRET:
+        # No secret configured — allow (dev mode)
+        return
+    if not x_webhook_secret or not hmac.compare_digest(x_webhook_secret, settings.WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
 
 # ──── Meal type parsing helpers ────
@@ -201,6 +215,7 @@ def _parse_datetime(value: Optional[str]) -> datetime:
 async def receive_complaint_from_email(
     request: dict,
     db: AsyncSession = Depends(get_db),
+    _secret: None = Depends(_verify_webhook_secret),
 ):
     """
     Webhook endpoint for Power Automate email trigger.
@@ -269,13 +284,14 @@ async def receive_complaint_from_email(
 
     except Exception as e:
         logger.error(f"Error processing complaint webhook: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to process complaint webhook")
 
 
 @router.post("/meetings")
 async def receive_meeting_from_calendar(
     request: dict,
     db: AsyncSession = Depends(get_db),
+    _secret: None = Depends(_verify_webhook_secret),
 ):
     """
     Webhook endpoint for Power Automate calendar trigger.
@@ -355,13 +371,14 @@ async def receive_meeting_from_calendar(
 
     except Exception as e:
         logger.error(f"Error processing meeting webhook: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to process meeting webhook")
 
 
 @router.post("/daily-meals")
 async def receive_daily_meals(
     request: dict,
     db: AsyncSession = Depends(get_db),
+    _secret: None = Depends(_verify_webhook_secret),
 ):
     """
     Webhook endpoint for Power Automate email trigger.
@@ -430,7 +447,7 @@ async def receive_daily_meals(
 
     except Exception as e:
         logger.error(f"Error processing daily-meals webhook: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to process daily meals webhook")
 
 
 @router.post("/daily-meals/upload")
@@ -438,6 +455,7 @@ async def upload_daily_meals_csv(
     file: UploadFile = File(...),
     meal_date: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Upload a CSV file with daily meal counts.
@@ -495,7 +513,7 @@ async def upload_daily_meals_csv(
         raise
     except Exception as e:
         logger.error(f"Error uploading daily meals CSV: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to upload daily meals CSV")
 
 
 @router.get("/daily-meals")
@@ -504,6 +522,7 @@ async def get_daily_meals(
     to_date: Optional[str] = None,
     site_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Get daily meal counts for a date range."""
     query = select(DailyMealCount).order_by(DailyMealCount.date.desc())
@@ -540,7 +559,9 @@ async def get_daily_meals(
 
 
 @router.post("/daily-meals/poll-now")
-async def trigger_meal_email_poll():
+async def trigger_meal_email_poll(
+    current_user: User = Depends(get_current_user),
+):
     """
     Manually trigger the IMAP email poller to check for new meal reports.
     Useful for testing or forcing an immediate check.
@@ -551,22 +572,6 @@ async def trigger_meal_email_poll():
         return result
     except Exception as e:
         logger.error(f"Manual meal poll failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to poll meal emails")
 
 
-@router.get("/test")
-async def test_webhook():
-    """Test endpoint to verify webhooks are working"""
-    return {
-        "status": "ok",
-        "message": "Webhooks are operational",
-        "endpoints": {
-            "complaints": "POST /api/webhooks/complaints",
-            "meetings": "POST /api/webhooks/meetings",
-            "daily_meals": "POST /api/webhooks/daily-meals",
-            "daily_meals_upload": "POST /api/webhooks/daily-meals/upload",
-            "daily_meals_get": "GET /api/webhooks/daily-meals",
-            "daily_meals_poll": "POST /api/webhooks/daily-meals/poll-now",
-        },
-        "timestamp": datetime.utcnow().isoformat(),
-    }

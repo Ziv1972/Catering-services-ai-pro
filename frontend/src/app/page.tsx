@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import {
   DollarSign, FolderKanban, Wrench, CalendarDays,
   ListTodo, ArrowRight, MessageSquare, Send,
-  AlertCircle, CheckCircle2, Clock,
+  AlertCircle, AlertTriangle, CheckCircle2, Clock,
   ChevronRight, ChevronDown, ArrowLeft, X,
   UtensilsCrossed, Upload, Loader2,
 } from 'lucide-react';
@@ -527,19 +527,31 @@ export default function Dashboard() {
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 to-blue-400 opacity-0 group-hover:opacity-100 transition-opacity" />
         </div>
 
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-5 card-hover">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Projects</span>
-            <div className="p-1.5 rounded-lg bg-purple-50 text-purple-600">
-              <FolderKanban className="w-4 h-4" />
+        {(() => {
+          const totalOverdue = projects.reduce((s: number, p: any) => s + (p.overdue_count || 0), 0);
+          const hasOverdue = totalOverdue > 0;
+          return (
+            <div className={`group relative overflow-hidden rounded-xl border p-5 card-hover ${hasOverdue ? 'bg-red-50 border-red-200' : 'bg-card'}`}>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Projects</span>
+                <div className={`p-1.5 rounded-lg ${hasOverdue ? 'bg-red-100 text-red-600' : 'bg-purple-50 text-purple-600'}`}>
+                  {hasOverdue ? <AlertTriangle className="w-4 h-4" /> : <FolderKanban className="w-4 h-4" />}
+                </div>
+              </div>
+              <p className="text-2xl font-bold tracking-tight">{projects.length}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {projects.reduce((s: number, p: any) => s + (p.done_count || 0), 0)} / {projects.reduce((s: number, p: any) => s + (p.task_count || 0), 0)} tasks done
+              </p>
+              {hasOverdue && (
+                <p className="text-xs font-semibold text-red-600 mt-1 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  {totalOverdue} overdue task{totalOverdue !== 1 ? 's' : ''}
+                </p>
+              )}
+              <div className={`absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r ${hasOverdue ? 'from-red-500 to-red-400 opacity-100' : 'from-purple-500 to-purple-400 opacity-0 group-hover:opacity-100'} transition-opacity`} />
             </div>
-          </div>
-          <p className="text-2xl font-bold tracking-tight">{projects.length}</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {projects.reduce((s: number, p: any) => s + (p.done_count || 0), 0)} / {projects.reduce((s: number, p: any) => s + (p.task_count || 0), 0)} tasks done
-          </p>
-          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 to-purple-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-        </div>
+          );
+        })()}
 
         <div className="group relative overflow-hidden rounded-xl border bg-card p-5 card-hover">
           <div className="flex items-center justify-between mb-3">

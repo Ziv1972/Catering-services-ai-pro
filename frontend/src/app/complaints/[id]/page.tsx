@@ -1,15 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, AlertTriangle, CheckCircle2, Clock,
-  MessageSquare, Sparkles, Send
+  MessageSquare, Sparkles, Send, Upload, FileText,
+  Download, Trash2, Loader2, Brain
 } from 'lucide-react';
-import { complaintsAPI } from '@/lib/api';
+import { complaintsAPI, attachmentsAPI } from '@/lib/api';
 import { format } from 'date-fns';
 
 export default function ComplaintDetailPage() {
@@ -20,10 +21,17 @@ export default function ComplaintDetailPage() {
   const [resolveNotes, setResolveNotes] = useState('');
   const [loading, setLoading] = useState(true);
   const [drafting, setDrafting] = useState(false);
+  const [attachments, setAttachments] = useState<any[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [processing, setProcessing] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const complaintId = Number(params.id);
 
   useEffect(() => {
     if (params.id) {
-      loadComplaint(Number(params.id));
+      loadComplaint(complaintId);
+      loadAttachments(complaintId);
     }
   }, [params.id]);
 
@@ -35,6 +43,69 @@ export default function ComplaintDetailPage() {
       console.error('Failed to load complaint:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAttachments = useCallback(async (id: number) => {
+    try {
+      const data = await attachmentsAPI.list('complaint', id);
+      setAttachments(data);
+    } catch (error) {
+      // Attachments are optional — fail silently
+    }
+  }, []);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        await attachmentsAPI.upload('complaint', complaintId, file);
+      }
+      await loadAttachments(complaintId);
+    } catch (error) {
+      console.error('Upload failed:', error);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDownload = async (att: any) => {
+    try {
+      const blob = await attachmentsAPI.download(att.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = att.original_filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Download failed:', error);
+    }
+  };
+
+  const handleDeleteAttachment = async (attId: number) => {
+    try {
+      await attachmentsAPI.delete(attId);
+      setAttachments((prev) => prev.filter((a) => a.id !== attId));
+    } catch (error) {
+      console.error('Delete failed:', error);
+    }
+  };
+
+  const handleProcessAttachment = async (attId: number) => {
+    setProcessing(attId);
+    try {
+      const result = await attachmentsAPI.process(attId, 'both');
+      setAttachments((prev) =>
+        prev.map((a) => (a.id === attId ? { ...a, ...result } : a))
+      );
+    } catch (error) {
+      console.error('AI processing failed:', error);
+    } finally {
+      setProcessing(null);
     }
   };
 
@@ -157,6 +228,106 @@ export default function ComplaintDetailPage() {
                     <span className="text-purple-600">Rule: {complaint.fine_rule_name}</span>
                   )}
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* Fine Documents */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="w-5 h-5" />
+                    Documents
+                  </CardTitle>
+                  <div>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      className="hidden"
+                      multiple
+                      accept=".pdf,.jpg,.jpeg,.png,.gif,.xlsx,.xls,.docx,.doc,.csv,.txt"
+                      onChange={handleFileUpload}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                    >
+                      {uploading ? (
+                        <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Uploading...</>
+                      ) : (
+                        <><Upload className="w-4 h-4 mr-1" /> Upload</>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {attachments.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-4">
+                    No documents attached. Upload fine letters, correspondence, or evidence.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {attachments.map((att) => (
+                      <div key={att.id} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                        <FileText className="w-5 h-5 text-gray-400 mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">
+                            {att.original_filename}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {att.file_size ? `${(att.file_size / 1024).toFixed(0)} KB` : ''}
+                            {att.created_at && ` · ${format(new Date(att.created_at), 'MMM d, yyyy')}`}
+                          </p>
+                          {att.ai_summary && (
+                            <div className="mt-2 p-2 bg-blue-50 rounded text-xs text-blue-800">
+                              <p className="font-medium mb-1">AI Summary:</p>
+                              <p className="whitespace-pre-wrap">{att.ai_summary}</p>
+                            </div>
+                          )}
+                          {att.processing_status === 'processing' && (
+                            <p className="text-xs text-blue-600 mt-1 flex items-center gap-1">
+                              <Loader2 className="w-3 h-3 animate-spin" /> Processing...
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleProcessAttachment(att.id)}
+                            disabled={processing === att.id}
+                            title="AI Analyze"
+                          >
+                            {processing === att.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Brain className="w-4 h-4 text-blue-600" />
+                            )}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDownload(att)}
+                            title="Download"
+                          >
+                            <Download className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteAttachment(att.id)}
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-500" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
 

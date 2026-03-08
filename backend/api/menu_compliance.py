@@ -7,8 +7,10 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from typing import List, Optional, Dict, Any
 from datetime import date
+from pathlib import Path
 from pydantic import BaseModel
 import logging
+import re
 
 from sqlalchemy.orm.attributes import flag_modified
 from backend.database import get_db
@@ -19,6 +21,20 @@ from backend.models.menu_compliance import MenuCheck, MenuDay, CheckResult, Comp
 from backend.api.auth import get_current_user
 
 router = APIRouter()
+
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+SAFE_FILENAME_RE = re.compile(r'^[\w\-. ()\[\]]+$')
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Sanitize upload filename to prevent path traversal."""
+    # Take only the basename, stripping any directory components
+    safe_name = Path(filename).name.strip()
+    # Remove any remaining path separators
+    safe_name = safe_name.replace("/", "").replace("\\", "").replace("..", "")
+    if not safe_name or not SAFE_FILENAME_RE.match(safe_name):
+        safe_name = "upload.xlsx"
+    return safe_name
 
 
 def _normalize_special_chars(text: str) -> str:
@@ -290,8 +306,17 @@ async def upload_menu(
     upload_dir = "uploads/menus"
     os.makedirs(upload_dir, exist_ok=True)
 
-    file_path = f"{upload_dir}/{site_id}_{year}_{month}_{file.filename}"
+    safe_name = _sanitize_filename(file.filename)
     content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=400, detail="File too large (max 10 MB)")
+
+    file_path = f"{upload_dir}/{site_id}_{year}_{month}_{safe_name}"
+    # Verify resolved path stays within upload_dir
+    resolved = Path(file_path).resolve()
+    if not str(resolved).startswith(str(Path(upload_dir).resolve())):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     with open(file_path, "wb") as f:
         f.write(content)
 
@@ -380,8 +405,16 @@ async def reupload_menu_file(
     # Save new file
     upload_dir = "uploads/menus"
     os.makedirs(upload_dir, exist_ok=True)
-    file_path = f"{upload_dir}/{check.site_id}_{check.year}_{check.month}_{file.filename}"
+    safe_name = _sanitize_filename(file.filename)
     content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=400, detail="File too large (max 10 MB)")
+
+    file_path = f"{upload_dir}/{check.site_id}_{check.year}_{check.month}_{safe_name}"
+    resolved = Path(file_path).resolve()
+    if not str(resolved).startswith(str(Path(upload_dir).resolve())):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     with open(file_path, "wb") as f:
         f.write(content)
 

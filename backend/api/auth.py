@@ -108,8 +108,12 @@ async def login(
 @router.post("/register", response_model=UserResponse)
 async def register(
     user_data: UserCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can register new users")
+
     result = await db.execute(select(User).where(User.email == user_data.email))
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")

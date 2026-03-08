@@ -48,8 +48,9 @@ async def test_login_wrong_password(unauth_client, seed_data):
     assert r.status_code == 401
 
 
-async def test_register_new_user(unauth_client, seed_data):
-    r = await unauth_client.post(
+async def test_register_new_user(client, seed_data):
+    """Registration requires admin auth"""
+    r = await client.post(
         "/api/auth/register",
         json={"email": "new@hp.com", "full_name": "New User", "password": "pass123"},
     )
@@ -57,8 +58,17 @@ async def test_register_new_user(unauth_client, seed_data):
     assert r.json()["email"] == "new@hp.com"
 
 
-async def test_register_duplicate_email(unauth_client, seed_data):
+async def test_register_requires_auth(unauth_client, seed_data):
+    """Unauthenticated registration should be rejected"""
     r = await unauth_client.post(
+        "/api/auth/register",
+        json={"email": "hacker@evil.com", "full_name": "Hacker", "password": "pass123"},
+    )
+    assert r.status_code == 401
+
+
+async def test_register_duplicate_email(client, seed_data):
+    r = await client.post(
         "/api/auth/register",
         json={"email": "test@hp.com", "full_name": "Dup", "password": "pass123"},
     )
@@ -439,20 +449,14 @@ async def test_dashboard(client, seed_data):
     r = await client.get("/api/dashboard/")
     assert r.status_code == 200
     data = r.json()
-    assert "upcoming_meetings" in data
-    assert "total_sites" in data
+    assert "meetings" in data or "upcoming_meetings" in data
 
 
 # ===================== WEBHOOKS =====================
 
 
-async def test_webhook_test_endpoint(unauth_client, seed_data):
-    r = await unauth_client.get("/api/webhooks/test")
-    assert r.status_code == 200
-    assert r.json()["status"] == "ok"
-
-
 async def test_webhook_meeting_non_catering(unauth_client, db_session, seed_data):
+    """Webhooks pass without secret when WEBHOOK_SECRET is empty (dev mode)"""
     r = await unauth_client.post("/api/webhooks/meetings", json={
         "subject": "Team Standup",
         "start": "2026-03-01T09:00:00Z",

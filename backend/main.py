@@ -5,11 +5,12 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 
 from backend.config import get_settings
+from backend.api.auth import get_current_user
 from backend.database import engine, Base, AsyncSessionLocal
 from backend.models import User, Site
 from backend.models.supplier import Supplier
@@ -24,7 +25,7 @@ from backend.api.auth import get_password_hash
 from backend.api import auth, meetings, chat, dashboard, complaints
 from backend.api import menu_compliance, proformas, historical, anomalies, webhooks, suppliers
 from backend.api import supplier_budgets, projects, maintenance, todos, price_lists, fine_rules
-from backend.api import category_analysis, attachments, dish_catalog
+from backend.api import category_analysis, attachments, dish_catalog, agent_crew
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -84,8 +85,7 @@ async def lifespan(app: FastAPI):
             ))
             logger.info("Created default admin user")
         else:
-            existing_user.hashed_password = get_password_hash("admin123")
-            logger.info("Reset admin user password")
+            logger.info("Admin user already exists, skipping")
 
         result = await session.execute(select(Site))
         if not result.scalars().first():
@@ -540,6 +540,16 @@ async def lifespan(app: FastAPI):
     from backend.services.meal_email_poller import start_meal_email_scheduler
     meal_poller_task = asyncio.create_task(start_meal_email_scheduler())
 
+    # Initialize Agent Crew (always-on)
+    from backend.agents.crew.registry import agent_registry
+    from backend.agents.crew.manager import crew_manager
+    agent_registry._ensure_initialized()
+    crew_info = crew_manager.get_crew_info()
+    logger.info(
+        f"Agent Crew initialized: {crew_info['crew_name']} — "
+        f"{crew_info['total_agents']} agents ({len(agent_registry.get_specialist_ids())} specialists + 1 manager)"
+    )
+
     yield
 
     meal_poller_task.cancel()
@@ -583,6 +593,7 @@ app.include_router(fine_rules.router, prefix="/api/fine-rules", tags=["Fine Rule
 app.include_router(category_analysis.router, prefix="/api/category-analysis", tags=["Category Analysis"])
 app.include_router(attachments.router, prefix="/api/attachments", tags=["Attachments"])
 app.include_router(dish_catalog.router, tags=["Dish Catalog"])
+app.include_router(agent_crew.router, tags=["Agent Crew"])
 
 
 @app.get("/")
@@ -600,28 +611,31 @@ async def health_check():
 
 
 @app.get("/db-diagnostic")
-async def db_diagnostic():
-    """Diagnostic endpoint to check database connection status."""
-    from backend.database import database_url, is_sqlite
+async def db_diagnostic(
+    current_user: User = Depends(get_current_user),
+):
+    """Diagnostic endpoint to check database connection status. Admin only."""
+    from backend.database import is_sqlite
     from sqlalchemy import text as sa_text
+
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
 
     info = {
         "database_type": "SQLite" if is_sqlite else "PostgreSQL",
-        "database_url_prefix": database_url[:30] + "..." if len(database_url) > 30 else database_url,
         "is_sqlite": is_sqlite,
     }
 
     try:
         async with AsyncSessionLocal() as session:
-            # Count records in key tables
             for table in ["users", "sites", "proformas", "proforma_items", "projects", "meetings", "complaints", "supplier_budgets"]:
                 try:
                     result = await session.execute(sa_text(f"SELECT COUNT(*) FROM {table}"))
                     info[f"count_{table}"] = result.scalar()
-                except Exception as e:
-                    info[f"count_{table}"] = f"error: {str(e)[:50]}"
-    except Exception as e:
-        info["connection_error"] = str(e)[:200]
+                except Exception:
+                    info[f"count_{table}"] = "error"
+    except Exception:
+        info["connection_error"] = "Database connection failed"
 
     return info
 
