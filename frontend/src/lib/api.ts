@@ -756,6 +756,24 @@ export const fineRulesAPI = {
     const response = await api.delete(`/api/fine-rules/${id}`);
     return response.data;
   },
+
+  importPreview: async (attachmentId: number) => {
+    const response = await api.post('/api/fine-rules/import-preview', {
+      attachment_id: attachmentId,
+    });
+    return response.data;
+  },
+
+  importConfirm: async (
+    rules: Array<{ name: string; category: string; amount: number; description?: string }>,
+    deactivateExisting: boolean = true,
+  ) => {
+    const response = await api.post('/api/fine-rules/import-confirm', {
+      rules,
+      deactivate_existing: deactivateExisting,
+    });
+    return response.data;
+  },
 };
 
 // Dashboard drill-down

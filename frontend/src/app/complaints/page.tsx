@@ -9,7 +9,7 @@ import {
   ArrowLeft, AlertTriangle, TrendingUp,
   CheckCircle2, Clock, Plus, X, DollarSign,
   Pencil, Trash2, ListFilter, Upload, FileText,
-  Download, Loader2, Brain
+  Download, Loader2, Brain, FileInput
 } from 'lucide-react';
 import { complaintsAPI, fineRulesAPI, attachmentsAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -62,6 +62,12 @@ export default function ComplaintsPage() {
   const [uploadingFineDoc, setUploadingFineDoc] = useState(false);
   const [processingFineDoc, setProcessingFineDoc] = useState<number | null>(null);
   const fineDocInputRef = useRef<HTMLInputElement>(null);
+
+  // Fine rule import from document
+  const [importPreview, setImportPreview] = useState<any[] | null>(null);
+  const [importSourceName, setImportSourceName] = useState('');
+  const [importingFromDoc, setImportingFromDoc] = useState<number | null>(null);
+  const [confirmingImport, setConfirmingImport] = useState(false);
 
   const loadFineDocuments = useCallback(async () => {
     try {
@@ -119,6 +125,47 @@ export default function ComplaintsPage() {
       // silently handle
     } finally {
       setProcessingFineDoc(null);
+    }
+  };
+
+  const handleImportPreview = async (attId: number) => {
+    setImportingFromDoc(attId);
+    try {
+      const result = await fineRulesAPI.importPreview(attId);
+      const rulesWithToggle = (result.rules || []).map((r: any) => ({
+        ...r,
+        include: true,
+      }));
+      setImportPreview(rulesWithToggle);
+      setImportSourceName(result.source_filename || 'document');
+    } catch {
+      // silently handle
+    } finally {
+      setImportingFromDoc(null);
+    }
+  };
+
+  const handleToggleImportRule = (idx: number) => {
+    setImportPreview(prev =>
+      prev ? prev.map((r, i) => (i === idx ? { ...r, include: !r.include } : r)) : null
+    );
+  };
+
+  const handleConfirmImport = async () => {
+    if (!importPreview) return;
+    const selected = importPreview.filter((r: any) => r.include);
+    if (selected.length === 0) return;
+    setConfirmingImport(true);
+    try {
+      const rulesToSend = selected.map(({ include, ...rest }: any) => rest);
+      await fineRulesAPI.importConfirm(rulesToSend, true);
+      setImportPreview(null);
+      setImportSourceName('');
+      await loadData();
+    } catch {
+      // silently handle
+    } finally {
+      setConfirmingImport(false);
     }
   };
 
@@ -621,6 +668,18 @@ export default function ComplaintsPage() {
                           )}
                         </button>
                         <button
+                          onClick={() => handleImportPreview(doc.id)}
+                          disabled={importingFromDoc === doc.id}
+                          className="p-1.5 hover:bg-green-100 rounded transition-colors"
+                          title="Import Fine Rules from Document"
+                        >
+                          {importingFromDoc === doc.id ? (
+                            <Loader2 className="w-3.5 h-3.5 text-green-600 animate-spin" />
+                          ) : (
+                            <FileInput className="w-3.5 h-3.5 text-green-600" />
+                          )}
+                        </button>
+                        <button
                           onClick={() => handleFineDocDownload(doc)}
                           className="p-1.5 hover:bg-purple-100 rounded transition-colors"
                           title="Download"
@@ -642,6 +701,124 @@ export default function ComplaintsPage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Import Preview Modal */}
+      {importPreview && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Import Fine Rules</h3>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  Extracted from: <span className="font-medium text-purple-700">{importSourceName}</span>
+                </p>
+              </div>
+              <button
+                onClick={() => { setImportPreview(null); setImportSourceName(''); }}
+                className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+
+            <div className="p-4 bg-amber-50 border-b border-amber-200">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                <p className="text-sm text-amber-800">
+                  This will <strong>deactivate all {fineRules.length} existing rules</strong> and replace
+                  them with <strong>{importPreview.filter((r: any) => r.include).length} selected rules</strong> below.
+                  Toggle off any rules you don&apos;t want to import.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto p-4">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-white">
+                  <tr className="border-b text-left">
+                    <th className="pb-2 pr-2 w-10">
+                      <input
+                        type="checkbox"
+                        checked={importPreview.every((r: any) => r.include)}
+                        onChange={() => {
+                          const allSelected = importPreview.every((r: any) => r.include);
+                          setImportPreview(prev =>
+                            prev ? prev.map(r => ({ ...r, include: !allSelected })) : null
+                          );
+                        }}
+                        className="rounded border-gray-300"
+                      />
+                    </th>
+                    <th className="pb-2 pr-3 font-medium text-gray-600">Rule Name</th>
+                    <th className="pb-2 pr-3 font-medium text-gray-600 w-28">Category</th>
+                    <th className="pb-2 pr-3 font-medium text-gray-600 w-24 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importPreview.map((rule: any, idx: number) => (
+                    <tr
+                      key={idx}
+                      className={`border-b last:border-0 transition-colors ${
+                        rule.include ? 'bg-white' : 'bg-gray-50 opacity-60'
+                      }`}
+                    >
+                      <td className="py-2.5 pr-2">
+                        <input
+                          type="checkbox"
+                          checked={rule.include}
+                          onChange={() => handleToggleImportRule(idx)}
+                          className="rounded border-gray-300"
+                        />
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        <p className="font-medium text-gray-800">{rule.name}</p>
+                        {rule.description && (
+                          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{rule.description}</p>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        <Badge className="bg-indigo-100 text-indigo-700 text-[10px]">
+                          {rule.category}
+                        </Badge>
+                      </td>
+                      <td className="py-2.5 pr-3 text-right font-medium text-gray-700">
+                        ₪{Number(rule.amount).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between p-4 border-t bg-gray-50 rounded-b-xl">
+              <p className="text-sm text-gray-500">
+                {importPreview.filter((r: any) => r.include).length} of {importPreview.length} rules selected
+              </p>
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setImportPreview(null); setImportSourceName(''); }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleConfirmImport}
+                  disabled={confirmingImport || importPreview.filter((r: any) => r.include).length === 0}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  {confirmingImport ? (
+                    <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Importing...</>
+                  ) : (
+                    <>Confirm Import ({importPreview.filter((r: any) => r.include).length} rules)</>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Active Patterns Alert */}
@@ -761,9 +938,29 @@ export default function ComplaintsPage() {
                         {complaint.fine_rule_name && (
                           <span className="text-purple-600">Fine: {complaint.fine_rule_name}</span>
                         )}
+                        {complaint.fine_match_confidence > 0 && complaint.fine_match_confidence < 0.7 && !complaint.fine_rule_id && (
+                          <span className="text-amber-600 italic">
+                            Possible fine match ({Math.round(complaint.fine_match_confidence * 100)}%)
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
+
+                  {complaint.fine_match_confidence >= 0.7 && complaint.fine_rule_name && (
+                    <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
+                      <p className="text-xs text-green-800">
+                        <span className="font-medium">AI-matched fine:</span>{' '}
+                        {complaint.fine_rule_name} — ₪{complaint.fine_amount?.toLocaleString()}{' '}
+                        <span className="text-green-600">
+                          ({Math.round(complaint.fine_match_confidence * 100)}% confidence)
+                        </span>
+                      </p>
+                      {complaint.fine_match_reasoning && (
+                        <p className="text-xs text-green-700 mt-0.5">{complaint.fine_match_reasoning}</p>
+                      )}
+                    </div>
+                  )}
 
                   {complaint.ai_suggested_action && (
                     <div className="mt-2 p-2 bg-blue-50 rounded">

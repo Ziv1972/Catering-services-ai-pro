@@ -5,15 +5,18 @@ Analyzes complaints, detects patterns, suggests actions
 from backend.agents.base_agent import BaseAgent
 from backend.models.complaint import (
     Complaint, ComplaintPattern, ComplaintSeverity,
-    ComplaintCategory, ComplaintStatus
+    ComplaintCategory, ComplaintStatus, FineRule
 )
 from backend.models.site import Site
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+import logging
 import json
 import uuid
+
+logger = logging.getLogger(__name__)
 
 
 class ComplaintIntelligenceAgent(BaseAgent):
@@ -103,7 +106,95 @@ class ComplaintIntelligenceAgent(BaseAgent):
         complaint.ai_suggested_action = analysis["suggested_action"]
         complaint.requires_vendor_action = analysis.get("requires_vendor_action", False)
 
+        # Step 2: Match complaint to fine rule from catalog
+        fine_match = await self._match_fine_rule(db, complaint)
+        if fine_match:
+            analysis["suggested_fine_rule_id"] = fine_match.get("suggested_fine_rule_id")
+            analysis["suggested_fine_rule_name"] = fine_match.get("suggested_fine_rule_name")
+            analysis["suggested_fine_amount"] = fine_match.get("suggested_fine_amount")
+            analysis["fine_match_confidence"] = fine_match.get("fine_match_confidence", 0.0)
+            analysis["fine_match_reasoning"] = fine_match.get("fine_match_reasoning", "")
+
         return analysis
+
+    async def _match_fine_rule(
+        self,
+        db: AsyncSession,
+        complaint: Complaint
+    ) -> Optional[Dict[str, Any]]:
+        """Match a complaint to the best fine rule from the catalog"""
+        try:
+            result = await db.execute(
+                select(FineRule).where(FineRule.is_active == True)
+            )
+            rules = result.scalars().all()
+
+            if not rules:
+                return None
+
+            rules_list = [
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "category": r.category.value if r.category else "other",
+                    "amount": r.amount,
+                    "description": r.description or "",
+                }
+                for r in rules
+            ]
+
+            prompt = f"""
+            Given this employee complaint and the fine rule catalog below,
+            determine which fine rule best matches the complaint violation.
+
+            COMPLAINT TEXT:
+            {complaint.complaint_text}
+
+            AI ANALYSIS SUMMARY:
+            {complaint.ai_summary or "N/A"}
+
+            AI CATEGORY:
+            {complaint.category.value if complaint.category else "unknown"}
+
+            FINE RULE CATALOG:
+            {json.dumps(rules_list, indent=2, ensure_ascii=False)}
+
+            Return a JSON object:
+            {{
+                "suggested_fine_rule_id": <rule id or null if no match>,
+                "suggested_fine_rule_name": "<rule name or null>",
+                "suggested_fine_amount": <rule amount or null>,
+                "fine_match_confidence": <0.0 to 1.0>,
+                "fine_match_reasoning": "<brief explanation of why this rule matches>"
+            }}
+
+            Guidelines:
+            - Only suggest a rule if the complaint clearly describes a violation matching that rule
+            - Confidence >= 0.7 means strong match (auto-apply)
+            - Confidence 0.4-0.7 means possible match (suggest but don't auto-apply)
+            - Confidence < 0.4 means no meaningful match (return null for id/name/amount)
+            - Consider the complaint category and the rule category
+            - Hebrew text complaints are common — match based on meaning
+            """
+
+            match_result = await self.generate_structured_response(
+                prompt=prompt,
+                system_prompt=self._get_system_prompt()
+            )
+
+            if not match_result or not isinstance(match_result, dict):
+                return None
+
+            return {
+                "suggested_fine_rule_id": match_result.get("suggested_fine_rule_id"),
+                "suggested_fine_rule_name": match_result.get("suggested_fine_rule_name"),
+                "suggested_fine_amount": match_result.get("suggested_fine_amount"),
+                "fine_match_confidence": float(match_result.get("fine_match_confidence", 0.0)),
+                "fine_match_reasoning": match_result.get("fine_match_reasoning", ""),
+            }
+        except Exception as e:
+            logger.warning("Fine rule matching failed: %s", e)
+            return None
 
     async def detect_patterns(
         self,

@@ -56,6 +56,9 @@ class ComplaintResponse(BaseModel):
     fine_rule_id: Optional[int]
     fine_amount: Optional[float]
     fine_rule_name: Optional[str] = None
+    # AI fine-match fields
+    fine_match_confidence: Optional[float] = None
+    fine_match_reasoning: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -79,6 +82,39 @@ class PatternResponse(BaseModel):
 
 class ResolveRequest(BaseModel):
     resolution_notes: str
+
+
+def _complaint_to_response(
+    complaint: Complaint,
+    analysis: Optional[dict] = None,
+    fine_rule_name: Optional[str] = None,
+) -> ComplaintResponse:
+    """Convert a Complaint ORM object + optional analysis dict to a response."""
+    return ComplaintResponse(
+        id=complaint.id,
+        complaint_text=complaint.complaint_text,
+        site_id=complaint.site_id,
+        source=complaint.source.value if complaint.source else "manual",
+        category=complaint.category.value if complaint.category else None,
+        severity=complaint.severity.value if complaint.severity else None,
+        sentiment_score=complaint.sentiment_score,
+        ai_summary=complaint.ai_summary,
+        ai_root_cause=complaint.ai_root_cause,
+        ai_suggested_action=complaint.ai_suggested_action,
+        status=complaint.status.value if complaint.status else "open",
+        received_at=complaint.received_at,
+        acknowledged_at=complaint.acknowledged_at,
+        resolved_at=complaint.resolved_at,
+        pattern_group_id=complaint.pattern_group_id,
+        employee_name=complaint.employee_name,
+        is_anonymous=complaint.is_anonymous,
+        requires_vendor_action=complaint.requires_vendor_action,
+        fine_rule_id=complaint.fine_rule_id,
+        fine_amount=complaint.fine_amount,
+        fine_rule_name=fine_rule_name,
+        fine_match_confidence=analysis.get("fine_match_confidence") if analysis else None,
+        fine_match_reasoning=analysis.get("fine_match_reasoning") if analysis else None,
+    )
 
 
 @router.post("/", response_model=ComplaintResponse)
@@ -107,16 +143,44 @@ async def create_complaint(
     db.add(complaint)
     await db.flush()
 
+    analysis = None
     try:
         agent = ComplaintIntelligenceAgent()
-        await agent.analyze_complaint(db, complaint)
+        analysis = await agent.analyze_complaint(db, complaint)
+
+        # Auto-link fine rule if AI found a strong match and user didn't manually set one
+        suggested_id = analysis.get("suggested_fine_rule_id") if analysis else None
+        confidence = analysis.get("fine_match_confidence", 0.0) if analysis else 0.0
+
+        if suggested_id and confidence >= 0.7 and not complaint.fine_rule_id:
+            rule_result = await db.execute(
+                select(FineRule).where(
+                    FineRule.id == suggested_id,
+                    FineRule.is_active == True,
+                )
+            )
+            matched_rule = rule_result.scalar_one_or_none()
+            if matched_rule:
+                complaint.fine_rule_id = matched_rule.id
+                complaint.fine_amount = matched_rule.amount
     except Exception:
         pass
 
     await db.commit()
     await db.refresh(complaint)
 
-    return complaint
+    # Eager-load fine_rule for the response
+    fine_rule_name = None
+    if complaint.fine_rule_id:
+        rule_res = await db.execute(
+            select(FineRule).where(FineRule.id == complaint.fine_rule_id)
+        )
+        matched = rule_res.scalar_one_or_none()
+        if matched:
+            fine_rule_name = matched.name
+
+    response = _complaint_to_response(complaint, analysis, fine_rule_name)
+    return response
 
 
 @router.get("/", response_model=List[ComplaintResponse])
