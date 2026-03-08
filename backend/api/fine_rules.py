@@ -3,6 +3,7 @@ Fine rules API endpoints — predefined fine catalog for complaints.
 Includes AI-powered import from uploaded documents (PDF/Excel/etc).
 """
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -159,13 +160,40 @@ async def import_preview(
     if not att:
         raise HTTPException(404, "Attachment not found")
 
+    logger.info(
+        f"Import preview: attachment {att.id}, file='{att.original_filename}', "
+        f"path='{att.file_path}', content_type='{att.content_type}'"
+    )
+
+    if not att.file_path or not os.path.exists(att.file_path):
+        raise HTTPException(
+            400,
+            f"File '{att.original_filename}' not found on server. "
+            "This can happen after a redeployment. Please re-upload the document."
+        )
+
     file_text = extract_file_content(att.file_path, att.content_type, att.original_filename)
+
     if not file_text or not file_text.strip():
         raise HTTPException(
             400,
             f"Cannot extract text from '{att.original_filename}'. "
             "Supported: PDF, Excel, CSV, TXT files."
         )
+
+    # Detect extraction errors returned as strings
+    if file_text.startswith("[") and file_text.endswith("]"):
+        logger.error(f"File extraction error for '{att.original_filename}': {file_text}")
+        raise HTTPException(
+            400,
+            f"Error reading file: {file_text}. "
+            "Please ensure the file is a valid PDF, Excel, or text document."
+        )
+
+    logger.info(
+        f"Extracted {len(file_text)} chars from '{att.original_filename}'. "
+        f"First 200 chars: {file_text[:200]!r}"
+    )
 
     truncated = file_text[:30_000]
     categories_str = ", ".join(VALID_CATEGORIES)
@@ -203,12 +231,22 @@ async def import_preview(
             system_prompt=system_prompt,
             response_format=response_format,
         )
+        logger.info(f"Claude response for import: {extracted}")
     except Exception as e:
         logger.error(f"AI extraction failed for attachment {body.attachment_id}: {e}")
         raise HTTPException(500, "AI extraction failed. Please try again.")
 
+    if not extracted or not isinstance(extracted, dict):
+        logger.error(f"Unexpected AI response type: {type(extracted)}, value: {extracted}")
+        raise HTTPException(500, "AI returned unexpected response format. Please try again.")
+
     rules: List[ExtractedFineRule] = []
-    for r in extracted.get("rules", []):
+    raw_rules = extracted.get("rules", [])
+    if not isinstance(raw_rules, list):
+        logger.error(f"Expected list for 'rules', got {type(raw_rules)}: {raw_rules}")
+        raw_rules = []
+
+    for r in raw_rules:
         cat = r.get("category", "other")
         if cat not in VALID_CATEGORIES:
             cat = "other"

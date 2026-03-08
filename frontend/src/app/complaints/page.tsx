@@ -128,8 +128,11 @@ export default function ComplaintsPage() {
     }
   };
 
+  const [importError, setImportError] = useState('');
+
   const handleImportPreview = async (attId: number) => {
     setImportingFromDoc(attId);
+    setImportError('');
     try {
       const result = await fineRulesAPI.importPreview(attId);
       const rulesWithToggle = (result.rules || []).map((r: any) => ({
@@ -138,8 +141,9 @@ export default function ComplaintsPage() {
       }));
       setImportPreview(rulesWithToggle);
       setImportSourceName(result.source_filename || 'document');
-    } catch {
-      // silently handle
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || err?.message || 'Import preview failed';
+      setImportError(msg);
     } finally {
       setImportingFromDoc(null);
     }
@@ -696,6 +700,11 @@ export default function ComplaintsPage() {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+              {importError && (
+                <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  <strong>Import error:</strong> {importError}
                 </div>
               )}
             </div>
