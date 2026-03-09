@@ -26,13 +26,19 @@ graph TB
         ORCH --> CLAUDE
     end
 
-    subgraph Agents["AI Agents"]
+    subgraph Agents["AI Agents — All Implemented"]
         MP[Meeting Prep Agent]
         CI[Complaint Intelligence]
         BI[Budget Intelligence]
         DC[Dietary Compliance]
         EC[Event Coordination]
         CH[Communication Hub]
+    end
+
+    subgraph Crew["Agent Crew"]
+        CM[Crew Manager]
+        REG[Agent Registry]
+        SES[Session + Blackboard]
     end
 
     subgraph External["External Services"]
@@ -55,6 +61,9 @@ graph TB
     ORCH --> DC
     ORCH --> EC
     ORCH --> CH
+    CM --> REG
+    REG --> Agents
+    CM --> SES
     CLAUDE --> ANTHROPIC
     DB_LAYER --> SQLITE
     ROUTES --> GMAIL
@@ -230,33 +239,97 @@ erDiagram
 
 ```mermaid
 graph TD
-    ORCH[Agent Orchestrator]
+    CM["🎯 Crew Manager<br/>Intent Analysis → Delegation<br/>→ Parallel Execution → Synthesis"]
 
-    subgraph Complete["Implemented"]
+    subgraph Agents["All 6 Agents Implemented ✅"]
         MP["Meeting Prep Agent<br/>Generates briefs, agendas,<br/>action items from context"]
-        CI["Complaint Intelligence<br/>Analyzes severity, sentiment,<br/>detects patterns, drafts responses"]
+        CI["Complaint Intelligence<br/>Analyzes severity, sentiment,<br/>detects patterns, auto-matches fines"]
+        BI["Budget Intelligence<br/>Variance prediction,<br/>cost optimization, forecasting"]
+        DC["Dietary Compliance<br/>68 Hebrew rule validation,<br/>kashrut compliance"]
+        EC["Event Coordination<br/>Event planning, menu<br/>suggestions, logistics"]
+        CH["Communication Hub<br/>Reports, vendor emails,<br/>management updates"]
     end
 
-    subgraph Planned["Planned"]
-        BI["Budget Intelligence<br/>Variance prediction,<br/>cost optimization"]
-        DC["Dietary Compliance<br/>Dietary requirement<br/>tracking"]
-        EC["Event Coordination<br/>Event logistics<br/>management"]
-        CH["Communication Hub<br/>Multi-channel<br/>notifications"]
+    subgraph Crew["Agent Crew Roles (10)"]
+        DA["Data Analyst"]
+        IA["Invoice Analyst"]
+        DOM["Daily Ops Monitor"]
+        SM["Supplier Manager"]
     end
 
-    ORCH --> MP
-    ORCH --> CI
-    ORCH -.-> BI
-    ORCH -.-> DC
-    ORCH -.-> EC
-    ORCH -.-> CH
+    CM --> MP
+    CM --> CI
+    CM --> BI
+    CM --> DC
+    CM --> EC
+    CM --> CH
+    CM -.-> DA
+    CM -.-> IA
+    CM -.-> DOM
+    CM -.-> SM
 
     style MP fill:#4ade80,stroke:#16a34a,color:#000
     style CI fill:#4ade80,stroke:#16a34a,color:#000
-    style BI fill:#fbbf24,stroke:#d97706,color:#000
-    style DC fill:#fbbf24,stroke:#d97706,color:#000
-    style EC fill:#fbbf24,stroke:#d97706,color:#000
-    style CH fill:#fbbf24,stroke:#d97706,color:#000
+    style BI fill:#4ade80,stroke:#16a34a,color:#000
+    style DC fill:#4ade80,stroke:#16a34a,color:#000
+    style EC fill:#4ade80,stroke:#16a34a,color:#000
+    style CH fill:#4ade80,stroke:#16a34a,color:#000
+    style DA fill:#93c5fd,stroke:#3b82f6,color:#000
+    style IA fill:#93c5fd,stroke:#3b82f6,color:#000
+    style DOM fill:#93c5fd,stroke:#3b82f6,color:#000
+    style SM fill:#93c5fd,stroke:#3b82f6,color:#000
+    style CM fill:#fbbf24,stroke:#d97706,color:#000
+```
+
+## Fine Rule Intelligence Flow
+
+```mermaid
+flowchart LR
+    subgraph Import["Fine Rule Import"]
+        PDF["📄 Upload PDF<br/>(Hebrew contract)"]
+        EXTRACT["🤖 Claude AI<br/>Extract rules"]
+        PREVIEW["👁️ Preview Modal<br/>Per-rule toggle"]
+        CONFIRM["✅ Confirm Import<br/>Replace old rules"]
+        PDF --> EXTRACT --> PREVIEW --> CONFIRM
+    end
+
+    subgraph Match["Complaint Auto-Match"]
+        COMP["💬 New Complaint<br/>(WhatsApp/email/manual)"]
+        ANALYZE["🤖 AI Analyze<br/>Category, severity"]
+        FINE["🔍 Match Fine Rule<br/>From catalog"]
+        LINK["🔗 Auto-Link<br/>If confidence ≥70%"]
+        COMP --> ANALYZE --> FINE --> LINK
+    end
+
+    CONFIRM -.->|"Rules in catalog"| FINE
+```
+
+## Crew Manager Orchestration
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant FE as Agent Crew UI
+    participant CM as Crew Manager
+    participant AI as Claude (Intent)
+    participant A1 as Agent 1
+    participant A2 as Agent 2
+    participant SYN as Claude (Synthesis)
+
+    U->>FE: "Analyze last month spending"
+    FE->>CM: POST /api/agent-crew/chat
+    CM->>AI: Analyze intent + available agents
+    AI-->>CM: {agents: [data_analyst, budget_intelligence]}
+    par Parallel Execution
+        CM->>A1: data_analyst.process()
+        CM->>A2: budget_intelligence.process()
+    end
+    A1-->>CM: Spending trends result
+    A2-->>CM: Budget variance result
+    CM->>SYN: Synthesize multi-agent outputs
+    SYN-->>CM: Unified response
+    CM-->>FE: Response + agent breakdown
+    FE-->>U: Display with agent badges
 ```
 
 ## Tech Stack
@@ -273,7 +346,7 @@ graph TD
 | Auth | JWT (python-jose, passlib) |
 | Integrations | Gmail API, Slack SDK, Google Calendar, Power Automate |
 
-## Pages (20)
+## Pages (21)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -297,6 +370,7 @@ graph TD
 | `/complaints/[id]` | Complaint Detail | AI draft response, resolution tracking |
 | `/analytics` | Analytics | Multi-level drill-down: cost (4 levels), quantity (5 levels) |
 | `/anomalies` | Anomalies | Operational anomaly tracking with severity and resolution |
+| `/agent-crew` | Agent Crew | Multi-agent dashboard, crew chat, agent cards, interaction map |
 
 ## API Endpoints
 
@@ -381,11 +455,17 @@ catering-services-ai-pro/
 │   │   ├── base_agent.py          # Abstract base agent
 │   │   ├── orchestrator.py        # Request routing
 │   │   ├── meeting_prep/          # Meeting brief generation
-│   │   ├── complaint_intelligence/# Complaint analysis
-│   │   ├── budget_intelligence/   # Budget analysis (stub)
-│   │   ├── dietary_compliance/    # Dietary rules (stub)
-│   │   ├── event_coordination/    # Event mgmt (stub)
-│   │   └── communication_hub/     # Notifications (stub)
+│   │   ├── complaint_intelligence/# Complaint analysis + fine matching
+│   │   ├── budget_intelligence/   # Spending analysis, forecasting
+│   │   ├── dietary_compliance/    # Kashrut & dietary rules
+│   │   ├── event_coordination/    # Event planning & logistics
+│   │   ├── communication_hub/     # Reports & vendor emails
+│   │   └── crew/                  # Multi-agent orchestration
+│   │       ├── models.py          # AgentRole, Task, Message
+│   │       ├── roles.py           # 10 role definitions
+│   │       ├── registry.py        # Agent initialization
+│   │       ├── manager.py         # CrewManager orchestrator
+│   │       └── session.py         # Blackboard pattern
 │   ├── api/                       # FastAPI route handlers
 │   │   ├── auth.py                # JWT authentication
 │   │   ├── meetings.py            # Meetings CRUD + AI
@@ -500,10 +580,10 @@ Production data migrated from FoodHouse Analytics:
 
 ## Roadmap
 
-### Completed
+### Completed — Foundation & CRUD
 - [x] Phase 1: Meeting Prep Agent — AI brief generation with historical context
 - [x] Phase 2: Complaint Intelligence Agent — analysis, patterns, weekly summaries, draft responses
-- [x] Frontend: 9 → **20 pages** with full CRUD
+- [x] Frontend: 9 → **21 pages** with full CRUD
 - [x] Real data migration from FoodHouse Analytics (11,497 proforma items)
 - [x] Dashboard overhaul: budget cards, supplier spending, meals chart, AI chat widget
 - [x] Budget drill-down: 4-stage cascading (supplier → month → site → category → products)
@@ -526,18 +606,31 @@ Production data migrated from FoodHouse Analytics:
 - [x] Branding update: "Catering AI Pro" header, "HP Israel - Ziv Reshef Simchoni" subtitle, footer
 - [x] Menu compliance rules: search box + category filter pills with counts
 
-### Upcoming — Phase 6: Remaining AI Agents
-- [ ] Budget Intelligence Agent (forecasting, alerts, trends)
-- [ ] Dietary Compliance Agent (automated menu rule checking)
-- [ ] Event Coordination Agent (event planning support)
-- [ ] Communication Hub Agent (Slack/email routing)
+### Completed — Phase 6: All AI Agents + Agent Crew ✅
+- [x] **Budget Intelligence Agent** — spending analysis, forecasting, cost anomaly detection
+- [x] **Dietary Compliance Agent** — kashrut validation, 8-rule checking, compliance summaries
+- [x] **Event Coordination Agent** — event planning, menu suggestions, cost estimation
+- [x] **Communication Hub Agent** — weekly reports, vendor emails, management updates
+- [x] **Agent Crew system** — 10-agent orchestration with CrewManager, intent analysis, parallel execution, result synthesis
+- [x] **Agent Crew frontend** — `/agent-crew` page with dashboard, chat, agent cards, interaction map
+- [x] **Fine rule import from PDF** — AI extracts Hebrew rules, preview modal with per-rule toggle
+- [x] **Auto-match complaints to fines** — AI suggests matching fine rule with confidence score
 
-### Future — Phase 7: Platform Maturity
+### In Progress — Phase 7: Agent Intelligence Deepening
+- [ ] First real fine import test (re-upload PDF, verify Hebrew extraction)
+- [ ] Dedicated agent implementations (data_analyst, supplier_manager, daily_ops_monitor share BudgetIntelligenceAgent)
+- [ ] Monthly fine report — collect fines by date/amount, prepare supplier fine summary table
+- [ ] Sequential task dependencies in crew manager
+- [ ] Persistent crew sessions (currently in-memory)
+- [ ] Agent health monitoring & auto-recovery
+
+### Future — Phase 8: Platform Maturity
 - [ ] Notification system (email/Slack alerts)
 - [ ] Role-based access control
 - [ ] Export reports (PDF/Excel)
 - [ ] Mobile PWA optimization
 - [ ] Audit log, multi-language UI
+- [ ] Cloud file storage (S3) to survive redeployments
 
 ## License
 

@@ -54,20 +54,50 @@ docker-compose up -d    # full stack: PostgreSQL + Redis
 
 ### AI Agent System
 
+Two-layer architecture: **individual agents** for focused tasks + **Agent Crew** for multi-agent orchestration.
+
+#### Individual Agents
 `backend/agents/orchestrator.py` routes requests to specialist agents extending `BaseAgent`.
 
 | Agent | Status | Directory |
 |-------|--------|-----------|
 | Meeting Prep | Implemented | `backend/agents/meeting_prep/` |
 | Complaint Intelligence | Implemented | `backend/agents/complaint_intelligence/` |
-| Budget Intelligence | Stub | `backend/agents/budget_intelligence/` |
-| Dietary Compliance | Stub | `backend/agents/dietary_compliance/` |
-| Event Coordination | Stub | `backend/agents/event_coordination/` |
-| Communication Hub | Stub | `backend/agents/communication_hub/` |
+| Budget Intelligence | Implemented | `backend/agents/budget_intelligence/` |
+| Dietary Compliance | Implemented | `backend/agents/dietary_compliance/` |
+| Event Coordination | Implemented | `backend/agents/event_coordination/` |
+| Communication Hub | Implemented | `backend/agents/communication_hub/` |
+
+#### Agent Crew System (`backend/agents/crew/`)
+Multi-agent orchestration with intent analysis, parallel execution, and result synthesis.
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Models | `crew/models.py` | AgentRole, AgentTask, AgentMessage, CrewMetrics dataclasses |
+| Roles | `crew/roles.py` | 10 role definitions (1 manager + 9 specialists) |
+| Registry | `crew/registry.py` | Lazy agent initialization, maps roles to BaseAgent instances |
+| Manager | `crew/manager.py` | Intent analysis → delegation → parallel execution → synthesis |
+| Session | `crew/session.py` | Blackboard pattern for inter-agent data sharing |
+| API | `api/agent_crew.py` | REST endpoints: crew info, chat, direct agent run, roles |
+| Frontend | `frontend/src/app/agent-crew/page.tsx` | Crew dashboard, chat interface, agent cards |
+
+**Crew Agents** (10 roles):
+| Role ID | Title | Agent Instance |
+|---------|-------|---------------|
+| operations_manager | Chief Operations Coordinator | Manager (orchestrator) |
+| data_analyst | Senior Catering Data Analyst | BudgetIntelligenceAgent |
+| menu_compliance | Dietary Compliance & Kashrut | DietaryComplianceAgent |
+| invoice_analyst | Senior Procurement Analyst | BudgetIntelligenceAgent |
+| budget_intelligence | Chief Budget Officer | BudgetIntelligenceAgent |
+| complaint_intelligence | Complaint Resolution Specialist | ComplaintIntelligenceAgent |
+| daily_ops_monitor | Real-Time Operations Monitor | BudgetIntelligenceAgent |
+| supplier_manager | Vendor Relationship Manager | BudgetIntelligenceAgent |
+| event_coordinator | Event Catering Coordinator | EventCoordinationAgent |
+| communication_hub | Communications & Reporting | CommunicationHubAgent |
 
 ### Frontend (Next.js 14 App Router + TypeScript)
 
-20 pages, Tailwind CSS + Radix UI + Lucide icons + Recharts:
+21 pages, Tailwind CSS + Radix UI + Lucide icons + Recharts:
 
 | Page | Route | Purpose |
 |------|-------|---------|
@@ -91,6 +121,7 @@ docker-compose up -d    # full stack: PostgreSQL + Redis
 | Complaint Detail | `/complaints/[id]` | AI draft response, resolution tracking |
 | Analytics | `/analytics` | Multi-level drill-down: cost analysis (4 levels), quantity analysis (5 levels) |
 | Anomalies | `/anomalies` | Operational anomaly tracking with severity and resolution |
+| Agent Crew | `/agent-crew` | Multi-agent dashboard, crew chat, agent cards with metrics |
 
 ### Services
 
@@ -199,7 +230,7 @@ async def action(
 
 Compliance rules, meal types, product names, and some domain data are in Hebrew. The system manages catering for HP Israel — Hebrew text in database seeds and UI is expected.
 
-## What's Been Built (44 commits)
+## What's Been Built (50 commits)
 
 ### Phase 1: Foundation
 - FastAPI backend with async SQLAlchemy, JWT auth, 2-site support
@@ -228,13 +259,22 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - IMAP email poller for hands-free Gmail → database pipeline
 - Manual trigger endpoint for testing
 
-### Phase 5: UI/UX Overhaul + Price Lists (Latest)
+### Phase 5: UI/UX Overhaul + Price Lists
 - Dashboard redesign: modern KPI cards, semantic color tokens (CSS custom properties), animated transitions, responsive grid
 - Price list management overhaul: CSV upload with multi-encoding support (utf-8, cp1255, latin-1) and auto column detection (EN/HE headers)
 - Inline price/unit editing with hover-to-reveal actions, add product with catalog auto-creation, duplicate detection
 - Backend endpoints: PUT/DELETE items, POST add-product, POST upload CSV
 - Branding: "Catering AI Pro" header, "HP Israel - Ziv Reshef Simchoni" subtitle + footer
 - Menu compliance rules: search box + category filter pills with counts
+
+### Phase 6: Agent Crew + Fine Rule Intelligence (Latest)
+- **Agent Crew system**: 10-agent orchestration (1 manager + 9 specialists) with intent analysis, parallel execution, result synthesis
+- **All 6 AI agents implemented**: Budget Intelligence, Dietary Compliance, Event Coordination, Communication Hub (no longer stubs)
+- **Agent Crew frontend page**: `/agent-crew` with crew dashboard, chat interface, agent cards, interaction map
+- **Fine rule import from PDF**: Upload contract PDF → AI extracts rules in Hebrew → preview modal with per-rule toggle → replace seeded rules
+- **Auto-match complaints to fines**: AI suggests matching fine rule with confidence score when complaint is created, auto-links at ≥70% confidence
+- **Deploy fix**: Committed 8 missing agent crew files that caused Railway healthcheck failures
+- **File existence check**: Detects ephemeral filesystem file loss after Railway redeployment
 
 ## Session Summary Rules
 
@@ -248,29 +288,37 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 
 - [x] Phase 1: Meeting Prep Agent
 - [x] Phase 2: Complaint Intelligence Agent
-- [x] Frontend: All 9 → 20 pages with CRUD
+- [x] Frontend: All 9 → 21 pages with CRUD
 - [x] Real data migration from FoodHouse Analytics
-- [ ] **Phase 3: Budget Intelligence Agent** (forecasting, alerts, trends)
-- [ ] **Phase 4: Event Coordination Agent** (event planning support)
-- [ ] **Phase 5: Dietary Compliance Agent** (automated menu rule checking)
-- [ ] **Phase 6: Communication Hub Agent** (Slack/email routing)
+- [x] **Phase 3: Budget Intelligence Agent** (forecasting, alerts, trends) ✅
+- [x] **Phase 4: Event Coordination Agent** (event planning support) ✅
+- [x] **Phase 5: Dietary Compliance Agent** (automated menu rule checking) ✅
+- [x] **Phase 6: Communication Hub Agent** (Slack/email routing) ✅
+
+**All 6 original agent phases are now complete.**
 
 ## What's Next
 
-### Phase 5: UI/UX Overhaul + Price Lists (Completed)
-- [x] **Dashboard redesign** — modern KPI cards, semantic color tokens, animated transitions, responsive layout
-- [x] **Price list management** — CSV upload (multi-encoding, auto-column detection), inline editing, add product with catalog auto-creation
-- [x] **Branding** — "Catering AI Pro" header, "HP Israel - Ziv Reshef Simchoni" subtitle + footer
+### Phase 6: Agent Crew + Fine Rule Intelligence (Current — In Progress)
+- [x] **Agent Crew system** — 10-agent orchestration with CrewManager, intent analysis, parallel execution
+- [x] **All 6 AI agents implemented** — Budget, Dietary, Event, Communication (no longer stubs)
+- [x] **Agent Crew frontend** — `/agent-crew` page with dashboard, chat, agent cards, interaction map
+- [x] **Fine rule import from PDF** — AI extracts rules in Hebrew, preview modal with per-rule toggle
+- [x] **Auto-match complaints to fines** — AI suggests matching fine rule with confidence score
+- [ ] First real fine import test (re-upload PDF after deploy, verify Hebrew extraction)
 - [ ] Fix `test_dashboard` test (key mismatch: `upcoming_meetings` → `meetings`)
 - [ ] First real FoodHouse email test — tune IMAP sender/subject filters
 
-### Phase 6: Remaining AI Agents
-- [ ] Implement **Budget Intelligence Agent** (variance prediction, cost optimization, spend alerts)
-- [ ] Implement **Dietary Compliance Agent** (automated menu rule checking against 68 Hebrew rules)
-- [ ] Implement **Event Coordination Agent** (event logistics management)
-- [ ] Implement **Communication Hub Agent** (Slack/email multi-channel notifications)
+### Phase 7: Agent Intelligence Deepening
+- [ ] Dedicated agent implementations (data_analyst, supplier_manager, daily_ops_monitor currently share BudgetIntelligenceAgent)
+- [ ] Sequential task dependencies in crew (currently all parallel)
+- [ ] Persistent crew sessions (currently in-memory)
+- [ ] Monthly fine report — collect fines by date/amount, prepare supplier fine summary table
+- [ ] Agent health monitoring & auto-recovery
+- [ ] Custom workflows (pre-defined multi-agent sequences)
+- [ ] Webhook event triggers (complaint → pattern detection → vendor email pipeline)
 
-### Phase 7: Platform Maturity
+### Phase 8: Platform Maturity
 - [ ] Notification system (email/Slack alerts for anomalies, complaints, budget overruns)
 - [ ] Role-based access control (admin vs viewer vs site manager)
 - [ ] Export reports (PDF/Excel)
@@ -278,3 +326,4 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - [ ] Audit log for all changes
 - [ ] Multi-language UI support (English/Hebrew toggle)
 - [ ] Historical trend predictions using AI
+- [ ] Cloud file storage (S3/GCS) to survive Railway redeployments
