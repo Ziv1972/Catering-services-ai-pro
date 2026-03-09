@@ -201,20 +201,21 @@ async def import_preview(
     prompt = (
         "Below is text extracted from a Hebrew fine/penalty document for a catering contract.\n"
         "Extract ALL fine rules / penalty clauses from this document.\n\n"
+        "IMPORTANT: Keep ALL text in Hebrew. Do NOT translate to English.\n\n"
         "For each rule, provide:\n"
-        "- name: Short descriptive name in English (translate from Hebrew)\n"
+        "- name: Short descriptive name in HEBREW (keep the original Hebrew wording)\n"
         f"- category: MUST be exactly one of: {categories_str}\n"
         "- amount: Fine amount in NIS (number only). If a range, use the maximum. "
         "If percentage-based, estimate a reasonable fixed amount.\n"
-        "- description: Brief description in English (translate from Hebrew), "
-        "include the original Hebrew term in parentheses if relevant\n\n"
+        "- description: Brief description in HEBREW (keep original Hebrew text from the document)\n\n"
         f"Document text:\n{truncated}"
     )
 
     system_prompt = (
         "You are a legal document analyst specializing in Israeli catering contracts. "
         "Extract structured penalty/fine rules from Hebrew contract documents. "
-        "Translate Hebrew to English for names and descriptions. "
+        "CRITICAL: Keep names and descriptions in the ORIGINAL HEBREW. Do NOT translate to English. "
+        "The only field in English is 'category' which must match the allowed list exactly. "
         "Map each rule to the most appropriate category from the allowed list. "
         "Be thorough — extract every distinct fine rule mentioned."
     )
