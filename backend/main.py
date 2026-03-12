@@ -80,18 +80,23 @@ async def lifespan(app: FastAPI):
                     "ALTER TABLE complaint_patterns RENAME TO violation_patterns"
                 ))
 
-            # Convert category column to VARCHAR to avoid enum type conflicts
+            # Convert enum columns to VARCHAR to avoid enum type conflicts
             has_violations = await conn.execute(text(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
                 "WHERE table_name = 'violations')"
             ))
             if has_violations.scalar():
-                try:
-                    await conn.execute(text(
-                        "ALTER TABLE violations ALTER COLUMN category TYPE VARCHAR"
-                    ))
-                except Exception:
-                    pass
+                # Each column that was a PG enum needs USING col::text
+                for col in ['category', 'severity', 'source', 'status']:
+                    try:
+                        await conn.execute(text(
+                            f"ALTER TABLE violations "
+                            f"ALTER COLUMN {col} TYPE VARCHAR "
+                            f"USING {col}::text"
+                        ))
+                        logger.info(f"Converted violations.{col} to VARCHAR")
+                    except Exception as e:
+                        logger.info(f"Column {col} already VARCHAR or missing: {e}")
 
                 # Map old category values → new values
                 category_migration = {
@@ -116,11 +121,37 @@ async def lifespan(app: FastAPI):
                     ))
                 logger.info("Migrated old category enum values to new values")
 
-            # Drop old enum types if they exist
+            # Also convert fine_rules.category if it uses a native enum
+            has_fine_rules = await conn.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'fine_rules')"
+            ))
+            if has_fine_rules.scalar():
+                try:
+                    await conn.execute(text(
+                        "ALTER TABLE fine_rules "
+                        "ALTER COLUMN category TYPE VARCHAR "
+                        "USING category::text"
+                    ))
+                    logger.info("Converted fine_rules.category to VARCHAR")
+                except Exception as e:
+                    logger.info(f"fine_rules.category already VARCHAR: {e}")
+
+                # Map old fine_rules category values too
+                for old_val, new_val in category_migration.items():
+                    await conn.execute(text(
+                        f"UPDATE fine_rules SET category = '{new_val}' "
+                        f"WHERE category = '{old_val}'"
+                    ))
+
+            # Drop ALL old enum types (complaint* and violation* to start fresh)
             for old_type in ['complaintcategory', 'complaintseverity',
-                             'complaintsource', 'complaintstatus']:
+                             'complaintsource', 'complaintstatus',
+                             'violationcategory', 'violationseverity',
+                             'violationsource', 'violationstatus']:
                 try:
                     await conn.execute(text(f"DROP TYPE IF EXISTS {old_type} CASCADE"))
+                    logger.info(f"Dropped enum type: {old_type}")
                 except Exception:
                     pass
         else:
