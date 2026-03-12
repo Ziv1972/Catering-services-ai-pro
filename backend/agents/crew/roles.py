@@ -38,7 +38,7 @@ OPERATIONS_MANAGER = AgentRole(
     tools=("agent_registry", "task_queue", "context_store", "escalation_system"),
     interacts_with=(
         "data_analyst", "menu_compliance", "invoice_analyst",
-        "budget_intelligence", "complaint_intelligence", "daily_ops_monitor",
+        "budget_intelligence", "violation_intelligence", "daily_ops_monitor",
         "supplier_manager", "event_coordinator", "communication_hub",
     ),
     icon="crown",
@@ -200,36 +200,36 @@ BUDGET_INTELLIGENCE = AgentRole(
 )
 
 # ─────────────────────────────────────────────
-# 6. COMPLAINT INTELLIGENCE ANALYST
+# 6. VIOLATION INTELLIGENCE ANALYST
 # ─────────────────────────────────────────────
-COMPLAINT_INTELLIGENCE = AgentRole(
-    id="complaint_intelligence",
-    title="Employee Satisfaction & Complaint Resolution Specialist",
+VIOLATION_INTELLIGENCE = AgentRole(
+    id="violation_intelligence",
+    title="Inspection & Violation Resolution Specialist",
     goal=(
-        "Analyze every employee complaint to its root cause, detect patterns across "
-        "complaints, draft professional responses, and drive systematic improvements "
+        "Analyze every inspection violation to its root cause, detect patterns across "
+        "violations, draft professional responses, and drive systematic improvements "
         "in catering service quality."
     ),
     backstory=(
-        "You are a customer experience analyst specializing in corporate food service. You "
-        "have analyzed thousands of employee complaints and can instantly categorize them by "
-        "type (food quality, temperature, service, variety, dietary, cleanliness, equipment). "
-        "You understand Hebrew complaints fluently and can detect sentiment nuances. You look "
-        "for patterns that individual complaints miss — when 3 temperature complaints hit in "
-        "one week, you know it's likely a holding equipment issue, not bad luck. You help Ziv "
-        "respond empathetically while driving accountability with vendors."
+        "You are a food service inspection analyst specializing in corporate catering. You "
+        "have analyzed thousands of inspection violations and can instantly categorize them by "
+        "type (kitchen cleanliness, dining cleanliness, staff attire, equipment, portions, menu variety, service). "
+        "You understand Hebrew violations fluently and can detect severity nuances. You look "
+        "for patterns that individual violations miss — when 3 cleanliness violations hit in "
+        "one week, you know it's likely a systemic issue, not bad luck. You help Ziv "
+        "respond professionally while driving accountability with vendors."
     ),
     responsibilities=(
-        "Classify complaints by category, severity, and urgency",
-        "Perform sentiment analysis on complaint text (Hebrew and English)",
+        "Classify violations by category, severity, and urgency",
+        "Perform analysis on violation text (Hebrew and English)",
         "Identify root causes and determine if vendor action is required",
-        "Detect patterns across complaints (recurring, time-based, location-based)",
+        "Detect patterns across violations (recurring, time-based, location-based)",
         "Draft professional acknowledgment responses",
-        "Generate weekly complaint summaries with trend analysis",
-        "Link complaints to fine rules and calculate potential vendor penalties",
+        "Generate weekly violation summaries with trend analysis",
+        "Link violations to fine rules and calculate potential vendor penalties",
     ),
     tools=(
-        "sentiment_analyzer", "pattern_detector", "complaint_classifier",
+        "sentiment_analyzer", "pattern_detector", "violation_classifier",
         "hebrew_nlp", "response_drafter", "fine_calculator",
     ),
     interacts_with=("data_analyst", "communication_hub", "operations_manager", "supplier_manager"),
@@ -263,7 +263,7 @@ DAILY_OPS_MONITOR = AgentRole(
         "Track meal type distribution (Meat/Dairy/Main Only) for balance",
         "Monitor site-level operations (Nes Ziona vs. Kiryat Gat)",
         "Alert when data pipeline fails (no email received, parsing error)",
-        "Correlate operational anomalies with complaints and budget data",
+        "Correlate operational anomalies with violations and budget data",
         "Provide daily operations snapshot for the dashboard",
     ),
     tools=(
@@ -293,14 +293,14 @@ SUPPLIER_MANAGER = AgentRole(
         "being firm on accountability with maintaining collaborative partnerships. You know that "
         "vendor relationships in Israeli business culture require both directness and respect. You "
         "produce vendor scorecards that combine financial metrics (pricing compliance, budget "
-        "adherence) with quality metrics (complaint rates, compliance scores)."
+        "adherence) with quality metrics (violation rates, compliance scores)."
     ),
     responsibilities=(
         "Track vendor contract terms, pricing agreements, and renewal dates",
-        "Produce vendor performance scorecards (price, quality, delivery, complaints)",
+        "Produce vendor performance scorecards (price, quality, delivery, violations)",
         "Monitor vendor spending against budget allocations per site",
         "Identify vendor consolidation opportunities",
-        "Track fine accumulation based on complaint-linked fine rules",
+        "Track fine accumulation based on violation-linked fine rules",
         "Prepare data-driven vendor review meeting agendas",
         "Manage product catalog per vendor",
     ),
@@ -308,7 +308,7 @@ SUPPLIER_MANAGER = AgentRole(
         "vendor_scorecard_builder", "contract_tracker", "price_compliance_checker",
         "spending_aggregator", "fine_calculator", "product_catalog_manager",
     ),
-    interacts_with=("invoice_analyst", "complaint_intelligence", "menu_compliance", "communication_hub", "operations_manager"),
+    interacts_with=("invoice_analyst", "violation_intelligence", "menu_compliance", "communication_hub", "operations_manager"),
     icon="handshake",
     color="#84cc16",
 )
@@ -386,7 +386,7 @@ COMMUNICATION_HUB = AgentRole(
         "metric_aggregator", "multi_language_output",
     ),
     interacts_with=(
-        "complaint_intelligence", "budget_intelligence", "supplier_manager",
+        "violation_intelligence", "budget_intelligence", "supplier_manager",
         "event_coordinator", "data_analyst", "operations_manager",
     ),
     icon="megaphone",
@@ -402,7 +402,7 @@ ALL_ROLES: dict[str, AgentRole] = {
     MENU_COMPLIANCE.id: MENU_COMPLIANCE,
     INVOICE_ANALYST.id: INVOICE_ANALYST,
     BUDGET_INTELLIGENCE.id: BUDGET_INTELLIGENCE,
-    COMPLAINT_INTELLIGENCE.id: COMPLAINT_INTELLIGENCE,
+    VIOLATION_INTELLIGENCE.id: VIOLATION_INTELLIGENCE,
     DAILY_OPS_MONITOR.id: DAILY_OPS_MONITOR,
     SUPPLIER_MANAGER.id: SUPPLIER_MANAGER,
     EVENT_COORDINATOR.id: EVENT_COORDINATOR,

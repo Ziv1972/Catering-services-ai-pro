@@ -25,7 +25,7 @@ class MeetingDataGatherer:
             "previous_meeting": await self._get_previous_meeting(db, meeting),
             "site_metrics": await self._get_site_metrics(db, meeting.site_id) if meeting.site_id else None,
             # TODO: Add more data sources as we build them
-            # "recent_complaints": await self._get_recent_complaints(db, meeting.site_id),
+            # "recent_violations": await self._get_recent_violations(db, meeting.site_id),
             # "budget_status": await self._get_budget_status(db, meeting.site_id),
             # "equipment_status": await self._get_equipment_status(db, meeting.site_id),
         }

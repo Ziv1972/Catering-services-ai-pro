@@ -100,57 +100,75 @@ export const meetingsAPI = {
   },
 };
 
-// Complaints
-export const complaintsAPI = {
+// Violations (Exceptions & Violations - חריגות והפרות)
+export const violationsAPI = {
   list: async (params?: {
     days?: number;
     severity?: string;
     status?: string;
     site_id?: number;
   }) => {
-    const response = await api.get('/api/complaints', { params });
+    const response = await api.get('/api/violations', { params });
     return response.data;
   },
 
   get: async (id: number) => {
-    const response = await api.get(`/api/complaints/${id}`);
+    const response = await api.get(`/api/violations/${id}`);
     return response.data;
   },
 
   create: async (data: any) => {
-    const response = await api.post('/api/complaints', data);
+    const response = await api.post('/api/violations', data);
     return response.data;
   },
 
   acknowledge: async (id: number) => {
-    const response = await api.post(`/api/complaints/${id}/acknowledge`);
+    const response = await api.post(`/api/violations/${id}/acknowledge`);
     return response.data;
   },
 
   draftResponse: async (id: number) => {
-    const response = await api.post(`/api/complaints/${id}/draft-response`);
+    const response = await api.post(`/api/violations/${id}/draft-response`);
     return response.data;
   },
 
   resolve: async (id: number, notes: string) => {
-    const response = await api.post(`/api/complaints/${id}/resolve`, {
+    const response = await api.post(`/api/violations/${id}/resolve`, {
       resolution_notes: notes,
     });
     return response.data;
   },
 
   getPatterns: async () => {
-    const response = await api.get('/api/complaints/patterns/active');
+    const response = await api.get('/api/violations/patterns/active');
     return response.data;
   },
 
   detectPatterns: async (days: number = 7) => {
-    const response = await api.post(`/api/complaints/detect-patterns?days=${days}`);
+    const response = await api.post(`/api/violations/detect-patterns?days=${days}`);
     return response.data;
   },
 
   getWeeklySummary: async () => {
-    const response = await api.get('/api/complaints/summary/weekly');
+    const response = await api.get('/api/violations/summary/weekly');
+    return response.data;
+  },
+
+  getAnalytics: async (params?: {
+    from_date?: string;
+    to_date?: string;
+    site_id?: number;
+  }) => {
+    const response = await api.get('/api/violations/analytics', { params });
+    return response.data;
+  },
+
+  generateReport: async (params?: {
+    from_date?: string;
+    to_date?: string;
+    site_id?: number;
+  }) => {
+    const response = await api.post('/api/violations/analytics/report', null, { params });
     return response.data;
   },
 };

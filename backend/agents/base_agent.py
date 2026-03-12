@@ -30,6 +30,18 @@ class BaseAgent(ABC):
         """Wrapper for Claude service"""
         return await self.claude.generate_response(prompt, system_prompt)
 
+    async def generate_vision_response(
+        self,
+        prompt: str,
+        image_base64: str,
+        image_media_type: str = "image/jpeg",
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """Wrapper for Claude vision service"""
+        return await self.claude.generate_vision_response(
+            prompt, image_base64, image_media_type, system_prompt
+        )
+
     async def generate_structured_response(
         self,
         prompt: str,

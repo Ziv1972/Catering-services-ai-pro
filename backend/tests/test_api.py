@@ -5,7 +5,7 @@ Uses in-memory SQLite + dependency-overridden FastAPI test client.
 from datetime import datetime, timedelta, date
 
 from backend.models.meeting import Meeting, MeetingType
-from backend.models.complaint import Complaint, ComplaintSource, ComplaintStatus
+from backend.models.violation import Violation, ViolationSource, ViolationStatus
 from backend.models.proforma import Proforma, ProformaItem
 from backend.models.supplier import Supplier
 from backend.models.operations import Anomaly
@@ -136,80 +136,80 @@ async def test_get_meeting_not_found(client):
     assert r.status_code == 404
 
 
-# ===================== COMPLAINTS =====================
+# ===================== VIOLATIONS =====================
 
 
-async def test_list_complaints(client, db_session, seed_data):
-    c = Complaint(
-        complaint_text="Food was cold",
-        source=ComplaintSource.MANUAL,
+async def test_list_violations(client, db_session, seed_data):
+    v = Violation(
+        violation_text="Food was cold",
+        source=ViolationSource.MANUAL,
         received_at=datetime.utcnow(),
-        status=ComplaintStatus.NEW,
+        status=ViolationStatus.NEW,
     )
-    db_session.add(c)
+    db_session.add(v)
     await db_session.commit()
 
-    r = await client.get("/api/complaints/", params={"days": 7})
+    r = await client.get("/api/violations/", params={"days": 7})
     assert r.status_code == 200
     assert len(r.json()) >= 1
 
 
-async def test_get_complaint(client, db_session, seed_data):
-    c = Complaint(
-        complaint_text="Service was slow",
-        source=ComplaintSource.EMAIL,
+async def test_get_violation(client, db_session, seed_data):
+    v = Violation(
+        violation_text="Service was slow",
+        source=ViolationSource.EMAIL,
         received_at=datetime.utcnow(),
     )
-    db_session.add(c)
+    db_session.add(v)
     await db_session.commit()
-    await db_session.refresh(c)
+    await db_session.refresh(v)
 
-    r = await client.get(f"/api/complaints/{c.id}")
+    r = await client.get(f"/api/violations/{v.id}")
     assert r.status_code == 200
-    assert r.json()["complaint_text"] == "Service was slow"
+    assert r.json()["violation_text"] == "Service was slow"
 
 
-async def test_acknowledge_complaint(client, db_session, seed_data):
-    c = Complaint(
-        complaint_text="No vegetarian options",
-        source=ComplaintSource.MANUAL,
+async def test_acknowledge_violation(client, db_session, seed_data):
+    v = Violation(
+        violation_text="No vegetarian options",
+        source=ViolationSource.MANUAL,
         received_at=datetime.utcnow(),
-        status=ComplaintStatus.NEW,
+        status=ViolationStatus.NEW,
     )
-    db_session.add(c)
+    db_session.add(v)
     await db_session.commit()
-    await db_session.refresh(c)
+    await db_session.refresh(v)
 
-    r = await client.post(f"/api/complaints/{c.id}/acknowledge")
+    r = await client.post(f"/api/violations/{v.id}/acknowledge")
     assert r.status_code == 200
     assert "acknowledged" in r.json()["message"].lower()
 
 
-async def test_resolve_complaint(client, db_session, seed_data):
-    c = Complaint(
-        complaint_text="Cold soup",
-        source=ComplaintSource.MANUAL,
+async def test_resolve_violation(client, db_session, seed_data):
+    v = Violation(
+        violation_text="Cold soup",
+        source=ViolationSource.MANUAL,
         received_at=datetime.utcnow(),
     )
-    db_session.add(c)
+    db_session.add(v)
     await db_session.commit()
-    await db_session.refresh(c)
+    await db_session.refresh(v)
 
     r = await client.post(
-        f"/api/complaints/{c.id}/resolve",
+        f"/api/violations/{v.id}/resolve",
         json={"resolution_notes": "Fixed temperature controls"},
     )
     assert r.status_code == 200
 
 
 async def test_weekly_summary(client, seed_data):
-    r = await client.get("/api/complaints/summary/weekly")
+    r = await client.get("/api/violations/summary/weekly")
     assert r.status_code == 200
-    assert "total_complaints" in r.json()
+    assert "total_violations" in r.json()
 
 
 async def test_active_patterns(client, seed_data):
-    r = await client.get("/api/complaints/patterns/active")
+    r = await client.get("/api/violations/patterns/active")
     assert r.status_code == 200
     assert isinstance(r.json(), list)
 

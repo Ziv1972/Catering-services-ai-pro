@@ -193,7 +193,7 @@ class TestSchema:
             "users", "sites", "suppliers", "products", "meetings",
             "price_lists", "price_list_items", "historical_meal_data",
             "menu_checks", "check_results", "proformas", "proforma_items",
-            "quantity_limits", "anomalies", "complaints", "complaint_patterns",
+            "quantity_limits", "anomalies", "violations", "violation_patterns",
         }
         assert expected.issubset(tables), f"Missing tables: {expected - tables}"
 

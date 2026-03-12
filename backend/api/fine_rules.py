@@ -1,5 +1,5 @@
 """
-Fine rules API endpoints — predefined fine catalog for complaints.
+Fine rules API endpoints — predefined fine catalog for violations.
 Includes AI-powered import from uploaded documents (PDF/Excel/etc).
 """
 import logging
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from backend.database import get_db
 from backend.models.user import User
-from backend.models.complaint import FineRule, ComplaintCategory
+from backend.models.violation import FineRule, ViolationCategory
 from backend.models.attachment import Attachment
 from backend.api.auth import get_current_user
 from backend.api.attachments import extract_file_content
@@ -21,7 +21,7 @@ from backend.services.claude_service import claude_service
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-VALID_CATEGORIES = [c.value for c in ComplaintCategory]
+VALID_CATEGORIES = [c.value for c in ViolationCategory]
 
 
 class FineRuleResponse(BaseModel):

@@ -13,12 +13,21 @@ import io
 import csv
 import hmac
 
+import base64 as base64_module
+import os
+import uuid as uuid_module
+
 from backend.database import get_db
-from backend.models.complaint import Complaint, ComplaintSource, ComplaintStatus
+from backend.models.violation import (
+    Violation, ViolationSource, ViolationStatus,
+    ViolationCategory, ViolationSeverity, RestaurantType,
+    CATEGORY_FROM_HE, SEVERITY_FROM_HE, RESTAURANT_MAP,
+)
 from backend.models.meeting import Meeting, MeetingType
 from backend.models.site import Site
 from backend.models.daily_meal_count import DailyMealCount
-from backend.agents.complaint_intelligence.agent import ComplaintIntelligenceAgent
+from backend.models.attachment import Attachment
+from backend.agents.violation_intelligence.agent import ViolationIntelligenceAgent
 from backend.config import get_settings
 from backend.api.auth import get_current_user
 from backend.models.user import User
@@ -138,7 +147,7 @@ async def _upsert_daily_meals(
     return {"created": created, "updated": updated}
 
 
-class ComplaintWebhook(BaseModel):
+class ViolationWebhook(BaseModel):
     subject: Optional[str] = None
     body: Optional[str] = None
     bodyPreview: Optional[str] = None
@@ -147,6 +156,16 @@ class ComplaintWebhook(BaseModel):
     message_id: Optional[str] = None
     # "from" can be a string or object
     from_address: Optional[str] = None
+    # Source: "email", "whatsapp", or "form"
+    source: Optional[str] = None
+    sender_name: Optional[str] = None
+    sender_phone: Optional[str] = None
+    image_base64: Optional[str] = None
+    image_content_type: Optional[str] = None
+    # Form-specific fields (MS Forms via Power Automate)
+    restaurant: Optional[str] = None  # e.g. "קרית גת - מסעדת בשר"
+    category: Optional[str] = None    # Hebrew category label
+    severity: Optional[str] = None    # Hebrew severity label
 
 
 class MeetingWebhook(BaseModel):
@@ -211,80 +230,265 @@ def _parse_datetime(value: Optional[str]) -> datetime:
     return datetime.fromisoformat(cleaned)
 
 
-@router.post("/complaints")
-async def receive_complaint_from_email(
+@router.post("/violations")
+async def receive_violation(
     request: dict,
     db: AsyncSession = Depends(get_db),
     _secret: None = Depends(_verify_webhook_secret),
 ):
     """
-    Webhook endpoint for Power Automate email trigger.
-    Receives complaints from monitored emails.
+    Webhook endpoint for Power Automate — email, WhatsApp, or MS Forms trigger.
+    Receives inspection violations from various sources.
 
-    Expected JSON body from Power Automate:
+    Email format:
     {
-        "from": "employee@hp.com",
-        "subject": "Food complaint",
-        "body": "The food was cold today...",
+        "from": "inspector@hp.com",
+        "subject": "Inspection finding",
+        "body": "Kitchen cleanliness issue...",
         "received": "2026-02-20T14:30:00Z",
         "message_id": "outlook-message-id"
     }
+
+    WhatsApp format:
+    {
+        "source": "whatsapp",
+        "sender_name": "John Doe",
+        "sender_phone": "+972501234567",
+        "body": "Cleanliness issue in dining room",
+        "image_base64": "<base64_encoded_image>",
+        "image_content_type": "image/jpeg",
+        "received": "2026-03-09T12:00:00Z"
+    }
+
+    MS Forms format (via Power Automate) — supports up to 5 findings per visit:
+    {
+        "source": "form",
+        "sender_name": "Inspector Name",
+        "restaurant": "קרית גת - מסעדת בשר",
+        "category_1": "ניקיון מטבח וציוד",
+        "severity_1": "גבוה",
+        "body_1": "Description of first finding",
+        "category_2": "לבוש עובדים",
+        "severity_2": "בינוני",
+        "body_2": "Description of second finding",
+        "received": "2026-03-12T10:00:00Z"
+    }
+    Note: Each finding (category_N + severity_N + body_N) creates a separate
+    violation. Findings 2-5 are optional — empty fields are skipped.
     """
     try:
-        logger.info(f"Received complaint webhook: {request.get('subject', 'No subject')}")
+        # Detect source type
+        source_type = request.get('source', 'email').lower()
+        is_whatsapp = source_type == 'whatsapp'
+        is_form = source_type == 'form'
+
+        logger.info(
+            f"Received violation webhook: source={source_type}, "
+            f"subject={request.get('subject', 'N/A')}"
+        )
 
         # Extract body text (prefer plain text preview)
         body_text = request.get('bodyPreview') or request.get('body', '')
 
-        # Parse sender email
-        from_email = request.get('from', '')
-        if isinstance(from_email, dict):
-            from_email = from_email.get('emailAddress', {}).get('address', '')
+        # Parse sender info based on source
+        from_email = ''
+        employee_name = None
+        employee_phone = None
+        restaurant_type = None
+        site_id = None
 
-        # Determine site from email content
-        site_id = await _infer_site_id(body_text, db)
+        if is_form:
+            employee_name = request.get('sender_name')
+            # Parse restaurant field → site_id + restaurant_type
+            restaurant_label = request.get('restaurant', '')
+            restaurant_info = RESTAURANT_MAP.get(restaurant_label)
+            if restaurant_info:
+                site_name_en, restaurant_type = restaurant_info
+                # Look up site by name
+                code_map = {"Kiryat Gat": "KG", "Nes Ziona": "NZ"}
+                site_code = code_map.get(site_name_en)
+                if site_code:
+                    site_result = await db.execute(
+                        select(Site).where(Site.code == site_code)
+                    )
+                    site = site_result.scalar_one_or_none()
+                    site_id = site.id if site else None
+            else:
+                site_id = await _infer_site_id(body_text, db)
+
+        elif is_whatsapp:
+            employee_name = request.get('sender_name')
+            employee_phone = request.get('sender_phone')
+            site_id = await _infer_site_id(body_text, db)
+        else:
+            from_email = request.get('from', '')
+            if isinstance(from_email, dict):
+                from_email = from_email.get('emailAddress', {}).get('address', '')
+            site_id = await _infer_site_id(body_text, db)
 
         # Parse received time
         received_str = request.get('receivedDateTime') or request.get('received')
         received_at = _parse_datetime(received_str)
 
-        # Create complaint
-        complaint = Complaint(
-            complaint_text=body_text,
-            employee_email=from_email if from_email else None,
-            source=ComplaintSource.EMAIL,
-            source_id=request.get('message_id'),
-            received_at=received_at,
-            status=ComplaintStatus.NEW,
-            site_id=site_id,
-        )
+        # Map source type to enum
+        source_map = {
+            'email': ViolationSource.EMAIL,
+            'whatsapp': ViolationSource.WHATSAPP,
+            'form': ViolationSource.FORM,
+        }
+        violation_source = source_map.get(source_type, ViolationSource.EMAIL)
 
-        db.add(complaint)
-        await db.flush()
+        # Handle image attachment helper
+        image_base64_data = request.get('image_base64')
+        image_content_type = request.get('image_content_type', 'image/jpeg')
 
-        # AI analysis
-        try:
-            agent = ComplaintIntelligenceAgent()
-            await agent.analyze_complaint(db, complaint)
-        except Exception as ai_err:
-            logger.warning(f"AI analysis failed (complaint still saved): {ai_err}")
+        async def _save_image(violation_id: int) -> None:
+            if not image_base64_data:
+                return
+            try:
+                ext_map = {
+                    "image/jpeg": ".jpg", "image/png": ".png",
+                    "image/webp": ".webp", "image/gif": ".gif",
+                }
+                ext = ext_map.get(image_content_type, ".jpg")
+                unique_name = f"{uuid_module.uuid4().hex}{ext}"
+                entity_dir = os.path.join("uploads", "attachments", "violation", str(violation_id))
+                os.makedirs(entity_dir, exist_ok=True)
+                file_path = os.path.join(entity_dir, unique_name)
 
-        logger.info(
-            f"Complaint created: ID={complaint.id}, "
-            f"Category={complaint.category}, Severity={complaint.severity}"
-        )
+                image_bytes = base64_module.b64decode(image_base64_data)
+                with open(file_path, "wb") as f:
+                    f.write(image_bytes)
+
+                attachment = Attachment(
+                    entity_type="violation",
+                    entity_id=violation_id,
+                    filename=unique_name,
+                    original_filename=f"inspection_image{ext}",
+                    file_path=file_path,
+                    file_size=len(image_bytes),
+                    content_type=image_content_type,
+                )
+                db.add(attachment)
+                logger.info(f"Saved image for violation {violation_id}: {file_path}")
+            except Exception as img_err:
+                logger.warning(f"Failed to save image: {img_err}")
+
+        # Build list of findings to create.
+        # Form submissions: parse numbered fields (category_1..category_5, etc.)
+        # Other sources: single violation from body_text.
+        findings: list[dict] = []
+
+        if is_form:
+            for i in range(1, 6):  # findings 1-5
+                he_cat = request.get(f'category_{i}', '').strip()
+                he_sev = request.get(f'severity_{i}', '').strip()
+                finding_body = request.get(f'body_{i}', '').strip()
+
+                if not he_cat and not finding_body:
+                    continue  # empty finding slot — skip
+
+                cat_enum = CATEGORY_FROM_HE.get(he_cat)
+                sev_enum = SEVERITY_FROM_HE.get(he_sev)
+
+                findings.append({
+                    "body": finding_body or body_text,
+                    "category": cat_enum,
+                    "severity": sev_enum,
+                })
+
+            # Fallback: if no numbered fields found, try flat fields (backward compat)
+            if not findings:
+                he_cat = request.get('category', '').strip()
+                he_sev = request.get('severity', '').strip()
+                cat_enum = CATEGORY_FROM_HE.get(he_cat)
+                sev_enum = SEVERITY_FROM_HE.get(he_sev)
+                findings.append({
+                    "body": body_text,
+                    "category": cat_enum,
+                    "severity": sev_enum,
+                })
+        else:
+            findings.append({
+                "body": body_text,
+                "category": None,
+                "severity": None,
+            })
+
+        created_violations = []
+
+        for finding in findings:
+            violation = Violation(
+                violation_text=finding["body"],
+                employee_email=from_email if from_email else None,
+                employee_name=employee_name,
+                employee_phone=employee_phone,
+                source=violation_source,
+                source_id=request.get('message_id'),
+                received_at=received_at,
+                status=ViolationStatus.NEW,
+                site_id=site_id,
+                restaurant_type=restaurant_type,
+                category=finding["category"],
+                severity=finding["severity"],
+            )
+
+            db.add(violation)
+            await db.flush()
+
+            # Save image attachment (only for first violation to avoid duplication)
+            if not created_violations:
+                await _save_image(violation.id)
+
+            # AI analysis (skip if form already provided category+severity)
+            run_ai = not (is_form and finding["category"] and finding["severity"])
+            if run_ai:
+                try:
+                    agent = ViolationIntelligenceAgent()
+                    await agent.analyze_violation(
+                        db,
+                        violation,
+                        image_base64=image_base64_data,
+                        image_content_type=image_content_type if image_base64_data else None,
+                    )
+                except Exception as ai_err:
+                    logger.warning(f"AI analysis failed (violation still saved): {ai_err}")
+
+            created_violations.append(violation)
+
+            logger.info(
+                f"Violation created: ID={violation.id}, source={violation_source.value}, "
+                f"Category={violation.category}, Severity={violation.severity}"
+            )
+
+        await db.commit()
+
+        # Return response
+        if len(created_violations) == 1:
+            v = created_violations[0]
+            return {
+                "status": "success",
+                "violation_id": v.id,
+                "source": violation_source.value,
+                "category": v.category.value if v.category else None,
+                "severity": v.severity.value if v.severity else None,
+                "ai_summary": v.ai_summary,
+                "has_image": bool(image_base64_data),
+            }
 
         return {
             "status": "success",
-            "complaint_id": complaint.id,
-            "category": complaint.category.value if complaint.category else None,
-            "severity": complaint.severity.value if complaint.severity else None,
-            "ai_summary": complaint.ai_summary,
+            "violations_created": len(created_violations),
+            "violation_ids": [v.id for v in created_violations],
+            "source": violation_source.value,
+            "categories": [v.category.value for v in created_violations if v.category],
+            "severity": created_violations[0].severity.value if created_violations[0].severity else None,
+            "has_image": bool(image_base64_data),
         }
 
     except Exception as e:
-        logger.error(f"Error processing complaint webhook: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process complaint webhook")
+        logger.error(f"Error processing violation webhook: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process violation webhook")
 
 
 @router.post("/meetings")

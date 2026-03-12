@@ -343,7 +343,7 @@ export default function AgentCrewPage() {
                   {[
                     'Analyze last month spending trends',
                     'Check compliance status across sites',
-                    'Summarize recent complaints',
+                    'Summarize recent violations',
                     'Prepare for vendor review meeting',
                   ].map((suggestion) => (
                     <button

@@ -13,7 +13,7 @@ from backend.models.proforma import Proforma
 from backend.models.supplier_budget import SupplierBudget
 from backend.models.supplier import Supplier
 from backend.models.site import Site
-from backend.models.complaint import Complaint
+from backend.models.violation import Violation
 from backend.models.meeting import Meeting
 from backend.models.todo import TodoItem
 from backend.models.daily_meal_count import DailyMealCount
@@ -28,13 +28,13 @@ CHAT_SYSTEM_PROMPT = """You are an AI assistant for Catering Services at HP Isra
 You help Ziv manage catering operations across Nes Ziona (NZ) and Kiryat Gat (KG) sites.
 
 You have access to live data context injected below your user's message. Use it to give
-specific, data-driven answers. When the user asks about spending, budgets, meals, complaints,
+specific, data-driven answers. When the user asks about spending, budgets, meals, violations,
 or operations — reference the exact numbers from the context.
 
 You can help with:
 - Budget analysis: spending vs budget per supplier, per site, per month
 - Meal tracking: daily meal counts by type and site
-- Complaint management: open complaints, severity, patterns, fines
+- Violation management: open violations, severity, patterns, fines
 - Meeting preparation and upcoming schedule
 - Anomaly detection and operational alerts
 - Forecasting and trend analysis based on historical data
@@ -269,60 +269,60 @@ async def _build_meals_context(db: AsyncSession, sites: dict) -> str:
     return "\n".join(lines)
 
 
-async def _build_complaints_context(db: AsyncSession, sites: dict) -> str:
-    """Build complaint summary with categories, severities, and recent items."""
+async def _build_violations_context(db: AsyncSession, sites: dict) -> str:
+    """Build violation summary with categories, severities, and recent items."""
     # Summary by status
     status_result = await db.execute(
-        select(Complaint.status, func.count(Complaint.id))
-        .group_by(Complaint.status)
+        select(Violation.status, func.count(Violation.id))
+        .group_by(Violation.status)
     )
     status_counts = {row[0]: row[1] for row in status_result.all()}
     if not status_counts:
         return ""
 
-    lines = ["Complaints summary:"]
+    lines = ["Violations summary:"]
     lines.append(f"  By status: {', '.join(f'{s}={c}' for s, c in status_counts.items())}")
 
-    # Open complaints by category and severity
+    # Open violations by category and severity
     open_result = await db.execute(
         select(
-            Complaint.category,
-            Complaint.severity,
-            Complaint.site_id,
-            func.count(Complaint.id).label("cnt"),
-            func.sum(Complaint.fine_amount).label("fines"),
+            Violation.category,
+            Violation.severity,
+            Violation.site_id,
+            func.count(Violation.id).label("cnt"),
+            func.sum(Violation.fine_amount).label("fines"),
         )
-        .where(Complaint.status != "resolved")
-        .group_by(Complaint.category, Complaint.severity, Complaint.site_id)
+        .where(Violation.status != "resolved")
+        .group_by(Violation.category, Violation.severity, Violation.site_id)
     )
     open_rows = open_result.all()
     if open_rows:
-        lines.append("  Open complaints breakdown:")
+        lines.append("  Open violations breakdown:")
         for row in open_rows:
             site_name = sites.get(row.site_id, "Unknown")
             fine_str = f", fines=₪{float(row.fines):,.0f}" if row.fines else ""
             lines.append(
                 f"    {row.category or 'N/A'} | {row.severity or 'N/A'} | "
-                f"{site_name}: {row.cnt} complaints{fine_str}"
+                f"{site_name}: {row.cnt} violations{fine_str}"
             )
 
-    # Recent 5 complaints for detail
+    # Recent 5 violations for detail
     recent_result = await db.execute(
-        select(Complaint)
-        .where(Complaint.status != "resolved")
-        .order_by(Complaint.received_at.desc())
+        select(Violation)
+        .where(Violation.status != "resolved")
+        .order_by(Violation.received_at.desc())
         .limit(5)
     )
     recent = recent_result.scalars().all()
     if recent:
-        lines.append("  Recent open complaints:")
-        for c in recent:
-            site_name = sites.get(c.site_id, "Unknown")
-            fine_str = f", fine=₪{c.fine_amount:,.0f}" if c.fine_amount else ""
-            text_preview = (c.complaint_text or "")[:80]
+        lines.append("  Recent open violations:")
+        for v in recent:
+            site_name = sites.get(v.site_id, "Unknown")
+            fine_str = f", fine=₪{v.fine_amount:,.0f}" if v.fine_amount else ""
+            text_preview = (v.violation_text or "")[:80]
             lines.append(
-                f"    [{c.severity or 'N/A'}] {c.category or 'N/A'} @ {site_name} "
-                f"({c.status}){fine_str}: {text_preview}"
+                f"    [{v.severity or 'N/A'}] {v.category or 'N/A'} @ {site_name} "
+                f"({v.status}){fine_str}: {text_preview}"
             )
 
     return "\n".join(lines)
@@ -448,9 +448,9 @@ async def _build_context(db: AsyncSession, user: User) -> str:
         if meals_text:
             context_parts.append(meals_text)
 
-        complaints_text = await _build_complaints_context(db, sites)
-        if complaints_text:
-            context_parts.append(complaints_text)
+        violations_text = await _build_violations_context(db, sites)
+        if violations_text:
+            context_parts.append(violations_text)
 
         meetings_text = await _build_meetings_context(db, sites)
         if meetings_text:
@@ -503,7 +503,7 @@ async def chat(
 
         suggestions = [
             "Prepare brief for next meeting",
-            "Show recent complaints",
+            "Show recent violations",
             "Check budget status",
         ]
 

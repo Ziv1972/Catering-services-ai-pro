@@ -1,6 +1,6 @@
 """
 Universal Attachments API — upload files to any entity, with optional AI processing.
-Supported entity_types: project, task, meeting, maintenance, todo, budget, complaint, fine_catalog
+Supported entity_types: project, task, meeting, maintenance, todo, budget, violation, fine_catalog
 """
 import os
 import json
@@ -154,7 +154,7 @@ async def upload_attachment(
     current_user: User = Depends(get_current_user),
 ):
     """Upload a file attachment to any entity."""
-    allowed_types = {"project", "task", "meeting", "maintenance", "todo", "budget", "complaint", "fine_catalog"}
+    allowed_types = {"project", "task", "meeting", "maintenance", "todo", "budget", "violation", "fine_catalog"}
     if entity_type not in allowed_types:
         raise HTTPException(400, f"Invalid entity_type. Allowed: {', '.join(sorted(allowed_types))}")
 

@@ -3,7 +3,7 @@ Communication Hub Agent
 Drafts communications, generates reports, handles stakeholder messaging
 """
 from backend.agents.base_agent import BaseAgent
-from backend.models.complaint import Complaint
+from backend.models.violation import Violation
 from backend.models.meeting import Meeting
 from backend.models.proforma import Proforma
 from backend.models.operations import Anomaly
@@ -39,12 +39,12 @@ class CommunicationHubAgent(BaseAgent):
         """Generate a weekly status report for management"""
         week_ago = datetime.utcnow() - timedelta(days=7)
 
-        complaints_result = await db.execute(
-            select(func.count(Complaint.id)).where(
-                Complaint.received_at >= week_ago
+        violations_result = await db.execute(
+            select(func.count(Violation.id)).where(
+                Violation.received_at >= week_ago
             )
         )
-        complaint_count = complaints_result.scalar() or 0
+        violation_count = violations_result.scalar() or 0
 
         meetings_result = await db.execute(
             select(func.count(Meeting.id)).where(
@@ -71,7 +71,7 @@ class CommunicationHubAgent(BaseAgent):
         Generate a concise weekly catering operations report for HP Israel management:
 
         THIS WEEK'S DATA:
-        - Complaints received: {complaint_count}
+        - Violations received: {violation_count}
         - Meetings held: {meeting_count}
         - Anomalies detected: {anomaly_count}
         - Total spending: {weekly_spend:,.2f} ILS
@@ -84,7 +84,7 @@ class CommunicationHubAgent(BaseAgent):
             "concerns": ["items needing attention"],
             "action_items": ["specific next steps"],
             "metrics_snapshot": {{
-                "complaints": {complaint_count},
+                "violations": {violation_count},
                 "meetings": {meeting_count},
                 "anomalies": {anomaly_count},
                 "spend_ils": {weekly_spend:.2f}
@@ -138,17 +138,17 @@ class CommunicationHubAgent(BaseAgent):
         """Draft a management update with current status"""
         month_ago = datetime.utcnow() - timedelta(days=30)
 
-        complaints_result = await db.execute(
-            select(func.count(Complaint.id)).where(
-                Complaint.received_at >= month_ago
+        violations_result = await db.execute(
+            select(func.count(Violation.id)).where(
+                Violation.received_at >= month_ago
             )
         )
-        monthly_complaints = complaints_result.scalar() or 0
+        monthly_violations = violations_result.scalar() or 0
 
         resolved_result = await db.execute(
-            select(func.count(Complaint.id)).where(
-                Complaint.received_at >= month_ago,
-                Complaint.resolved_at.isnot(None),
+            select(func.count(Violation.id)).where(
+                Violation.received_at >= month_ago,
+                Violation.resolved_at.isnot(None),
             )
         )
         resolved_count = resolved_result.scalar() or 0
@@ -157,18 +157,18 @@ class CommunicationHubAgent(BaseAgent):
         Draft a monthly management update for HP Israel catering operations:
 
         MONTHLY STATS:
-        - Total complaints: {monthly_complaints}
+        - Total violations: {monthly_violations}
         - Resolved: {resolved_count}
-        - Resolution rate: {(resolved_count / monthly_complaints * 100) if monthly_complaints else 100:.0f}%
+        - Resolution rate: {(resolved_count / monthly_violations * 100) if monthly_violations else 100:.0f}%
 
         Return JSON:
         {{
             "subject": "Monthly Catering Operations Update",
             "body": "Full update text (3-4 paragraphs)",
             "key_metrics": {{
-                "complaints": {monthly_complaints},
+                "violations": {monthly_violations},
                 "resolved": {resolved_count},
-                "resolution_rate_pct": {(resolved_count / monthly_complaints * 100) if monthly_complaints else 100:.0f}
+                "resolution_rate_pct": {(resolved_count / monthly_violations * 100) if monthly_violations else 100:.0f}
             }}
         }}
         """

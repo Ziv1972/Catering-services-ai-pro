@@ -1882,7 +1882,7 @@ export default function Dashboard() {
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleChat()}
-              placeholder="Ask about budget, complaints, meetings..."
+              placeholder="Ask about budget, violations, meetings..."
               className="flex-1 px-4 py-2.5 border rounded-lg bg-muted/30 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition-colors"
               disabled={chatLoading}
             />
@@ -1901,7 +1901,7 @@ export default function Dashboard() {
           </div>
 
           <div className="flex gap-2 mt-3 flex-wrap">
-            {['Budget status this month', 'Upcoming meetings summary', 'Recent complaints'].map((q) => (
+            {['Budget status this month', 'Upcoming meetings summary', 'Recent violations'].map((q) => (
               <button
                 key={q}
                 onClick={() => quickChat(q)}

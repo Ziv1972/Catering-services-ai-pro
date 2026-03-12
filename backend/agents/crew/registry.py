@@ -58,7 +58,7 @@ class AgentRegistry:
             return
 
         from backend.agents.meeting_prep.agent import MeetingPrepAgent
-        from backend.agents.complaint_intelligence.agent import ComplaintIntelligenceAgent
+        from backend.agents.violation_intelligence.agent import ViolationIntelligenceAgent
         from backend.agents.budget_intelligence.agent import BudgetIntelligenceAgent
         from backend.agents.event_coordination.agent import EventCoordinationAgent
         from backend.agents.dietary_compliance.agent import DietaryComplianceAgent
@@ -69,7 +69,7 @@ class AgentRegistry:
             "menu_compliance": DietaryComplianceAgent(),
             "invoice_analyst": BudgetIntelligenceAgent(),
             "budget_intelligence": BudgetIntelligenceAgent(),
-            "complaint_intelligence": ComplaintIntelligenceAgent(),
+            "violation_intelligence": ViolationIntelligenceAgent(),
             "daily_ops_monitor": BudgetIntelligenceAgent(),
             "supplier_manager": BudgetIntelligenceAgent(),
             "event_coordinator": EventCoordinationAgent(),

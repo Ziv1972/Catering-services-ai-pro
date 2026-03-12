@@ -21,7 +21,7 @@ const NAV_ITEMS = [
   { href: '/suppliers', label: 'Suppliers', icon: Building2 },
   { href: '/price-lists', label: 'Price Lists', icon: Tag },
   { href: '/proformas', label: 'Proformas', icon: FileText },
-  { href: '/complaints', label: 'Complaints', icon: AlertTriangle },
+  { href: '/violations', label: 'Violations', icon: AlertTriangle },
   { href: '/analytics', label: 'Analytics', icon: TrendingUp },
   { href: '/agent-crew', label: 'Agent Crew', icon: Bot },
 ];

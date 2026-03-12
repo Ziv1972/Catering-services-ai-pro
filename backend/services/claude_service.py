@@ -49,6 +49,50 @@ class ClaudeService:
 
         return response.content[0].text
 
+    async def generate_vision_response(
+        self,
+        prompt: str,
+        image_base64: str,
+        image_media_type: str = "image/jpeg",
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """
+        Generate a response from Claude using text + image (vision).
+        Uses the Messages API with image content blocks.
+        """
+        if not self._available or self.client is None:
+            raise RuntimeError("AI service not configured: ANTHROPIC_API_KEY is not set")
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image_media_type,
+                            "data": image_base64,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                ],
+            }
+        ]
+
+        response = await self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens or self.max_tokens,
+            system=system_prompt if system_prompt else "",
+            messages=messages,
+        )
+
+        return response.content[0].text
+
     async def generate_structured_response(
         self,
         prompt: str,

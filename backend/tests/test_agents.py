@@ -6,14 +6,14 @@ from unittest.mock import AsyncMock, patch
 from datetime import datetime, date, timedelta
 
 from backend.agents.meeting_prep.agent import MeetingPrepAgent
-from backend.agents.complaint_intelligence.agent import ComplaintIntelligenceAgent
+from backend.agents.violation_intelligence.agent import ViolationIntelligenceAgent
 from backend.agents.budget_intelligence.agent import BudgetIntelligenceAgent
 from backend.agents.event_coordination.agent import EventCoordinationAgent
 from backend.agents.dietary_compliance.agent import DietaryComplianceAgent
 from backend.agents.communication_hub.agent import CommunicationHubAgent
 from backend.agents.orchestrator import AgentOrchestrator
 
-from backend.models.complaint import Complaint, ComplaintSource, ComplaintStatus
+from backend.models.violation import Violation, ViolationSource, ViolationStatus
 from backend.models.meeting import Meeting, MeetingType
 from backend.models.proforma import Proforma, ProformaItem
 from backend.models.supplier import Supplier
@@ -30,7 +30,7 @@ class TestOrchestrator:
         orch = AgentOrchestrator()
         agents = orch.list_agents()
         assert "meeting_prep" in agents
-        assert "complaint_intelligence" in agents
+        assert "violation_intelligence" in agents
         assert "budget_intelligence" in agents
         assert "event_coordination" in agents
         assert "dietary_compliance" in agents
@@ -44,20 +44,20 @@ class TestOrchestrator:
             await orch.route("nonexistent", {})
 
 
-# ===================== COMPLAINT INTELLIGENCE =====================
+# ===================== VIOLATION INTELLIGENCE =====================
 
 
-class TestComplaintAgent:
+class TestViolationAgent:
 
     @pytest.mark.asyncio
-    async def test_analyze_complaint(self, db_session, seed_data):
-        agent = ComplaintIntelligenceAgent()
+    async def test_analyze_violation(self, db_session, seed_data):
+        agent = ViolationIntelligenceAgent()
 
         mock_response = {
-            "category": "food_quality",
+            "category": "kitchen_cleanliness",
             "severity": "high",
             "sentiment_score": -0.7,
-            "summary": "Cold food complaint",
+            "summary": "Cold food finding",
             "root_cause": "Serving temperature not maintained",
             "suggested_action": "Check food warmers",
             "urgency": "today",
@@ -65,59 +65,59 @@ class TestComplaintAgent:
             "time_pattern": "lunch",
         }
 
-        complaint = Complaint(
-            complaint_text="The chicken was ice cold at lunch today",
-            source=ComplaintSource.MANUAL,
+        violation = Violation(
+            violation_text="The chicken was ice cold at lunch today",
+            source=ViolationSource.MANUAL,
             received_at=datetime.utcnow(),
             site_id=seed_data["nz"].id,
         )
-        db_session.add(complaint)
+        db_session.add(violation)
         await db_session.commit()
 
         with patch.object(agent, "generate_structured_response", new_callable=AsyncMock) as mock:
             mock.return_value = mock_response
-            result = await agent.analyze_complaint(db_session, complaint)
+            result = await agent.analyze_violation(db_session, violation)
 
-        assert result["category"] == "food_quality"
+        assert result["category"] == "kitchen_cleanliness"
         assert result["severity"] == "high"
-        assert complaint.ai_summary == "Cold food complaint"
+        assert violation.ai_summary == "Cold food finding"
 
     @pytest.mark.asyncio
     async def test_draft_acknowledgment(self, db_session, seed_data):
-        agent = ComplaintIntelligenceAgent()
+        agent = ViolationIntelligenceAgent()
 
-        complaint = Complaint(
-            complaint_text="No vegan options available",
-            source=ComplaintSource.EMAIL,
+        violation = Violation(
+            violation_text="No vegan options available",
+            source=ViolationSource.EMAIL,
             received_at=datetime.utcnow(),
             ai_summary="Missing vegan options",
             ai_suggested_action="Add vegan menu items",
         )
-        db_session.add(complaint)
+        db_session.add(violation)
         await db_session.commit()
 
         with patch.object(agent, "generate_response", new_callable=AsyncMock) as mock:
             mock.return_value = "Thank you for your feedback about vegan options."
-            draft = await agent.draft_acknowledgment(db_session, complaint)
+            draft = await agent.draft_acknowledgment(db_session, violation)
 
         assert "vegan" in draft.lower()
 
     @pytest.mark.asyncio
     async def test_weekly_summary(self, db_session, seed_data):
-        agent = ComplaintIntelligenceAgent()
+        agent = ViolationIntelligenceAgent()
 
         for i in range(3):
-            c = Complaint(
-                complaint_text=f"Test complaint {i}",
-                source=ComplaintSource.MANUAL,
+            v = Violation(
+                violation_text=f"Test violation {i}",
+                source=ViolationSource.MANUAL,
                 received_at=datetime.utcnow() - timedelta(days=i),
-                status=ComplaintStatus.NEW,
+                status=ViolationStatus.NEW,
             )
-            db_session.add(c)
+            db_session.add(v)
         await db_session.commit()
 
         summary = await agent.generate_weekly_summary(db_session)
-        assert summary["total_complaints"] == 3
+        assert summary["total_violations"] == 3
 
 
 # ===================== BUDGET INTELLIGENCE =====================
@@ -288,7 +288,7 @@ class TestCommunicationAgent:
             "highlights": ["100% resolution rate"],
             "concerns": [],
             "action_items": ["Review vendor contract"],
-            "metrics_snapshot": {"complaints": 0, "meetings": 0, "anomalies": 0, "spend_ils": 0},
+            "metrics_snapshot": {"violations": 0, "meetings": 0, "anomalies": 0, "spend_ils": 0},
         }
 
         with patch.object(agent, "generate_structured_response", new_callable=AsyncMock) as mock:

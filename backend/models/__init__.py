@@ -9,7 +9,7 @@ from backend.models.historical_data import HistoricalMealData
 from backend.models.menu_compliance import MenuCheck, MenuDay, CheckResult, ComplianceRule
 from backend.models.proforma import Proforma, ProformaItem
 from backend.models.operations import QuantityLimit, Anomaly
-from backend.models.complaint import Complaint, ComplaintPattern, FineRule
+from backend.models.violation import Violation, ViolationPattern, FineRule
 from backend.models.supplier_budget import SupplierBudget, SupplierProductBudget
 from backend.models.project import Project, ProjectTask, ProjectDocument
 from backend.models.maintenance import MaintenanceBudget, MaintenanceExpense
@@ -36,8 +36,8 @@ __all__ = [
     "ProformaItem",
     "QuantityLimit",
     "Anomaly",
-    "Complaint",
-    "ComplaintPattern",
+    "Violation",
+    "ViolationPattern",
     "FineRule",
     "SupplierBudget",
     "SupplierProductBudget",

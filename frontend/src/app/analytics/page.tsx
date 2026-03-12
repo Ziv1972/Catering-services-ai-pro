@@ -567,8 +567,8 @@ export default function AnalyticsPage() {
           <Card className="p-5">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-600">Complaints</p>
-                <p className="text-3xl font-bold text-gray-900 mt-1">{counts.complaints || 0}</p>
+                <p className="text-sm text-gray-600">Violations</p>
+                <p className="text-3xl font-bold text-gray-900 mt-1">{counts.violations || 0}</p>
               </div>
               <AlertTriangle className="w-7 h-7 text-red-500" />
             </div>
@@ -644,20 +644,20 @@ export default function AnalyticsPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-orange-600" />
-                Complaints by Category
+                Violations by Category
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {data.complaintCategories?.length > 0 ? (
+              {data.violationCategories?.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300} minWidth={1}>
                   <PieChart>
                     <Pie
-                      data={data.complaintCategories}
+                      data={data.violationCategories}
                       cx="50%" cy="50%"
                       labelLine label={(entry: any) => `${entry.name} (${entry.value})`}
                       outerRadius={100} fill="#8884d8" dataKey="value"
                     >
-                      {data.complaintCategories.map((_: any, index: number) => (
+                      {data.violationCategories.map((_: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
@@ -665,7 +665,7 @@ export default function AnalyticsPage() {
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <p className="text-gray-500 text-center py-12">No complaint data available</p>
+                <p className="text-gray-500 text-center py-12">No violation data available</p>
               )}
             </CardContent>
           </Card>

@@ -1,11 +1,12 @@
 """
-Complaint Intelligence Agent
-Analyzes complaints, detects patterns, suggests actions
+Violation Intelligence Agent
+Analyzes inspection findings (violations), detects patterns, suggests actions
 """
 from backend.agents.base_agent import BaseAgent
-from backend.models.complaint import (
-    Complaint, ComplaintPattern, ComplaintSeverity,
-    ComplaintCategory, ComplaintStatus, FineRule
+from backend.models.violation import (
+    Violation, ViolationPattern, ViolationSeverity,
+    ViolationCategory, ViolationStatus, FineRule,
+    CATEGORY_LABELS_HE,
 )
 from backend.models.site import Site
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,29 +19,32 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+# Build category options string for AI prompts
+_CATEGORY_OPTIONS = "|".join(c.value for c in ViolationCategory)
 
-class ComplaintIntelligenceAgent(BaseAgent):
-    """Analyzes complaints, detects patterns, and suggests responses"""
+
+class ViolationIntelligenceAgent(BaseAgent):
+    """Analyzes inspection violations, detects patterns, and suggests responses"""
 
     def __init__(self):
-        super().__init__(name="ComplaintIntelligenceAgent")
+        super().__init__(name="ViolationIntelligenceAgent")
 
     async def process(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Process complaint context"""
+        """Process violation context"""
         action = context.get("action", "analyze")
         db = context["db"]
 
         if action == "analyze":
-            complaint = context["complaint"]
-            analysis = await self.analyze_complaint(db, complaint)
+            violation = context["violation"]
+            analysis = await self.analyze_violation(db, violation)
             return {"analysis": analysis}
         elif action == "detect_patterns":
             days = context.get("lookback_days", 7)
             patterns = await self.detect_patterns(db, lookback_days=days)
             return {"patterns": patterns}
         elif action == "draft_response":
-            complaint = context["complaint"]
-            draft = await self.draft_acknowledgment(db, complaint)
+            violation = context["violation"]
+            draft = await self.draft_acknowledgment(db, violation)
             return {"draft": draft}
         elif action == "weekly_summary":
             summary = await self.generate_weekly_summary(db)
@@ -48,38 +52,72 @@ class ComplaintIntelligenceAgent(BaseAgent):
 
         return {"error": f"Unknown action: {action}"}
 
-    async def analyze_complaint(
+    async def analyze_violation(
         self,
         db: AsyncSession,
-        complaint: Complaint
+        violation: Violation,
+        image_base64: Optional[str] = None,
+        image_content_type: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Analyze a single complaint using AI"""
+        """Analyze a single violation using AI, optionally with an attached image"""
 
         site_name = "Unknown"
-        if complaint.site_id:
-            result = await db.execute(select(Site).where(Site.id == complaint.site_id))
+        if violation.site_id:
+            result = await db.execute(select(Site).where(Site.id == violation.site_id))
             site = result.scalar_one_or_none()
             if site:
                 site_name = site.name
 
+        # Step 0: If image provided, get visual description via Claude Vision
+        image_description = ""
+        if image_base64 and image_content_type:
+            try:
+                image_description = await self.generate_vision_response(
+                    prompt=(
+                        "Describe what you see in this image from a catering/food service inspection context. "
+                        "Focus on: food condition, hygiene issues, equipment damage, cleanliness problems, "
+                        "portion size, presentation quality, staff attire, or any other issue relevant to "
+                        "a restaurant inspection finding. "
+                        "Be specific and factual. Keep your description under 200 words."
+                    ),
+                    image_base64=image_base64,
+                    image_media_type=image_content_type,
+                    system_prompt=self._get_system_prompt(),
+                )
+            except Exception as e:
+                logger.warning(f"Vision analysis failed: {e}")
+                image_description = "[Image provided but vision analysis failed]"
+
+        image_section = ""
+        if image_description:
+            image_section = f"""
+        IMAGE ANALYSIS (from attached photo):
+        {image_description}
+        """
+
+        restaurant_info = ""
+        if violation.restaurant_type:
+            restaurant_info = f"\n        - Restaurant type: {violation.restaurant_type.value}"
+
         prompt = f"""
-        Analyze this employee complaint from HP Israel catering services:
+        Analyze this inspection finding from HP Israel catering services:
 
-        COMPLAINT TEXT:
-        {complaint.complaint_text}
-
+        VIOLATION TEXT:
+        {violation.violation_text}
+        {image_section}
         CONTEXT:
-        - Source: {complaint.source}
-        - Site: {site_name}
-        - Date: {complaint.received_at.strftime('%Y-%m-%d %H:%M')}
+        - Source: {violation.source}
+        - Site: {site_name}{restaurant_info}
+        - Date: {violation.received_at.strftime('%Y-%m-%d %H:%M')}
+        - Has attached photo: {"Yes" if image_base64 else "No"}
 
         Provide detailed analysis as JSON:
         {{
-            "category": "food_quality|temperature|service|variety|dietary|cleanliness|equipment|other",
+            "category": "{_CATEGORY_OPTIONS}",
             "severity": "low|medium|high|critical",
             "sentiment_score": -1.0 to 1.0 (negative to positive),
-            "summary": "One clear sentence summarizing the complaint",
-            "root_cause": "Likely underlying cause based on the complaint text",
+            "summary": "One clear sentence summarizing the finding",
+            "root_cause": "Likely underlying cause based on the violation text",
             "suggested_action": "Specific, actionable step Ziv should take",
             "urgency": "immediate|today|this_week|routine",
             "requires_vendor_action": true|false,
@@ -98,16 +136,16 @@ class ComplaintIntelligenceAgent(BaseAgent):
             system_prompt=self._get_system_prompt()
         )
 
-        complaint.category = ComplaintCategory(analysis["category"])
-        complaint.severity = ComplaintSeverity(analysis["severity"])
-        complaint.sentiment_score = float(analysis["sentiment_score"])
-        complaint.ai_summary = analysis["summary"]
-        complaint.ai_root_cause = analysis["root_cause"]
-        complaint.ai_suggested_action = analysis["suggested_action"]
-        complaint.requires_vendor_action = analysis.get("requires_vendor_action", False)
+        violation.category = ViolationCategory(analysis["category"])
+        violation.severity = ViolationSeverity(analysis["severity"])
+        violation.sentiment_score = float(analysis["sentiment_score"])
+        violation.ai_summary = analysis["summary"]
+        violation.ai_root_cause = analysis["root_cause"]
+        violation.ai_suggested_action = analysis["suggested_action"]
+        violation.requires_vendor_action = analysis.get("requires_vendor_action", False)
 
-        # Step 2: Match complaint to fine rule from catalog
-        fine_match = await self._match_fine_rule(db, complaint)
+        # Step 2: Match violation to fine rule from catalog
+        fine_match = await self._match_fine_rule(db, violation)
         if fine_match:
             analysis["suggested_fine_rule_id"] = fine_match.get("suggested_fine_rule_id")
             analysis["suggested_fine_rule_name"] = fine_match.get("suggested_fine_rule_name")
@@ -120,9 +158,9 @@ class ComplaintIntelligenceAgent(BaseAgent):
     async def _match_fine_rule(
         self,
         db: AsyncSession,
-        complaint: Complaint
+        violation: Violation
     ) -> Optional[Dict[str, Any]]:
-        """Match a complaint to the best fine rule from the catalog"""
+        """Match a violation to the best fine rule from the catalog"""
         try:
             result = await db.execute(
                 select(FineRule).where(FineRule.is_active == True)
@@ -144,17 +182,17 @@ class ComplaintIntelligenceAgent(BaseAgent):
             ]
 
             prompt = f"""
-            Given this employee complaint and the fine rule catalog below,
-            determine which fine rule best matches the complaint violation.
+            Given this inspection violation and the fine rule catalog below,
+            determine which fine rule best matches the violation.
 
-            COMPLAINT TEXT:
-            {complaint.complaint_text}
+            VIOLATION TEXT:
+            {violation.violation_text}
 
             AI ANALYSIS SUMMARY:
-            {complaint.ai_summary or "N/A"}
+            {violation.ai_summary or "N/A"}
 
             AI CATEGORY:
-            {complaint.category.value if complaint.category else "unknown"}
+            {violation.category.value if violation.category else "unknown"}
 
             FINE RULE CATALOG:
             {json.dumps(rules_list, indent=2, ensure_ascii=False)}
@@ -169,12 +207,12 @@ class ComplaintIntelligenceAgent(BaseAgent):
             }}
 
             Guidelines:
-            - Only suggest a rule if the complaint clearly describes a violation matching that rule
+            - Only suggest a rule if the violation clearly describes a finding matching that rule
             - Confidence >= 0.7 means strong match (auto-apply)
             - Confidence 0.4-0.7 means possible match (suggest but don't auto-apply)
             - Confidence < 0.4 means no meaningful match (return null for id/name/amount)
-            - Consider the complaint category and the rule category
-            - Hebrew text complaints are common — match based on meaning
+            - Consider the violation category and the rule category
+            - Hebrew text violations are common — match based on meaning
             """
 
             match_result = await self.generate_structured_response(
@@ -201,51 +239,51 @@ class ComplaintIntelligenceAgent(BaseAgent):
         db: AsyncSession,
         lookback_days: int = 7
     ) -> List[Dict[str, Any]]:
-        """Detect patterns across recent complaints"""
+        """Detect patterns across recent violations"""
 
         cutoff_date = datetime.utcnow() - timedelta(days=lookback_days)
 
         result = await db.execute(
-            select(Complaint)
-            .where(Complaint.received_at >= cutoff_date)
-            .order_by(Complaint.received_at.desc())
+            select(Violation)
+            .where(Violation.received_at >= cutoff_date)
+            .order_by(Violation.received_at.desc())
         )
-        complaints = result.scalars().all()
+        violations = result.scalars().all()
 
-        if len(complaints) < 2:
+        if len(violations) < 2:
             return []
 
-        complaint_data = []
-        for c in complaints:
-            complaint_data.append({
-                "id": c.id,
-                "date": c.received_at.isoformat(),
-                "category": c.category.value if c.category else None,
-                "severity": c.severity.value if c.severity else None,
-                "summary": c.ai_summary or c.complaint_text[:100],
-                "root_cause": c.ai_root_cause
+        violation_data = []
+        for v in violations:
+            violation_data.append({
+                "id": v.id,
+                "date": v.received_at.isoformat(),
+                "category": v.category.value if v.category else None,
+                "severity": v.severity.value if v.severity else None,
+                "summary": v.ai_summary or v.violation_text[:100],
+                "root_cause": v.ai_root_cause
             })
 
         prompt = f"""
-        Analyze these {len(complaints)} complaints from the last {lookback_days} days for patterns:
+        Analyze these {len(violations)} inspection violations from the last {lookback_days} days for patterns:
 
-        COMPLAINTS:
-        {json.dumps(complaint_data, indent=2)}
+        VIOLATIONS:
+        {json.dumps(violation_data, indent=2)}
 
         Identify meaningful patterns. Return as JSON array:
         [{{
             "pattern_type": "recurring_issue|time_based|location_based|trend",
             "description": "Clear description of the pattern",
-            "complaint_ids": [list of complaint IDs that share this pattern],
+            "violation_ids": [list of violation IDs that share this pattern],
             "severity": "low|medium|high|critical",
             "recommendation": "Specific action to address this pattern",
             "evidence": "What makes this a real pattern, not coincidence"
         }}]
 
         Only report patterns where:
-        - At least 2-3 complaints share the same specific issue
+        - At least 2-3 violations share the same specific issue
         - There's a clear time, location, or cause pattern
-        - It's actionable (not just "people complain sometimes")
+        - It's actionable (not just random findings)
 
         Return empty array [] if no meaningful patterns found.
         """
@@ -258,38 +296,38 @@ class ComplaintIntelligenceAgent(BaseAgent):
         for pattern_data in patterns:
             pattern_id = str(uuid.uuid4())
 
-            for complaint_id in pattern_data.get("complaint_ids", []):
+            for violation_id in pattern_data.get("violation_ids", []):
                 result = await db.execute(
-                    select(Complaint).where(Complaint.id == complaint_id)
+                    select(Violation).where(Violation.id == violation_id)
                 )
-                complaint = result.scalar_one_or_none()
-                if complaint:
-                    complaint.pattern_group_id = pattern_id
+                violation = result.scalar_one_or_none()
+                if violation:
+                    violation.pattern_group_id = pattern_id
 
-            complaint_ids = pattern_data.get("complaint_ids", [])
-            first_complaint = await db.execute(
-                select(Complaint)
-                .where(Complaint.id.in_(complaint_ids))
-                .order_by(Complaint.received_at.asc())
+            violation_ids = pattern_data.get("violation_ids", [])
+            first_violation = await db.execute(
+                select(Violation)
+                .where(Violation.id.in_(violation_ids))
+                .order_by(Violation.received_at.asc())
                 .limit(1)
             )
-            last_complaint = await db.execute(
-                select(Complaint)
-                .where(Complaint.id.in_(complaint_ids))
-                .order_by(Complaint.received_at.desc())
+            last_violation = await db.execute(
+                select(Violation)
+                .where(Violation.id.in_(violation_ids))
+                .order_by(Violation.received_at.desc())
                 .limit(1)
             )
 
-            first = first_complaint.scalar_one_or_none()
-            last = last_complaint.scalar_one_or_none()
+            first = first_violation.scalar_one_or_none()
+            last = last_violation.scalar_one_or_none()
 
             if first and last:
-                pattern = ComplaintPattern(
+                pattern = ViolationPattern(
                     pattern_id=pattern_id,
                     pattern_type=pattern_data["pattern_type"],
                     description=pattern_data["description"],
                     severity=pattern_data["severity"],
-                    complaint_count=len(complaint_ids),
+                    violation_count=len(violation_ids),
                     first_occurrence=first.received_at,
                     last_occurrence=last.received_at,
                     recommendation=pattern_data.get("recommendation")
@@ -303,28 +341,28 @@ class ComplaintIntelligenceAgent(BaseAgent):
     async def draft_acknowledgment(
         self,
         db: AsyncSession,
-        complaint: Complaint
+        violation: Violation
     ) -> str:
-        """Draft an acknowledgment response for a complaint"""
+        """Draft an acknowledgment response for a violation"""
 
         site_name = "Unknown"
-        if complaint.site_id:
-            result = await db.execute(select(Site).where(Site.id == complaint.site_id))
+        if violation.site_id:
+            result = await db.execute(select(Site).where(Site.id == violation.site_id))
             site = result.scalar_one_or_none()
             if site:
                 site_name = site.name
 
-        has_hebrew = any('\u0590' <= c <= '\u05FF' for c in complaint.complaint_text)
+        has_hebrew = any('\u0590' <= c <= '\u05FF' for c in violation.violation_text)
         language = "Hebrew" if has_hebrew else "English"
 
         prompt = f"""
-        Draft an acknowledgment email for this complaint:
+        Draft an acknowledgment email for this inspection finding:
 
-        COMPLAINT: {complaint.complaint_text}
+        VIOLATION: {violation.violation_text}
         SITE: {site_name}
-        AI ANALYSIS: {complaint.ai_summary}
-        SUGGESTED ACTION: {complaint.ai_suggested_action}
-        SEVERITY: {complaint.severity.value if complaint.severity else 'unknown'}
+        AI ANALYSIS: {violation.ai_summary}
+        SUGGESTED ACTION: {violation.ai_suggested_action}
+        SEVERITY: {violation.severity.value if violation.severity else 'unknown'}
 
         TONE: Professional, empathetic, action-oriented
         LENGTH: 2-3 sentences
@@ -346,52 +384,52 @@ class ComplaintIntelligenceAgent(BaseAgent):
         self,
         db: AsyncSession
     ) -> Dict[str, Any]:
-        """Generate weekly summary of complaints for dashboard"""
+        """Generate weekly summary of violations for dashboard"""
 
         week_ago = datetime.utcnow() - timedelta(days=7)
 
         result = await db.execute(
-            select(Complaint).where(Complaint.received_at >= week_ago)
+            select(Violation).where(Violation.received_at >= week_ago)
         )
-        complaints = result.scalars().all()
+        violations = result.scalars().all()
 
         patterns_result = await db.execute(
-            select(ComplaintPattern)
+            select(ViolationPattern)
             .where(
                 and_(
-                    ComplaintPattern.is_active == True,
-                    ComplaintPattern.last_occurrence >= week_ago
+                    ViolationPattern.is_active == True,
+                    ViolationPattern.last_occurrence >= week_ago
                 )
             )
         )
         patterns = patterns_result.scalars().all()
 
         category_counts = {}
-        for c in complaints:
-            if c.category:
-                cat = c.category.value
+        for v in violations:
+            if v.category:
+                cat = v.category.value
                 category_counts[cat] = category_counts.get(cat, 0) + 1
 
         severity_counts = {}
-        for c in complaints:
-            if c.severity:
-                sev = c.severity.value
+        for v in violations:
+            if v.severity:
+                sev = v.severity.value
                 severity_counts[sev] = severity_counts.get(sev, 0) + 1
 
-        responded = len([c for c in complaints if c.acknowledged_at])
-        response_rate = (responded / len(complaints) * 100) if complaints else 0
+        responded = len([v for v in violations if v.acknowledged_at])
+        response_rate = (responded / len(violations) * 100) if violations else 0
 
-        resolved = [c for c in complaints if c.resolved_at and c.received_at]
+        resolved = [v for v in violations if v.resolved_at and v.received_at]
         if resolved:
             avg_resolution_hours = sum(
-                (c.resolved_at - c.received_at).total_seconds() / 3600
-                for c in resolved
+                (v.resolved_at - v.received_at).total_seconds() / 3600
+                for v in resolved
             ) / len(resolved)
         else:
             avg_resolution_hours = 0
 
         return {
-            "total_complaints": len(complaints),
+            "total_violations": len(violations),
             "by_category": category_counts,
             "by_severity": severity_counts,
             "active_patterns": len(patterns),
@@ -402,21 +440,26 @@ class ComplaintIntelligenceAgent(BaseAgent):
         }
 
     def _get_system_prompt(self) -> str:
-        """System prompt for complaint analysis"""
+        """System prompt for violation analysis"""
         return (
             "You are an AI assistant helping Ziv Reshef-Simchoni, "
             "the Food Service Manager at HP Israel.\n\n"
-            "Your role is to analyze employee complaints about catering "
-            "services and provide actionable insights.\n\n"
+            "Your role is to analyze inspection findings (violations and exceptions) "
+            "from professional inspectors visiting HP catering facilities, "
+            "and provide actionable insights.\n\n"
             "Context:\n"
             "- Ziv manages catering across two sites: Nes Ziona and Kiryat Gat\n"
+            "- Each site has a Meat restaurant and a Dairy restaurant\n"
             "- He works with vendors (Foodhouse, L.Eshel, etc.) who provide meals\n"
-            "- Common issues: food temperature, quality, variety, dietary accommodations\n"
+            "- Professional inspectors visit kitchens and dining rooms to report findings\n"
+            "- Common issues: kitchen cleanliness, dining room cleanliness, staff attire, "
+            "missing equipment, portion weight, menu variety, depleted main courses, "
+            "staff shortage, service quality\n"
             "- Ziv values specific, actionable recommendations over vague advice\n\n"
-            "When analyzing complaints:\n"
+            "When analyzing violations:\n"
             "- Be specific about root causes\n"
             "- Suggest concrete actions Ziv can take\n"
             "- Consider if it's a vendor issue, equipment issue, or process issue\n"
             "- Note if it's part of a larger pattern\n"
-            "- Be empathetic but professional"
+            "- Be professional and factual"
         )

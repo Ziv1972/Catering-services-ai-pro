@@ -15,14 +15,14 @@ from backend.database import engine, Base, AsyncSessionLocal
 from backend.models import User, Site
 from backend.models.supplier import Supplier
 from backend.models.supplier_budget import SupplierBudget
-from backend.models.complaint import FineRule
+from backend.models.violation import FineRule
 from backend.models.product import Product
 from backend.models.price_list import PriceList, PriceListItem
 from backend.models.menu_compliance import ComplianceRule
 from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping
 from backend.models.daily_meal_count import DailyMealCount
 from backend.api.auth import get_password_hash
-from backend.api import auth, meetings, chat, dashboard, complaints
+from backend.api import auth, meetings, chat, dashboard, violations
 from backend.api import menu_compliance, proformas, historical, anomalies, webhooks, suppliers
 from backend.api import supplier_budgets, projects, maintenance, todos, price_lists, fine_rules
 from backend.api import category_analysis, attachments, dish_catalog, agent_crew
@@ -51,13 +51,15 @@ async def lifespan(app: FastAPI):
         from backend.database import is_sqlite
         migrations = [
             ("supplier_budgets", "shift", "VARCHAR DEFAULT 'all'"),
-            ("complaints", "fine_rule_id", "INTEGER"),
-            ("complaints", "fine_amount", "FLOAT DEFAULT 0"),
+            ("violations", "fine_rule_id", "INTEGER"),
+            ("violations", "fine_amount", "FLOAT DEFAULT 0"),
             ("menu_checks", "dishes_above", "INTEGER DEFAULT 0"),
             ("menu_checks", "dishes_under", "INTEGER DEFAULT 0"),
             ("menu_checks", "dishes_even", "INTEGER DEFAULT 0"),
             ("dish_catalog", "approved", "BOOLEAN NOT NULL DEFAULT FALSE"),
             ("dish_catalog", "source_check_id", "INTEGER"),
+            ("violations", "employee_phone", "VARCHAR"),
+            ("violations", "restaurant_type", "VARCHAR"),
         ]
         for table, column, col_type in migrations:
             try:
@@ -182,18 +184,18 @@ async def lifespan(app: FastAPI):
         existing = await session.execute(select(FineRule))
         if not existing.scalars().first():
             default_fines = [
-                FineRule(name="Foreign object in food", category="food_quality", amount=500, description="Physical contamination found in served food"),
-                FineRule(name="Spoiled / expired ingredients", category="food_quality", amount=400, description="Use of expired or spoiled ingredients"),
-                FineRule(name="Incorrect temperature (hot)", category="temperature", amount=300, description="Hot food served below required temperature"),
-                FineRule(name="Incorrect temperature (cold)", category="temperature", amount=300, description="Cold food served above required temperature"),
+                FineRule(name="Foreign object in food", category="kitchen_cleanliness", amount=500, description="Physical contamination found in served food"),
+                FineRule(name="Spoiled / expired ingredients", category="kitchen_cleanliness", amount=400, description="Use of expired or spoiled ingredients"),
+                FineRule(name="Incorrect temperature (hot)", category="kitchen_cleanliness", amount=300, description="Hot food served below required temperature"),
+                FineRule(name="Incorrect temperature (cold)", category="kitchen_cleanliness", amount=300, description="Cold food served above required temperature"),
                 FineRule(name="Late delivery / service", category="service", amount=200, description="Catering delivered after agreed time"),
-                FineRule(name="Rude / unprofessional staff", category="service", amount=250, description="Staff behavior complaint"),
-                FineRule(name="Insufficient variety", category="variety", amount=150, description="Menu variety below contracted minimum"),
-                FineRule(name="Missing dietary option", category="dietary", amount=350, description="Required dietary option (vegan, kosher, etc.) not available"),
-                FineRule(name="Kitchen / area uncleanliness", category="cleanliness", amount=400, description="Hygiene standard violation in kitchen or dining area"),
-                FineRule(name="Equipment malfunction not reported", category="equipment", amount=200, description="Failed to report or fix broken equipment"),
-                FineRule(name="Pest sighting", category="cleanliness", amount=500, description="Pest found in kitchen or dining area"),
-                FineRule(name="Menu not as contracted", category="food_quality", amount=300, description="Served menu deviates from contracted menu plan"),
+                FineRule(name="Rude / unprofessional staff", category="service", amount=250, description="Staff behavior issue"),
+                FineRule(name="Insufficient variety", category="menu_variety", amount=150, description="Menu variety below contracted minimum"),
+                FineRule(name="Missing dietary option", category="menu_variety", amount=350, description="Required dietary option (vegan, kosher, etc.) not available"),
+                FineRule(name="Kitchen / area uncleanliness", category="kitchen_cleanliness", amount=400, description="Hygiene standard violation in kitchen or dining area"),
+                FineRule(name="Equipment malfunction not reported", category="missing_dining_equipment", amount=200, description="Failed to report or fix broken equipment"),
+                FineRule(name="Pest sighting", category="kitchen_cleanliness", amount=500, description="Pest found in kitchen or dining area"),
+                FineRule(name="Menu not as contracted", category="menu_variety", amount=300, description="Served menu deviates from contracted menu plan"),
             ]
             for f in default_fines:
                 f.is_active = True
@@ -577,7 +579,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(meetings.router, prefix="/api/meetings", tags=["Meetings"])
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
-app.include_router(complaints.router, prefix="/api/complaints", tags=["Complaints"])
+app.include_router(violations.router, prefix="/api/violations", tags=["Violations"])
 app.include_router(menu_compliance.router, prefix="/api/menu-compliance", tags=["Menu Compliance"])
 app.include_router(proformas.router, prefix="/api/proformas", tags=["Proformas"])
 app.include_router(historical.router, prefix="/api/historical", tags=["Historical"])
@@ -628,7 +630,7 @@ async def db_diagnostic(
 
     try:
         async with AsyncSessionLocal() as session:
-            for table in ["users", "sites", "proformas", "proforma_items", "projects", "meetings", "complaints", "supplier_budgets"]:
+            for table in ["users", "sites", "proformas", "proforma_items", "projects", "meetings", "violations", "supplier_budgets"]:
                 try:
                     result = await session.execute(sa_text(f"SELECT COUNT(*) FROM {table}"))
                     info[f"count_{table}"] = result.scalar()

@@ -14,7 +14,7 @@ from backend.models.historical_data import HistoricalMealData
 from backend.models.site import Site
 from backend.models.menu_compliance import MenuCheck
 from backend.models.proforma import Proforma, ProformaItem
-from backend.models.complaint import Complaint, ComplaintCategory
+from backend.models.violation import Violation, ViolationCategory
 from backend.models.operations import Anomaly
 from backend.api.auth import get_current_user
 from backend.api.category_analysis import _load_category_mappings, _match_product_to_category
@@ -149,15 +149,15 @@ async def get_analytics(
             "source": "proforma",
         })
 
-    # 3. Complaint categories from DB
-    complaint_result = await db.execute(
-        select(Complaint.category, func.count(Complaint.id))
-        .where(Complaint.category.isnot(None))
-        .group_by(Complaint.category)
+    # 3. Violation categories from DB
+    violation_result = await db.execute(
+        select(Violation.category, func.count(Violation.id))
+        .where(Violation.category.isnot(None))
+        .group_by(Violation.category)
     )
-    complaint_categories = [
+    violation_categories = [
         {"name": row[0].replace("_", " ").title(), "value": row[1]}
-        for row in complaint_result.all()
+        for row in violation_result.all()
     ]
 
     # 4. Menu findings by month from DB
@@ -229,7 +229,7 @@ async def get_analytics(
         (MenuCheck, "menu_checks"),
         (Proforma, "proformas"),
         (Anomaly, "anomalies"),
-        (Complaint, "complaints"),
+        (Violation, "violations"),
     ]:
         count_result = await db.execute(select(func.count(model.id)))
         counts[label] = count_result.scalar() or 0
@@ -243,7 +243,7 @@ async def get_analytics(
     return {
         "mealTrends": meal_trends,
         "costTrends": cost_trends,
-        "complaintCategories": complaint_categories,
+        "violationCategories": violation_categories,
         "menuFindings": menu_findings,
         "vendorTotals": vendor_totals,
         "vendorSeries": vendor_series,

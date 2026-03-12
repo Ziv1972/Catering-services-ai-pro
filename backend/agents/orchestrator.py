@@ -3,7 +3,7 @@ Agent Orchestrator - Routes requests to specialist agents
 """
 from typing import Dict, Any
 from backend.agents.meeting_prep.agent import MeetingPrepAgent
-from backend.agents.complaint_intelligence.agent import ComplaintIntelligenceAgent
+from backend.agents.violation_intelligence.agent import ViolationIntelligenceAgent
 from backend.agents.budget_intelligence.agent import BudgetIntelligenceAgent
 from backend.agents.event_coordination.agent import EventCoordinationAgent
 from backend.agents.dietary_compliance.agent import DietaryComplianceAgent
@@ -18,7 +18,7 @@ class AgentOrchestrator:
     def __init__(self):
         self.agents = {
             "meeting_prep": MeetingPrepAgent(),
-            "complaint_intelligence": ComplaintIntelligenceAgent(),
+            "violation_intelligence": ViolationIntelligenceAgent(),
             "budget_intelligence": BudgetIntelligenceAgent(),
             "event_coordination": EventCoordinationAgent(),
             "dietary_compliance": DietaryComplianceAgent(),

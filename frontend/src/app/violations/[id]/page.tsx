@@ -10,13 +10,13 @@ import {
   MessageSquare, Sparkles, Send, Upload, FileText,
   Download, Trash2, Loader2, Brain
 } from 'lucide-react';
-import { complaintsAPI, attachmentsAPI } from '@/lib/api';
+import { violationsAPI, attachmentsAPI } from '@/lib/api';
 import { format } from 'date-fns';
 
-export default function ComplaintDetailPage() {
+export default function ViolationDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const [complaint, setComplaint] = useState<any>(null);
+  const [violation, setViolation] = useState<any>(null);
   const [draftResponse, setDraftResponse] = useState<string | null>(null);
   const [resolveNotes, setResolveNotes] = useState('');
   const [loading, setLoading] = useState(true);
@@ -26,21 +26,21 @@ export default function ComplaintDetailPage() {
   const [processing, setProcessing] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const complaintId = Number(params.id);
+  const violationId = Number(params.id);
 
   useEffect(() => {
     if (params.id) {
-      loadComplaint(complaintId);
-      loadAttachments(complaintId);
+      loadViolation(violationId);
+      loadAttachments(violationId);
     }
   }, [params.id]);
 
-  const loadComplaint = async (id: number) => {
+  const loadViolation = async (id: number) => {
     try {
-      const data = await complaintsAPI.get(id);
-      setComplaint(data);
+      const data = await violationsAPI.get(id);
+      setViolation(data);
     } catch (error) {
-      console.error('Failed to load complaint:', error);
+      console.error('Failed to load violation:', error);
     } finally {
       setLoading(false);
     }
@@ -48,7 +48,7 @@ export default function ComplaintDetailPage() {
 
   const loadAttachments = useCallback(async (id: number) => {
     try {
-      const data = await attachmentsAPI.list('complaint', id);
+      const data = await attachmentsAPI.list('violation', id);
       setAttachments(data);
     } catch (error) {
       // Attachments are optional — fail silently
@@ -61,9 +61,9 @@ export default function ComplaintDetailPage() {
     setUploading(true);
     try {
       for (const file of Array.from(files)) {
-        await attachmentsAPI.upload('complaint', complaintId, file);
+        await attachmentsAPI.upload('violation', violationId, file);
       }
-      await loadAttachments(complaintId);
+      await loadAttachments(violationId);
     } catch (error) {
       console.error('Upload failed:', error);
     } finally {
@@ -111,8 +111,8 @@ export default function ComplaintDetailPage() {
 
   const handleAcknowledge = async () => {
     try {
-      await complaintsAPI.acknowledge(complaint.id);
-      await loadComplaint(complaint.id);
+      await violationsAPI.acknowledge(violation.id);
+      await loadViolation(violation.id);
     } catch (error) {
       console.error('Failed to acknowledge:', error);
     }
@@ -121,7 +121,7 @@ export default function ComplaintDetailPage() {
   const handleDraftResponse = async () => {
     setDrafting(true);
     try {
-      const result = await complaintsAPI.draftResponse(complaint.id);
+      const result = await violationsAPI.draftResponse(violation.id);
       setDraftResponse(result.draft);
     } catch (error) {
       console.error('Failed to draft response:', error);
@@ -133,8 +133,8 @@ export default function ComplaintDetailPage() {
   const handleResolve = async () => {
     if (!resolveNotes.trim()) return;
     try {
-      await complaintsAPI.resolve(complaint.id, resolveNotes);
-      await loadComplaint(complaint.id);
+      await violationsAPI.resolve(violation.id, resolveNotes);
+      await loadViolation(violation.id);
       setResolveNotes('');
     } catch (error) {
       console.error('Failed to resolve:', error);
@@ -162,14 +162,14 @@ export default function ComplaintDetailPage() {
     return <div className="flex items-center justify-center h-screen">Loading...</div>;
   }
 
-  if (!complaint) {
+  if (!violation) {
     return (
       <div className="flex items-center justify-center h-screen">
         <Card className="p-8 text-center max-w-md">
           <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-4" />
-          <p className="text-gray-700 font-medium">Complaint not found</p>
-          <Button variant="outline" className="mt-4" onClick={() => router.push('/complaints')}>
-            Back to Complaints
+          <p className="text-gray-700 font-medium">Violation not found</p>
+          <Button variant="outline" className="mt-4" onClick={() => router.push('/violations')}>
+            Back to Violations
           </Button>
         </Card>
       </div>
@@ -179,27 +179,27 @@ export default function ComplaintDetailPage() {
   return (
     <div>
       <main className="max-w-7xl mx-auto px-4 py-8">
-        <Button variant="ghost" className="mb-4" onClick={() => router.push('/complaints')}>
-          <ArrowLeft className="w-4 h-4 mr-2" /> Back to Complaints
+        <Button variant="ghost" className="mb-4" onClick={() => router.push('/violations')}>
+          <ArrowLeft className="w-4 h-4 mr-2" /> Back to Violations
         </Button>
 
         {/* Header */}
         <div className="flex items-start justify-between mb-6">
           <div className="flex items-center gap-3">
-            {getStatusIcon(complaint.status)}
+            {getStatusIcon(violation.status)}
             <div>
-              <h2 className="text-2xl font-bold text-gray-900 capitalize">{complaint.status}</h2>
+              <h2 className="text-2xl font-bold text-gray-900 capitalize">{violation.status}</h2>
               <p className="text-gray-500 text-sm">
-                Received {format(new Date(complaint.received_at), 'MMM d, yyyy h:mm a')}
+                Received {format(new Date(violation.received_at), 'MMM d, yyyy h:mm a')}
               </p>
             </div>
           </div>
           <div className="flex gap-2">
-            {complaint.category && (
-              <Badge variant="secondary">{complaint.category.replace('_', ' ')}</Badge>
+            {violation.category && (
+              <Badge variant="secondary">{violation.category.replace('_', ' ')}</Badge>
             )}
-            {complaint.severity && (
-              <Badge className={getSeverityColor(complaint.severity)}>{complaint.severity}</Badge>
+            {violation.severity && (
+              <Badge className={getSeverityColor(violation.severity)}>{violation.severity}</Badge>
             )}
           </div>
         </div>
@@ -207,25 +207,25 @@ export default function ComplaintDetailPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main Content */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Complaint Text */}
+            {/* Violation Text */}
             <Card>
               <CardHeader>
-                <CardTitle>Complaint</CardTitle>
+                <CardTitle>Violation</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-gray-700 whitespace-pre-wrap">{complaint.complaint_text}</p>
+                <p className="text-gray-700 whitespace-pre-wrap">{violation.violation_text}</p>
                 <div className="flex items-center gap-4 mt-4 pt-4 border-t text-sm text-gray-500 flex-wrap">
-                  <span className="capitalize">Source: {complaint.source === 'whatsapp' ? 'WhatsApp' : complaint.source}</span>
-                  {complaint.site_id && <span>Site ID: {complaint.site_id}</span>}
-                  {complaint.employee_name && <span>From: {complaint.employee_name}</span>}
-                  {complaint.is_anonymous && <Badge variant="secondary">Anonymous</Badge>}
-                  {complaint.fine_amount > 0 && (
+                  <span className="capitalize">Source: {violation.source === 'whatsapp' ? 'WhatsApp' : violation.source}</span>
+                  {violation.site_id && <span>Site ID: {violation.site_id}</span>}
+                  {violation.employee_name && <span>From: {violation.employee_name}</span>}
+                  {violation.is_anonymous && <Badge variant="secondary">Anonymous</Badge>}
+                  {violation.fine_amount > 0 && (
                     <Badge className="bg-purple-100 text-purple-800">
-                      Fine: {complaint.fine_amount.toLocaleString()} NIS
+                      Fine: {violation.fine_amount.toLocaleString()} NIS
                     </Badge>
                   )}
-                  {complaint.fine_rule_name && (
-                    <span className="text-purple-600">Rule: {complaint.fine_rule_name}</span>
+                  {violation.fine_rule_name && (
+                    <span className="text-purple-600">Rule: {violation.fine_rule_name}</span>
                   )}
                 </div>
               </CardContent>
@@ -332,7 +332,7 @@ export default function ComplaintDetailPage() {
             </Card>
 
             {/* AI Analysis */}
-            {(complaint.ai_summary || complaint.ai_root_cause || complaint.ai_suggested_action) && (
+            {(violation.ai_summary || violation.ai_root_cause || violation.ai_suggested_action) && (
               <Card className="bg-blue-50 border-blue-200">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-blue-900">
@@ -341,28 +341,28 @@ export default function ComplaintDetailPage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {complaint.ai_summary && (
+                  {violation.ai_summary && (
                     <div>
                       <p className="text-sm font-medium text-blue-800 mb-1">Summary</p>
-                      <p className="text-blue-900">{complaint.ai_summary}</p>
+                      <p className="text-blue-900">{violation.ai_summary}</p>
                     </div>
                   )}
-                  {complaint.ai_root_cause && (
+                  {violation.ai_root_cause && (
                     <div>
                       <p className="text-sm font-medium text-blue-800 mb-1">Root Cause</p>
-                      <p className="text-blue-900">{complaint.ai_root_cause}</p>
+                      <p className="text-blue-900">{violation.ai_root_cause}</p>
                     </div>
                   )}
-                  {complaint.ai_suggested_action && (
+                  {violation.ai_suggested_action && (
                     <div>
                       <p className="text-sm font-medium text-blue-800 mb-1">Suggested Action</p>
-                      <p className="text-blue-900">{complaint.ai_suggested_action}</p>
+                      <p className="text-blue-900">{violation.ai_suggested_action}</p>
                     </div>
                   )}
-                  {complaint.sentiment_score != null && (
+                  {violation.sentiment_score != null && (
                     <div>
                       <p className="text-sm font-medium text-blue-800 mb-1">Sentiment Score</p>
-                      <p className="text-blue-900">{complaint.sentiment_score.toFixed(2)}</p>
+                      <p className="text-blue-900">{violation.sentiment_score.toFixed(2)}</p>
                     </div>
                   )}
                 </CardContent>
@@ -393,14 +393,14 @@ export default function ComplaintDetailPage() {
                 <CardTitle>Actions</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                {complaint.status === 'new' && (
+                {violation.status === 'new' && (
                   <Button className="w-full" onClick={handleAcknowledge}>
                     <CheckCircle2 className="w-4 h-4 mr-2" />
                     Acknowledge
                   </Button>
                 )}
 
-                {complaint.status !== 'resolved' && (
+                {violation.status !== 'resolved' && (
                   <Button
                     variant="outline"
                     className="w-full"
@@ -412,7 +412,7 @@ export default function ComplaintDetailPage() {
                   </Button>
                 )}
 
-                {complaint.status !== 'resolved' && (
+                {violation.status !== 'resolved' && (
                   <div className="pt-3 border-t">
                     <p className="text-sm font-medium text-gray-700 mb-2">Resolve</p>
                     <textarea
@@ -434,10 +434,10 @@ export default function ComplaintDetailPage() {
                   </div>
                 )}
 
-                {complaint.resolution_notes && (
+                {violation.resolution_notes && (
                   <div className="pt-3 border-t">
                     <p className="text-sm font-medium text-gray-700 mb-1">Resolution Notes</p>
-                    <p className="text-sm text-gray-600">{complaint.resolution_notes}</p>
+                    <p className="text-sm text-gray-600">{violation.resolution_notes}</p>
                   </div>
                 )}
               </CardContent>
@@ -455,28 +455,28 @@ export default function ComplaintDetailPage() {
                     <div>
                       <p className="text-sm font-medium">Received</p>
                       <p className="text-xs text-gray-500">
-                        {format(new Date(complaint.received_at), 'MMM d, h:mm a')}
+                        {format(new Date(violation.received_at), 'MMM d, h:mm a')}
                       </p>
                     </div>
                   </div>
-                  {complaint.acknowledged_at && (
+                  {violation.acknowledged_at && (
                     <div className="flex items-center gap-3">
                       <div className="w-2 h-2 bg-yellow-500 rounded-full" />
                       <div>
                         <p className="text-sm font-medium">Acknowledged</p>
                         <p className="text-xs text-gray-500">
-                          {format(new Date(complaint.acknowledged_at), 'MMM d, h:mm a')}
+                          {format(new Date(violation.acknowledged_at), 'MMM d, h:mm a')}
                         </p>
                       </div>
                     </div>
                   )}
-                  {complaint.resolved_at && (
+                  {violation.resolved_at && (
                     <div className="flex items-center gap-3">
                       <div className="w-2 h-2 bg-green-500 rounded-full" />
                       <div>
                         <p className="text-sm font-medium">Resolved</p>
                         <p className="text-xs text-gray-500">
-                          {format(new Date(complaint.resolved_at), 'MMM d, h:mm a')}
+                          {format(new Date(violation.resolved_at), 'MMM d, h:mm a')}
                         </p>
                       </div>
                     </div>
