@@ -41,7 +41,99 @@ async def lifespan(app: FastAPI):
     if is_sqlite:
         logger.warning("[DB-DIAG] WARNING: Using SQLite — data will NOT persist on Railway!")
 
-    # Create all tables
+    # ── Migration: complaints → violations (rename tables + enum values) ──
+    async with engine.begin() as conn:
+        if not is_sqlite:
+            # PostgreSQL: check if old 'complaints' table exists
+            has_old = await conn.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'complaints')"
+            ))
+            if has_old.scalar():
+                logger.info("Migrating: renaming complaints → violations")
+                # Drop new empty violations table if create_all made it before
+                await conn.execute(text(
+                    "DROP TABLE IF EXISTS violations CASCADE"
+                ))
+                # Rename table
+                await conn.execute(text(
+                    "ALTER TABLE complaints RENAME TO violations"
+                ))
+                # Rename column
+                try:
+                    await conn.execute(text(
+                        "ALTER TABLE violations RENAME COLUMN complaint_text TO violation_text"
+                    ))
+                except Exception:
+                    pass  # column may already be renamed
+
+            # Check if old complaint_patterns table exists
+            has_old_patterns = await conn.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'complaint_patterns')"
+            ))
+            if has_old_patterns.scalar():
+                await conn.execute(text(
+                    "DROP TABLE IF EXISTS violation_patterns CASCADE"
+                ))
+                await conn.execute(text(
+                    "ALTER TABLE complaint_patterns RENAME TO violation_patterns"
+                ))
+
+            # Convert category column to VARCHAR to avoid enum type conflicts
+            has_violations = await conn.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'violations')"
+            ))
+            if has_violations.scalar():
+                try:
+                    await conn.execute(text(
+                        "ALTER TABLE violations ALTER COLUMN category TYPE VARCHAR"
+                    ))
+                except Exception:
+                    pass
+
+                # Map old category values → new values
+                category_migration = {
+                    'food_quality': 'kitchen_cleanliness',
+                    'FOOD_QUALITY': 'kitchen_cleanliness',
+                    'temperature': 'kitchen_cleanliness',
+                    'TEMPERATURE': 'kitchen_cleanliness',
+                    'cleanliness': 'kitchen_cleanliness',
+                    'CLEANLINESS': 'kitchen_cleanliness',
+                    'variety': 'menu_variety',
+                    'VARIETY': 'menu_variety',
+                    'dietary': 'menu_variety',
+                    'DIETARY': 'menu_variety',
+                    'equipment': 'missing_dining_equipment',
+                    'EQUIPMENT': 'missing_dining_equipment',
+                    'SERVICE': 'service',
+                }
+                for old_val, new_val in category_migration.items():
+                    await conn.execute(text(
+                        f"UPDATE violations SET category = '{new_val}' "
+                        f"WHERE category = '{old_val}'"
+                    ))
+                logger.info("Migrated old category enum values to new values")
+
+            # Drop old enum types if they exist
+            for old_type in ['complaintcategory', 'complaintseverity',
+                             'complaintsource', 'complaintstatus']:
+                try:
+                    await conn.execute(text(f"DROP TYPE IF EXISTS {old_type} CASCADE"))
+                except Exception:
+                    pass
+        else:
+            # SQLite: simple table rename
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE complaints RENAME TO violations"
+                ))
+                logger.info("SQLite: renamed complaints → violations")
+            except Exception:
+                pass  # table may not exist or already renamed
+
+    # Create all tables (creates new tables, ignores existing)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created")
