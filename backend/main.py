@@ -113,13 +113,50 @@ async def lifespan(app: FastAPI):
                     'equipment': 'missing_dining_equipment',
                     'EQUIPMENT': 'missing_dining_equipment',
                     'SERVICE': 'service',
+                    'other': 'service',
+                    'OTHER': 'service',
                 }
                 for old_val, new_val in category_migration.items():
                     await conn.execute(text(
                         f"UPDATE violations SET category = '{new_val}' "
                         f"WHERE category = '{old_val}'"
                     ))
+
+                # Catch-all: map any remaining unknown category values
+                valid_categories = (
+                    "'kitchen_cleanliness','dining_cleanliness','staff_attire',"
+                    "'missing_dining_equipment','portion_weight','menu_variety',"
+                    "'main_course_depleted','staff_shortage','service','positive_notes'"
+                )
+                await conn.execute(text(
+                    f"UPDATE violations SET category = 'service' "
+                    f"WHERE category NOT IN ({valid_categories})"
+                ))
                 logger.info("Migrated old category enum values to new values")
+
+                # Catch-all for severity: map unknown values
+                valid_severities = "'low','medium','high','critical'"
+                await conn.execute(text(
+                    f"UPDATE violations SET severity = 'medium' "
+                    f"WHERE severity IS NOT NULL "
+                    f"AND severity NOT IN ({valid_severities})"
+                ))
+
+                # Catch-all for source: map unknown values
+                valid_sources = "'email','whatsapp','slack','manual','form'"
+                await conn.execute(text(
+                    f"UPDATE violations SET source = 'manual' "
+                    f"WHERE source NOT IN ({valid_sources})"
+                ))
+
+                # Catch-all for status: map unknown values
+                valid_statuses = "'new','acknowledged','investigating','resolved','dismissed'"
+                await conn.execute(text(
+                    f"UPDATE violations SET status = 'new' "
+                    f"WHERE status IS NOT NULL "
+                    f"AND status NOT IN ({valid_statuses})"
+                ))
+                logger.info("Applied catch-all migration for all enum columns")
 
             # Also convert fine_rules.category if it uses a native enum
             has_fine_rules = await conn.execute(text(
