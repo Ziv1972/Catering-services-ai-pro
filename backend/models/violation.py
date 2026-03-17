@@ -1,7 +1,7 @@
 """
 Violation tracking model — Exceptions & Violations (חריגות והפרות)
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from backend.database import Base
@@ -92,15 +92,15 @@ class Violation(Base):
     site_id = Column(Integer, ForeignKey("sites.id"), nullable=True)
 
     # Source information
-    source = Column(SQLEnum(ViolationSource, native_enum=False), nullable=False)
+    source = Column(String, nullable=False)
     source_id = Column(String, nullable=True)
 
     # Violation content
     violation_text = Column(Text, nullable=False)
 
     # AI-generated classifications
-    category = Column(SQLEnum(ViolationCategory, native_enum=False), nullable=True)
-    severity = Column(SQLEnum(ViolationSeverity, native_enum=False), nullable=True)
+    category = Column(String, nullable=True)
+    severity = Column(String, nullable=True)
     sentiment_score = Column(Float, nullable=True)
 
     # AI analysis
@@ -120,10 +120,10 @@ class Violation(Base):
     is_anonymous = Column(Boolean, default=False)
 
     # Restaurant type (meat/dairy)
-    restaurant_type = Column(SQLEnum(RestaurantType, native_enum=False), nullable=True)
+    restaurant_type = Column(String, nullable=True)
 
     # Status tracking
-    status = Column(SQLEnum(ViolationStatus, native_enum=False), default=ViolationStatus.NEW)
+    status = Column(String, default="new")
 
     # Timestamps
     received_at = Column(DateTime(timezone=True), nullable=False, index=True)
@@ -153,7 +153,7 @@ class FineRule(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    category = Column(SQLEnum(ViolationCategory, native_enum=False), nullable=False)
+    category = Column(String, nullable=False)
     amount = Column(Float, nullable=False)
     description = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
