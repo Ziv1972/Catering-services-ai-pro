@@ -368,6 +368,11 @@ export const proformasAPI = {
     });
     return response.data;
   },
+
+  delete: async (proformaId: number) => {
+    const response = await api.delete(`/api/proformas/${proformaId}`);
+    return response.data;
+  },
 };
 
 // Suppliers

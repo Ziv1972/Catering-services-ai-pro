@@ -830,3 +830,27 @@ async def compare_proforma_prices(
             "unmatched": len(comparison_items) - matched_count,
         },
     }
+
+
+@router.delete("/{proforma_id}")
+async def delete_proforma(
+    proforma_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a proforma and all its line items."""
+    result = await db.execute(select(Proforma).where(Proforma.id == proforma_id))
+    proforma = result.scalar_one_or_none()
+    if not proforma:
+        raise HTTPException(status_code=404, detail="Proforma not found")
+
+    # Delete all items first
+    await db.execute(
+        select(ProformaItem).where(ProformaItem.proforma_id == proforma_id)
+    )
+    from sqlalchemy import delete as sql_delete
+    await db.execute(sql_delete(ProformaItem).where(ProformaItem.proforma_id == proforma_id))
+    await db.delete(proforma)
+    await db.commit()
+
+    return {"message": f"Proforma #{proforma_id} deleted", "id": proforma_id}

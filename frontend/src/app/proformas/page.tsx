@@ -132,6 +132,17 @@ export default function ProformasPage() {
     }
   };
 
+  const handleDelete = async (proformaId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Delete this proforma and all its items?')) return;
+    try {
+      await proformasAPI.delete(proformaId);
+      await loadData();
+    } catch (error: any) {
+      alert(error?.response?.data?.detail || 'Delete failed');
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'paid': return 'bg-green-100 text-green-800 border-green-200';
@@ -548,7 +559,16 @@ export default function ProformasPage() {
                         )}
                       </div>
                     </div>
-                    <ArrowRight className="w-5 h-5 text-gray-400" />
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => handleDelete(proforma.id, e)}
+                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                        title="Delete proforma"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <ArrowRight className="w-5 h-5 text-gray-400" />
+                    </div>
                   </div>
                 ))}
               </div>
