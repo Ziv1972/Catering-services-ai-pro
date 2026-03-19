@@ -131,7 +131,17 @@ def _parse_proforma_csv(raw: bytes) -> list[dict]:
 
 
 def _parse_proforma_xlsx(raw: bytes) -> list[dict]:
-    """Parse XLSX bytes into row dicts using openpyxl."""
+    """Parse XLSX bytes into row dicts using openpyxl.
+
+    Handles FoodHouse-style proformas with:
+    - Multiple title/header rows before data
+    - Multiple invoice sections (חשבונית 1, חשבונית 2, ...)
+    - Header rows containing כמות/מחיר keywords
+    - Subtotal/VAT rows mixed in (סה"כ, מע"מ, סך הכל)
+
+    Strategy: scan all rows, auto-detect header rows by keyword match,
+    then collect data rows from each section.
+    """
     import openpyxl
 
     wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
@@ -139,28 +149,126 @@ def _parse_proforma_xlsx(raw: bytes) -> list[dict]:
     if ws is None:
         raise ValueError("Excel file has no active sheet")
 
-    rows_iter = ws.iter_rows(values_only=True)
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
 
-    # First row = headers
-    header_row = next(rows_iter, None)
-    if header_row is None:
+    if not all_rows:
         raise ValueError("Excel file is empty")
 
-    headers = [str(h).strip().lower() if h is not None else f"col_{i}" for i, h in enumerate(header_row)]
+    # --- Strategy 1: Try simple header-in-row-0 format first ---
+    first_non_empty = None
+    for i, row in enumerate(all_rows):
+        cells = [str(c).strip().lower() if c is not None else "" for c in row]
+        non_empty = [c for c in cells if c]
+        if len(non_empty) >= 2:
+            first_non_empty = i
+            break
 
-    rows: list[dict] = []
-    for row in rows_iter:
-        # Skip completely empty rows
-        if all(cell is None or str(cell).strip() == "" for cell in row):
-            continue
-        cleaned = {}
-        for i, cell in enumerate(row):
-            if i < len(headers):
-                cleaned[headers[i]] = str(cell).strip() if cell is not None else ""
-        rows.append(cleaned)
+    if first_non_empty is not None:
+        test_headers = [str(c).strip().lower() if c is not None else "" for c in all_rows[first_non_empty]]
+        name_kw = ["product", "item", "name", "description", "מוצר", "שם", "פריט", "תיאור"]
+        qty_kw = ["כמות", "quantity", "qty"]
+        price_kw = ["מחיר", "price", "cost", "עלות", "תעריף"]
+        has_name = any(any(k in h for k in name_kw) for h in test_headers)
+        has_qty = any(any(k in h for k in qty_kw) for h in test_headers)
+        has_price = any(any(k in h for k in price_kw) for h in test_headers)
 
-    wb.close()
-    return rows
+        # Simple format: first non-empty row has recognizable column headers
+        if has_name and (has_qty or has_price):
+            headers = [str(h).strip().lower() if h is not None else f"col_{j}" for j, h in enumerate(all_rows[first_non_empty])]
+            rows: list[dict] = []
+            for row in all_rows[first_non_empty + 1:]:
+                if all(c is None or str(c).strip() == "" for c in row):
+                    continue
+                cleaned = {}
+                for j, cell in enumerate(row):
+                    if j < len(headers):
+                        cleaned[headers[j]] = str(cell).strip() if cell is not None else ""
+                rows.append(cleaned)
+            return rows
+
+    # --- Strategy 2: FoodHouse multi-section format ---
+    # Scan for rows containing כמות + מחיר as section headers
+    skip_keywords = {"סה\"כ", "סהכ", "מע\"מ", "מעמ", "סך הכל", "סך הכול", "total", "vat", "subtotal"}
+    section_header_indices: list[int] = []
+    name_col_idx = -1
+    qty_col_idx = -1
+    price_col_idx = -1
+    total_col_idx = -1
+
+    for i, row in enumerate(all_rows):
+        cells = [str(c).strip() if c is not None else "" for c in row]
+        cells_lower = [c.lower() for c in cells]
+        # Look for a row that has כמות and מחיר
+        if any("כמות" in c for c in cells_lower) and any("מחיר" in c for c in cells_lower):
+            section_header_indices.append(i)
+            # Detect column positions from the FIRST header row found
+            if name_col_idx == -1:
+                for j, c in enumerate(cells_lower):
+                    if "כמות" in c:
+                        qty_col_idx = j
+                    elif "מחיר" in c:
+                        price_col_idx = j
+                    elif 'סה"כ' in c or "סהכ" in c or "total" in c:
+                        total_col_idx = j
+                # Name column = the column just before כמות (where the description is)
+                if qty_col_idx > 0:
+                    name_col_idx = qty_col_idx - 1
+
+    if not section_header_indices:
+        # Fallback: treat first row as header
+        headers = [str(h).strip().lower() if h is not None else f"col_{j}" for j, h in enumerate(all_rows[0])]
+        rows = []
+        for row in all_rows[1:]:
+            if all(c is None or str(c).strip() == "" for c in row):
+                continue
+            cleaned = {}
+            for j, cell in enumerate(row):
+                if j < len(headers):
+                    cleaned[headers[j]] = str(cell).strip() if cell is not None else ""
+            rows.append(cleaned)
+        return rows
+
+    # Collect data rows from ALL sections
+    result: list[dict] = []
+    for sec_idx, header_row_idx in enumerate(section_header_indices):
+        # Data rows start after the header row
+        next_boundary = section_header_indices[sec_idx + 1] if sec_idx + 1 < len(section_header_indices) else len(all_rows)
+
+        for i in range(header_row_idx + 1, next_boundary):
+            row = all_rows[i]
+            cells = [str(c).strip() if c is not None else "" for c in row]
+
+            # Skip empty rows
+            if all(c == "" for c in cells):
+                continue
+
+            # Skip subtotal/VAT/total rows
+            row_text = " ".join(cells).lower()
+            if any(sk in row_text for sk in skip_keywords):
+                continue
+
+            # Skip section title rows like "חשבונית 2"
+            if any("חשבונית" in c for c in cells):
+                continue
+
+            # Extract product name
+            product_name = cells[name_col_idx] if 0 <= name_col_idx < len(cells) else ""
+            if not product_name:
+                continue
+
+            qty_str = cells[qty_col_idx] if 0 <= qty_col_idx < len(cells) else ""
+            price_str = cells[price_col_idx] if 0 <= price_col_idx < len(cells) else ""
+            total_str = cells[total_col_idx] if 0 <= total_col_idx < len(cells) else ""
+
+            result.append({
+                "מוצר": product_name,
+                "כמות": qty_str,
+                "מחיר": price_str,
+                "סה\"כ": total_str,
+            })
+
+    return result
 
 
 def _detect_proforma_columns(headers: list[str]) -> tuple[str | None, str | None, str | None, str | None]:
@@ -174,6 +282,7 @@ def _detect_proforma_columns(headers: list[str]) -> tuple[str | None, str | None
     qty_keywords = ["quantity", "qty", "amount", "count", "כמות"]
     unit_keywords = ["unit", "uom", "measure", "יחידה", "יח"]
     price_keywords = ["price", "cost", "rate", "מחיר", "עלות", "תעריף", "סכום"]
+    total_keywords = ["total", "סה\"כ", "סהכ", "סך"]
 
     for h in headers:
         hl = h.lower().strip()
