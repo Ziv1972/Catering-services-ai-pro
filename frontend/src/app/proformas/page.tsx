@@ -108,13 +108,13 @@ export default function ProformasPage() {
     }
   };
 
-  const handleUploadCSV = async (e: React.FormEvent) => {
+  const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadFile || !uploadForm.supplier_id) return;
     setUploading(true);
     setUploadResult(null);
     try {
-      const result = await proformasAPI.uploadCSV(
+      const result = await proformasAPI.upload(
         uploadFile,
         parseInt(uploadForm.supplier_id),
         uploadForm.site_id ? parseInt(uploadForm.site_id) : undefined,
@@ -161,7 +161,7 @@ export default function ProformasPage() {
               onClick={() => { setShowUpload(!showUpload); setShowForm(false); }}
               className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700"
             >
-              <Upload className="h-4 w-4" /> Upload CSV
+              <Upload className="h-4 w-4" /> Upload Excel
             </button>
             <button
               onClick={() => { setShowForm(!showForm); setShowUpload(false); }}
@@ -317,15 +317,15 @@ export default function ProformasPage() {
             <CardHeader className="pb-3">
               <CardTitle className="text-lg flex items-center gap-2">
                 <Upload className="h-5 w-5 text-green-600" />
-                Upload Proforma CSV
+                Upload Proforma
               </CardTitle>
               <p className="text-sm text-gray-500">
-                Upload a CSV file with product name, quantity, unit, and price columns.
+                Upload an Excel (.xlsx) or CSV file with product name, quantity, unit, and price columns.
                 Hebrew and English headers are auto-detected.
               </p>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleUploadCSV}>
+              <form onSubmit={handleUpload}>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Supplier *</label>
@@ -373,23 +373,23 @@ export default function ProformasPage() {
                 </div>
 
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">CSV File *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Excel / CSV File *</label>
                   <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-400 transition-colors">
                     <input
                       type="file"
-                      accept=".csv,.tsv,.txt"
+                      accept=".xlsx,.xls,.csv,.tsv,.txt"
                       onChange={e => setUploadFile(e.target.files?.[0] || null)}
                       className="hidden"
-                      id="proforma-csv-upload"
+                      id="proforma-file-upload"
                     />
-                    <label htmlFor="proforma-csv-upload" className="cursor-pointer">
+                    <label htmlFor="proforma-file-upload" className="cursor-pointer">
                       <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
                       {uploadFile ? (
                         <p className="text-sm text-green-700 font-medium">{uploadFile.name}</p>
                       ) : (
-                        <p className="text-sm text-gray-500">Click to select CSV file</p>
+                        <p className="text-sm text-gray-500">Click to select Excel (.xlsx) or CSV file</p>
                       )}
-                      <p className="text-xs text-gray-400 mt-1">Supports UTF-8 and Hebrew (cp1255) encoding</p>
+                      <p className="text-xs text-gray-400 mt-1">Excel recommended. CSV also supported (UTF-8 / Hebrew cp1255)</p>
                     </label>
                   </div>
                 </div>

@@ -356,7 +356,7 @@ export const proformasAPI = {
     return response.data;
   },
 
-  uploadCSV: async (file: File, supplierId: number, siteId?: number, invoiceDate?: string, proformaNumber?: string) => {
+  upload: async (file: File, supplierId: number, siteId?: number, invoiceDate?: string, proformaNumber?: string) => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('supplier_id', String(supplierId));

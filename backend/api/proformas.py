@@ -107,7 +107,7 @@ async def list_proformas(
     return response
 
 
-# ── CSV Upload ────────────────────────────────────────────────────────
+# ── File Upload (XLSX + CSV) ──────────────────────────────────────────
 
 
 def _parse_proforma_csv(raw: bytes) -> list[dict]:
@@ -130,6 +130,39 @@ def _parse_proforma_csv(raw: bytes) -> list[dict]:
     return rows
 
 
+def _parse_proforma_xlsx(raw: bytes) -> list[dict]:
+    """Parse XLSX bytes into row dicts using openpyxl."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    ws = wb.active
+    if ws is None:
+        raise ValueError("Excel file has no active sheet")
+
+    rows_iter = ws.iter_rows(values_only=True)
+
+    # First row = headers
+    header_row = next(rows_iter, None)
+    if header_row is None:
+        raise ValueError("Excel file is empty")
+
+    headers = [str(h).strip().lower() if h is not None else f"col_{i}" for i, h in enumerate(header_row)]
+
+    rows: list[dict] = []
+    for row in rows_iter:
+        # Skip completely empty rows
+        if all(cell is None or str(cell).strip() == "" for cell in row):
+            continue
+        cleaned = {}
+        for i, cell in enumerate(row):
+            if i < len(headers):
+                cleaned[headers[i]] = str(cell).strip() if cell is not None else ""
+        rows.append(cleaned)
+
+    wb.close()
+    return rows
+
+
 def _detect_proforma_columns(headers: list[str]) -> tuple[str | None, str | None, str | None, str | None]:
     """Auto-detect product_name, quantity, unit, unit_price columns from headers."""
     name_col = None
@@ -140,7 +173,7 @@ def _detect_proforma_columns(headers: list[str]) -> tuple[str | None, str | None
     name_keywords = ["product", "item", "name", "description", "מוצר", "שם", "פריט", "תיאור"]
     qty_keywords = ["quantity", "qty", "amount", "count", "כמות"]
     unit_keywords = ["unit", "uom", "measure", "יחידה", "יח"]
-    price_keywords = ["price", "cost", "rate", "מחיר", "עלות", "תעריף"]
+    price_keywords = ["price", "cost", "rate", "מחיר", "עלות", "תעריף", "סכום"]
 
     for h in headers:
         hl = h.lower().strip()
@@ -157,7 +190,7 @@ def _detect_proforma_columns(headers: list[str]) -> tuple[str | None, str | None
 
 
 @router.post("/upload")
-async def upload_proforma_csv(
+async def upload_proforma(
     file: UploadFile = File(...),
     supplier_id: int = Form(...),
     site_id: int = Form(None),
@@ -166,15 +199,15 @@ async def upload_proforma_csv(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Upload a CSV file to create a proforma with line items."""
+    """Upload an XLSX or CSV file to create a proforma with line items."""
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in ("csv", "tsv", "txt"):
+    if ext not in ("xlsx", "xls", "csv", "tsv", "txt"):
         raise HTTPException(
             status_code=400,
-            detail="Only CSV files are supported. Please export your Excel as CSV first.",
+            detail="Supported formats: Excel (.xlsx) or CSV (.csv)",
         )
 
     # Verify supplier exists
@@ -185,12 +218,15 @@ async def upload_proforma_csv(
 
     raw = await file.read()
     try:
-        rows = _parse_proforma_csv(raw)
+        if ext in ("xlsx", "xls"):
+            rows = _parse_proforma_xlsx(raw)
+        else:
+            rows = _parse_proforma_csv(raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     if not rows:
-        raise HTTPException(status_code=400, detail="CSV file is empty")
+        raise HTTPException(status_code=400, detail="File is empty or has no data rows")
 
     # Detect columns
     headers = list(rows[0].keys())
