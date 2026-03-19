@@ -145,9 +145,30 @@ def _parse_proforma_xlsx(raw: bytes) -> list[dict]:
     import openpyxl
 
     wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
-    ws = wb.active
+
+    # Prefer the "חשבוניות" (invoices) sheet if it exists — FoodHouse proformas
+    # have multiple sheets but the invoice data is always on חשבוניות
+    target_sheet_names = ["חשבוניות", "invoices", "sheet1"]
+    ws = None
+    for name in target_sheet_names:
+        if name in wb.sheetnames:
+            ws = wb[name]
+            break
     if ws is None:
-        raise ValueError("Excel file has no active sheet")
+        # Fallback: try sheets with כמות/מחיר headers, else use active
+        for sname in wb.sheetnames:
+            candidate = wb[sname]
+            for row in candidate.iter_rows(values_only=True, max_row=30):
+                cells_text = " ".join(str(c) for c in row if c is not None)
+                if "כמות" in cells_text and "מחיר" in cells_text:
+                    ws = candidate
+                    break
+            if ws is not None:
+                break
+    if ws is None:
+        ws = wb.active
+    if ws is None:
+        raise ValueError("Excel file has no usable sheet")
 
     all_rows = list(ws.iter_rows(values_only=True))
     wb.close()
