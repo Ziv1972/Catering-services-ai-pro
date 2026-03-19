@@ -1,13 +1,16 @@
 """
 Proformas (invoices) API endpoints
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from datetime import date, timedelta
 from pydantic import BaseModel
+import csv
+import io
+import logging
 
 from backend.database import get_db
 from backend.models.user import User
@@ -16,6 +19,8 @@ from backend.models.supplier import Supplier
 from backend.models.price_list import PriceList, PriceListItem
 from backend.models.product import Product
 from backend.api.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -100,6 +105,192 @@ async def list_proformas(
         response.append(resp)
 
     return response
+
+
+# ── CSV Upload ────────────────────────────────────────────────────────
+
+
+def _parse_proforma_csv(raw: bytes) -> list[dict]:
+    """Parse CSV bytes into row dicts. Tries multiple encodings."""
+    text = None
+    for encoding in ("utf-8-sig", "utf-8", "cp1255", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    if text is None:
+        raise ValueError("Cannot decode file — try UTF-8 or cp1255 encoding")
+
+    reader = csv.DictReader(io.StringIO(text))
+    rows: list[dict] = []
+    for row in reader:
+        cleaned = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
+        rows.append(cleaned)
+    return rows
+
+
+def _detect_proforma_columns(headers: list[str]) -> tuple[str | None, str | None, str | None, str | None]:
+    """Auto-detect product_name, quantity, unit, unit_price columns from headers."""
+    name_col = None
+    qty_col = None
+    unit_col = None
+    price_col = None
+
+    name_keywords = ["product", "item", "name", "description", "מוצר", "שם", "פריט", "תיאור"]
+    qty_keywords = ["quantity", "qty", "amount", "count", "כמות"]
+    unit_keywords = ["unit", "uom", "measure", "יחידה", "יח"]
+    price_keywords = ["price", "cost", "rate", "מחיר", "עלות", "תעריף"]
+
+    for h in headers:
+        hl = h.lower().strip()
+        if not name_col and any(k in hl for k in name_keywords):
+            name_col = h
+        elif not qty_col and any(k in hl for k in qty_keywords):
+            qty_col = h
+        elif not price_col and any(k in hl for k in price_keywords):
+            price_col = h
+        elif not unit_col and any(k in hl for k in unit_keywords):
+            unit_col = h
+
+    return name_col, qty_col, unit_col, price_col
+
+
+@router.post("/upload")
+async def upload_proforma_csv(
+    file: UploadFile = File(...),
+    supplier_id: int = Form(...),
+    site_id: int = Form(None),
+    invoice_date: str = Form(None),
+    proforma_number: str = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload a CSV file to create a proforma with line items."""
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ("csv", "tsv", "txt"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only CSV files are supported. Please export your Excel as CSV first.",
+        )
+
+    # Verify supplier exists
+    result = await db.execute(select(Supplier).where(Supplier.id == supplier_id))
+    supplier = result.scalar_one_or_none()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+
+    raw = await file.read()
+    try:
+        rows = _parse_proforma_csv(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="CSV file is empty")
+
+    # Detect columns
+    headers = list(rows[0].keys())
+    name_col, qty_col, unit_col, price_col = _detect_proforma_columns(headers)
+
+    if not name_col:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not detect product name column. Headers found: {headers}",
+        )
+    if not price_col and not qty_col:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not detect quantity or price columns. Headers found: {headers}",
+        )
+
+    # Parse invoice date
+    inv_date = date.today()
+    if invoice_date:
+        try:
+            inv_date = date.fromisoformat(invoice_date)
+        except ValueError:
+            pass
+
+    # Create proforma
+    proforma = Proforma(
+        supplier_id=supplier_id,
+        site_id=site_id,
+        proforma_number=proforma_number or None,
+        invoice_date=inv_date,
+        total_amount=0,
+        currency="ILS",
+        status="pending",
+        notes=f"Uploaded from {file.filename}",
+    )
+    db.add(proforma)
+    await db.flush()
+
+    # Parse items
+    items_created = 0
+    skipped = 0
+    total_amount = 0.0
+
+    for row in rows:
+        product_name = row.get(name_col, "").strip()
+        if not product_name:
+            skipped += 1
+            continue
+
+        # Parse quantity
+        quantity = 1.0
+        if qty_col and row.get(qty_col):
+            try:
+                quantity = float(row[qty_col].replace(",", ""))
+            except (ValueError, AttributeError):
+                quantity = 1.0
+
+        # Parse unit price
+        unit_price = 0.0
+        if price_col and row.get(price_col):
+            try:
+                unit_price = float(row[price_col].replace(",", "").replace("₪", "").strip())
+            except (ValueError, AttributeError):
+                unit_price = 0.0
+
+        # Parse unit
+        unit = "unit"
+        if unit_col and row.get(unit_col):
+            unit = row[unit_col].strip() or "unit"
+
+        total_price = quantity * unit_price
+        total_amount += total_price
+
+        item = ProformaItem(
+            proforma_id=proforma.id,
+            product_name=product_name,
+            quantity=quantity,
+            unit=unit,
+            unit_price=unit_price,
+            total_price=total_price,
+            flagged=False,
+        )
+        db.add(item)
+        items_created += 1
+
+    proforma.total_amount = total_amount
+    await db.commit()
+    await db.refresh(proforma)
+
+    return {
+        "id": proforma.id,
+        "supplier_id": proforma.supplier_id,
+        "supplier_name": supplier.name,
+        "invoice_date": proforma.invoice_date.isoformat(),
+        "total_amount": round(proforma.total_amount, 2),
+        "items_created": items_created,
+        "skipped": skipped,
+        "status": "pending",
+        "message": f"Created proforma with {items_created} items from {file.filename}",
+    }
 
 
 @router.get("/{proforma_id}")

@@ -355,6 +355,19 @@ export const proformasAPI = {
     const response = await api.post(`/api/proformas/${proformaId}/compare-prices`);
     return response.data;
   },
+
+  uploadCSV: async (file: File, supplierId: number, siteId?: number, invoiceDate?: string, proformaNumber?: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('supplier_id', String(supplierId));
+    if (siteId) formData.append('site_id', String(siteId));
+    if (invoiceDate) formData.append('invoice_date', invoiceDate);
+    if (proformaNumber) formData.append('proforma_number', proformaNumber);
+    const response = await api.post('/api/proformas/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
 };
 
 // Suppliers

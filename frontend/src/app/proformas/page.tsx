@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
   FileText, TrendingUp, Package,
-  ArrowRight, AlertTriangle, Plus, X, Check, Trash2,
+  ArrowRight, AlertTriangle, Plus, X, Check, Trash2, Upload,
 } from 'lucide-react';
 import { proformasAPI, suppliersAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -31,6 +31,16 @@ export default function ProformasPage() {
   const [items, setItems] = useState<Array<{ product_name: string; quantity: string; unit: string; unit_price: string }>>([
     { product_name: '', quantity: '', unit: 'kg', unit_price: '' },
   ]);
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<any>(null);
+  const [uploadForm, setUploadForm] = useState({
+    supplier_id: '',
+    site_id: '1',
+    invoice_date: new Date().toISOString().split('T')[0],
+    proforma_number: '',
+  });
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
 
   useEffect(() => {
     loadData();
@@ -98,6 +108,30 @@ export default function ProformasPage() {
     }
   };
 
+  const handleUploadCSV = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadFile || !uploadForm.supplier_id) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const result = await proformasAPI.uploadCSV(
+        uploadFile,
+        parseInt(uploadForm.supplier_id),
+        uploadForm.site_id ? parseInt(uploadForm.site_id) : undefined,
+        uploadForm.invoice_date || undefined,
+        uploadForm.proforma_number || undefined,
+      );
+      setUploadResult(result);
+      setUploadFile(null);
+      await loadData();
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail || 'Upload failed';
+      setUploadResult({ error: true, message: detail });
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'paid': return 'bg-green-100 text-green-800 border-green-200';
@@ -122,12 +156,20 @@ export default function ProformasPage() {
             <h2 className="text-2xl font-bold text-gray-900">Proformas</h2>
             <p className="text-gray-500 text-sm">{proformas.length} invoices in last 12 months</p>
           </div>
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
-          >
-            <Plus className="h-4 w-4" /> Add Proforma
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => { setShowUpload(!showUpload); setShowForm(false); }}
+              className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700"
+            >
+              <Upload className="h-4 w-4" /> Upload CSV
+            </button>
+            <button
+              onClick={() => { setShowForm(!showForm); setShowUpload(false); }}
+              className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+            >
+              <Plus className="h-4 w-4" /> Add Manual
+            </button>
+          </div>
         </div>
 
         {showForm && (
@@ -262,6 +304,122 @@ export default function ProformasPage() {
                     <Check className="h-4 w-4" /> {saving ? 'Saving...' : 'Create Proforma'}
                   </button>
                   <button type="button" onClick={() => setShowForm(false)} className="flex items-center gap-2 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200">
+                    <X className="h-4 w-4" /> Cancel
+                  </button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+
+        {showUpload && (
+          <Card className="mb-6 border-green-200">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Upload className="h-5 w-5 text-green-600" />
+                Upload Proforma CSV
+              </CardTitle>
+              <p className="text-sm text-gray-500">
+                Upload a CSV file with product name, quantity, unit, and price columns.
+                Hebrew and English headers are auto-detected.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleUploadCSV}>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Supplier *</label>
+                    <select
+                      required
+                      value={uploadForm.supplier_id}
+                      onChange={e => setUploadForm({ ...uploadForm, supplier_id: e.target.value })}
+                      className="w-full px-3 py-2 border rounded-md"
+                    >
+                      <option value="">Select supplier...</option>
+                      {suppliersList.map((s: any) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Site</label>
+                    <select
+                      value={uploadForm.site_id}
+                      onChange={e => setUploadForm({ ...uploadForm, site_id: e.target.value })}
+                      className="w-full px-3 py-2 border rounded-md"
+                    >
+                      <option value="1">Nes Ziona (NZ)</option>
+                      <option value="2">Kiryat Gat (KG)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Invoice Date</label>
+                    <input
+                      type="date"
+                      value={uploadForm.invoice_date}
+                      onChange={e => setUploadForm({ ...uploadForm, invoice_date: e.target.value })}
+                      className="w-full px-3 py-2 border rounded-md"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Proforma #</label>
+                    <input
+                      value={uploadForm.proforma_number}
+                      onChange={e => setUploadForm({ ...uploadForm, proforma_number: e.target.value })}
+                      className="w-full px-3 py-2 border rounded-md"
+                      placeholder="PF-2026-001"
+                    />
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">CSV File *</label>
+                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-400 transition-colors">
+                    <input
+                      type="file"
+                      accept=".csv,.tsv,.txt"
+                      onChange={e => setUploadFile(e.target.files?.[0] || null)}
+                      className="hidden"
+                      id="proforma-csv-upload"
+                    />
+                    <label htmlFor="proforma-csv-upload" className="cursor-pointer">
+                      <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                      {uploadFile ? (
+                        <p className="text-sm text-green-700 font-medium">{uploadFile.name}</p>
+                      ) : (
+                        <p className="text-sm text-gray-500">Click to select CSV file</p>
+                      )}
+                      <p className="text-xs text-gray-400 mt-1">Supports UTF-8 and Hebrew (cp1255) encoding</p>
+                    </label>
+                  </div>
+                </div>
+
+                {uploadResult && (
+                  <div className={`mb-4 p-3 rounded-lg text-sm ${
+                    uploadResult.error
+                      ? 'bg-red-50 text-red-700 border border-red-200'
+                      : 'bg-green-50 text-green-700 border border-green-200'
+                  }`}>
+                    {uploadResult.error
+                      ? uploadResult.message
+                      : `Created proforma #${uploadResult.id} with ${uploadResult.items_created} items (₪${uploadResult.total_amount?.toLocaleString()})`
+                    }
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <button
+                    type="submit"
+                    disabled={uploading || !uploadFile || !uploadForm.supplier_id}
+                    className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50"
+                  >
+                    <Upload className="h-4 w-4" /> {uploading ? 'Uploading...' : 'Upload & Create'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowUpload(false); setUploadResult(null); }}
+                    className="flex items-center gap-2 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200"
+                  >
                     <X className="h-4 w-4" /> Cancel
                   </button>
                 </div>
