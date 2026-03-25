@@ -1169,6 +1169,8 @@ async def export_compliance_excel(
     blue_font = Font(color="003399", bold=True)
     group_fill = PatternFill("solid", fgColor="D9E2F3")
     group_font = Font(bold=True, size=11)
+    anomaly_fill = PatternFill("solid", fgColor="FFF2CC")
+    anomaly_font = Font(color="9C6500", italic=True)
     thin_border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin"),
@@ -1258,6 +1260,13 @@ async def export_compliance_excel(
         notes_cell.border = thin_border
         notes_cell.alignment = Alignment(wrap_text=True)
 
+        # Anomaly row styling
+        if group == "חריגים":
+            for col_idx in range(1, 9):
+                cell = ws.cell(row=row_num, column=col_idx)
+                cell.fill = anomaly_fill
+                cell.font = anomaly_font
+
         row_num += 1
 
     # RTL sheet direction
@@ -1268,7 +1277,33 @@ async def export_compliance_excel(
     wb.save(buffer)
     buffer.seek(0)
 
-    filename = f"compliance_check_{check.month}_{check.year}.xlsx"
+    # Build filename: "KG menu check - April 2026 version 1"
+    from backend.models.site import Site
+    site_result = await db.execute(select(Site).where(Site.id == check.site_id))
+    site = site_result.scalar_one_or_none()
+    site_code = site.code if site else "XX"
+
+    # Count how many checks exist for same site/month/year to determine version
+    version_result = await db.execute(
+        select(MenuCheck)
+        .where(
+            MenuCheck.site_id == check.site_id,
+            MenuCheck.month == check.month,
+            MenuCheck.year == check.year,
+            MenuCheck.id <= check.id,
+        )
+    )
+    version = len(version_result.scalars().all())
+
+    month_names = {
+        "January": "January", "February": "February", "March": "March",
+        "April": "April", "May": "May", "June": "June",
+        "July": "July", "August": "August", "September": "September",
+        "October": "October", "November": "November", "December": "December",
+    }
+    month_str = check.month if isinstance(check.month, str) else f"M{check.month}"
+    filename = f"{site_code} menu check - {month_str} {check.year} version {version}.xlsx"
+
     return StreamingResponse(
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

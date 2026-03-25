@@ -1863,20 +1863,31 @@ CRITICAL RULES:
    • "טבולה" or "בורגול" = "סלט טבולה בורגול"
    • "פיש אנד צ'יפס" or "פיש & צ'יפס" or "דג מטוגן עם צ'יפס" = "פיש & צ'יפס"
    • "קציצות דגים" or "קציצות דג" = "קציצות דגים ביתיות"
-   • "סלמון" in any form = "פילה סלמון נורווגי"
-   • "אמנון" or "מושט" = "פילה אמנון"
+   • "סלמון" in any form = "פילה סלמון נורווגי". BUT "שווארמה דג" is NOT salmon/amnon/lavrak
+   • "אמנון" or "מושט" = "פילה אמנון". BUT "שווארמה דג" or "מנת דג" is NOT amnon — flag vague names
    • "לברק" = "פילה לברק"
-3. Frequency conversion:
-   - "פעם בשבוע" × 4 weeks = 4/month
+   • "בריסקט" or "חזה בקר" = "בריסקט" (same cut, different names)
+   • "סלט קינואה" is NOT "אטריות מרק" — these are completely different dishes
+   • "פרגית צרפתית" counts ONLY as פרגית צרפתית — NOT as סטייק פרגית (they are separate dishes)
+   • "שווארמה" counts ONLY as שווארמה — "שווארמה בבאגט" or "שווארמה בלאפה" = still שווארמה
+3. Frequency conversion (IMPORTANT — use {total_days} working days for this month):
+   - "פעם בשבוע" = {total_days} ÷ 5 (rounded) per month (NOT always 4!)
+   - "פעמיים בשבוע" = ({total_days} ÷ 5) × 2 per month
+   - "שלוש פעמים בשבוע" = ({total_days} ÷ 5) × 3 per month
    - "פעמיים בחודש" = 2/month
-   - "3 פעמים בשבוע" × 4 = 12/month
    - "שלוש פעמים בחודש" = 3/month
-   - "פעם ברבעון" = 0.25/month (round to 0 expected unless checking quarterly)
-   - "כל יום" = {total_days}/month (total working days)
-   - "לפחות פעם בשבוע" = at least 4/month
+   - "פעם בחודש" = 1/month
+   - "פעם ברבעון" = 0 (skip for monthly check)
+   - "כל יום" = {total_days}/month
+   - "לפחות פעם בשבוע" = at least {total_days} ÷ 5 per month
 4. If expected=0, the item is OPTIONAL — skip it (do not include in results)
 5. shortage = expected - actual (positive = missing/חוסר, negative = surplus/עודף)
 6. Group names MUST be one of: מיוחדים, סלטים, עוף, בקר, מנות גריל, דגים, קינוחים
+7. ANOMALY DETECTION — also flag these issues in the notes:
+   - Vague dish names like "מנת דג", "מנת בשר", "מנת עוף" — the supplier MUST specify the exact dish. Flag: "שם מנה לא מדויק - הספק צריך לפרט"
+   - Same dish appearing on CONSECUTIVE days (e.g., לברק on Apr 1 and Apr 2). Flag: "מנה חוזרת ימים רצופים"
+   - Same dish appearing TWICE on the same day. Flag: "מנה כפולה באותו יום"
+   - More than 1 ground-meat dish (בשר טחון: קציצות, המבורגר, קבב) on the same day. Flag: "יותר ממנת בשר טחון אחת ביום"
 
 CONTRACT REQUIREMENTS:
 {rules_table}
@@ -1884,7 +1895,9 @@ CONTRACT REQUIREMENTS:
 ACTUAL MENU ({month_name} {year}, {site_name}, {total_days} working days):
 {menu_text}
 
-Return ONLY a JSON array. Each item:
+Return ONLY a JSON array with TWO sections:
+
+SECTION 1 — Contract compliance items (one per required dish):
 {{
   "group": "one of: מיוחדים/סלטים/עוף/בקר/מנות גריל/דגים/קינוחים",
   "dish": "dish name from contract in Hebrew",
@@ -1897,8 +1910,22 @@ Return ONLY a JSON array. Each item:
   "notes": "optional — e.g. הוגש בריסקט במקום סינטה"
 }}
 
+SECTION 2 — Anomaly items (if any found):
+{{
+  "group": "חריגים",
+  "dish": "description of the anomaly",
+  "frequency_text": "",
+  "expected": 0,
+  "actual": 0,
+  "shortage": 0,
+  "found_dates": ["dates where anomaly found"],
+  "matched_items": ["the problematic menu items"],
+  "notes": "explanation of the issue"
+}}
+
 Include ALL contract requirements with expected > 0.
 Order by group, then by shortage descending (biggest shortages first within each group).
+Anomalies (חריגים) go at the end.
 """
 
 HEBREW_MONTHS = {
