@@ -97,7 +97,8 @@ class ClaudeService:
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        response_format: Optional[Dict[str, Any]] = None
+        response_format: Optional[Dict[str, Any]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Generate a structured JSON response from Claude
@@ -112,7 +113,8 @@ Just return the raw JSON."""
 
         response_text = await self.generate_response(
             prompt=structured_prompt,
-            system_prompt=system_prompt
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
         )
 
         # Clean up response (remove markdown if present)

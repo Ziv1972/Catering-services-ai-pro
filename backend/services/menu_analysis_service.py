@@ -2017,6 +2017,7 @@ async def run_ai_compliance_check(
         prompt=prompt,
         system_prompt="You are a precise menu compliance auditor. Return only valid JSON.",
         response_format=response_format,
+        max_tokens=16384,
     )
 
     if not isinstance(ai_results, list):
