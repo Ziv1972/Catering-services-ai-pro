@@ -290,6 +290,22 @@ def _is_dish_name(val: str) -> bool:
 
 async def parse_menu_file(file_path: str, month: str, year: int) -> list[dict]:
     """Parse a menu file (CSV, Excel, or text) into structured day data."""
+
+    # For Excel files, try direct column extraction first (free, accurate)
+    if file_path.endswith((".xlsx", ".xls")):
+        structured = _extract_days_from_excel_columns(file_path, month, year)
+        if structured and len(structured) >= 3:
+            items_count = sum(
+                len(items)
+                for day in structured
+                for items in day.get("items", {}).values()
+                if isinstance(items, list)
+            )
+            if items_count > 10:
+                logger.info(f"Column extraction succeeded: {len(structured)} days, {items_count} items")
+                return structured
+            logger.warning(f"Column extraction found {len(structured)} days but only {items_count} items — trying AI")
+
     raw_text = _read_file_raw(file_path)
 
     if not raw_text.strip():
@@ -362,77 +378,159 @@ def _build_days_from_direct_extraction(
 def _extract_days_from_excel_columns(
     file_path: str, month: str, year: int
 ) -> list[dict]:
-    """Try to extract day-structured data from Excel where columns = days."""
+    """Extract day-structured data from Excel where columns = days.
+
+    Handles multi-sheet weekly menus (common Israeli catering format):
+    - Multiple sheets, one per week (שבוע 1, שבוע 2, etc.)
+    - Row 1-2: dates and/or day names (ראשון-חמישי)
+    - Column A: category labels (מרק, גריל, ציפסר, etc.)
+    - Columns B-F: dishes for each weekday
+    """
+    from datetime import datetime as dt
+
     try:
         import openpyxl
         wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-        ws = wb[wb.sheetnames[0]]
-        if not hasattr(ws, "iter_rows"):
-            wb.close()
-            return []
+    except Exception as e:
+        logger.error(f"Excel open error: {e}")
+        return []
 
-        all_rows = []
-        for row in ws.iter_rows(values_only=True):
-            all_rows.append([str(c).strip() if c is not None else "" for c in row])
-        wb.close()
+    hebrew_days = {"ראשון", "שני", "שלישי", "רביעי", "חמישי"}
+    month_num = _parse_month_number(month)
+    day_names_map = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    days_data: list[dict] = []
 
-        if not all_rows:
-            return []
+    try:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            if not hasattr(ws, "iter_rows"):
+                continue
 
-        # Detect header row with day names or dates
-        day_col_indices: list[int] = []
-        day_labels: list[str] = []
-        hebrew_days = {"ראשון", "שני", "שלישי", "רביעי", "חמישי"}
+            all_rows = list(ws.iter_rows(values_only=True))
+            if len(all_rows) < 3:
+                continue
 
-        for row_idx, row in enumerate(all_rows[:5]):
-            for col_idx, cell in enumerate(row):
-                if any(d in cell for d in hebrew_days) or re.match(r'\d{1,2}[./]\d{1,2}', cell):
-                    day_col_indices.append(col_idx)
-                    day_labels.append(cell)
-            if day_col_indices:
-                break
+            # --- Find date row and day column indices ---
+            date_row_idx = -1
+            day_col_indices: list[int] = []
+            day_dates: list[date | None] = []
 
-        if not day_col_indices:
-            return []
+            for row_idx in range(min(5, len(all_rows))):
+                row = all_rows[row_idx]
+                found_dates: list[tuple[int, date | None]] = []
+                for col_idx, cell in enumerate(row):
+                    if col_idx == 0:
+                        continue  # Skip column A (categories)
+                    if cell is None:
+                        continue
+                    # Check for datetime objects (Excel dates)
+                    if isinstance(cell, dt):
+                        found_dates.append((col_idx, cell.date() if hasattr(cell, 'date') else None))
+                        continue
+                    cell_str = str(cell).strip()
+                    # Check for date strings
+                    date_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', cell_str)
+                    if date_match:
+                        try:
+                            d = date(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
+                            found_dates.append((col_idx, d))
+                        except ValueError:
+                            pass
+                        continue
+                    date_match = re.search(r'(\d{1,2})[./](\d{1,2})', cell_str)
+                    if date_match:
+                        try:
+                            d = date(year, int(date_match.group(2)), int(date_match.group(1)))
+                            found_dates.append((col_idx, d))
+                        except ValueError:
+                            pass
+                        continue
 
-        # Extract dishes per column (day)
-        days_data = []
-        month_num = _parse_month_number(month)
+                if len(found_dates) >= 2:
+                    date_row_idx = row_idx
+                    day_col_indices = [f[0] for f in found_dates]
+                    day_dates = [f[1] for f in found_dates]
+                    break
 
-        for i, col_idx in enumerate(day_col_indices):
-            items: list[str] = []
-            for row in all_rows:
-                if col_idx < len(row):
-                    val = row[col_idx].strip()
-                    if _is_dish_name(val):
-                        items.append(val)
+            # Fallback: look for Hebrew day name row
+            if not day_col_indices:
+                for row_idx in range(min(5, len(all_rows))):
+                    row = all_rows[row_idx]
+                    cols = []
+                    for col_idx, cell in enumerate(row):
+                        if col_idx == 0:
+                            continue
+                        if cell and any(d in str(cell) for d in hebrew_days):
+                            cols.append(col_idx)
+                    if len(cols) >= 3:
+                        day_col_indices = cols
+                        day_dates = [None] * len(cols)
+                        break
 
-            if items:
-                # Try to determine date from label
-                day_date = None
-                label = day_labels[i] if i < len(day_labels) else ""
-                date_match = re.search(r'(\d{1,2})[./](\d{1,2})', label)
-                if date_match:
-                    try:
-                        d = int(date_match.group(1))
-                        m = int(date_match.group(2))
-                        day_date = date(year, m, d)
-                    except (ValueError, TypeError):
-                        pass
+            if not day_col_indices:
+                continue
 
+            # --- Determine data start row (after headers) ---
+            data_start = max(date_row_idx + 1, 2)
+            # Skip the day-names row if it's right after dates
+            if data_start < len(all_rows):
+                check_row = all_rows[data_start]
+                if any(
+                    check_row[c] and any(d in str(check_row[c]) for d in hebrew_days)
+                    for c in day_col_indices
+                    if c < len(check_row)
+                ):
+                    data_start += 1
+
+            # --- Extract dishes per day column ---
+            for i, col_idx in enumerate(day_col_indices):
+                day_items: dict[str, list[str]] = {}
+
+                for row_idx in range(data_start, len(all_rows)):
+                    row = all_rows[row_idx]
+                    # Get category from column A
+                    category = str(row[0]).strip() if row[0] else "עיקרית"
+                    category = category if category and category != "None" else "עיקרית"
+
+                    if col_idx >= len(row) or row[col_idx] is None:
+                        continue
+                    val = str(row[col_idx]).strip()
+                    if not val or val == "None" or len(val) < 2:
+                        continue
+                    # Skip non-dish values
+                    if not _HEBREW_RE.search(val):
+                        continue
+
+                    if category not in day_items:
+                        day_items[category] = []
+                    day_items[category].append(val)
+
+                if not any(day_items.values()):
+                    continue
+
+                # Determine date
+                day_date = day_dates[i] if i < len(day_dates) and day_dates[i] else None
                 if not day_date:
-                    day_date = date(year, month_num, min(i + 1, 28))
+                    # Generate date from position
+                    day_date = date(year, month_num, min(len(days_data) + 1, 28))
 
                 days_data.append({
                     "date": day_date.isoformat(),
-                    "day_of_week": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][day_date.weekday()],
-                    "items": {"עיקרית": items}
+                    "day_of_week": day_names_map[day_date.weekday()],
+                    "items": day_items,
                 })
 
+        sheet_count = len(wb.sheetnames)
+        wb.close()
+        logger.info(f"Multi-sheet column extraction: {len(days_data)} days from {sheet_count} sheets")
         return days_data
 
     except Exception as e:
         logger.error(f"Excel column extraction error: {e}")
+        try:
+            wb.close()
+        except Exception:
+            pass
         return []
 
 
@@ -769,6 +867,10 @@ def _matches_any_variant(variants: list[str], text: str) -> bool:
     E.g., keyword "חריימה" matches text "דג בחריימה" because:
     1. Substring: "חריימה" is in "דג בחריימה" → True
     2. Prefix strip: words ["דג", "בחריימה"] → stems include "חריימה" → True
+
+    IMPORTANT: We do NOT check `stem in var` (whether a text stem appears
+    inside the keyword) because it causes massive false positives.
+    E.g., "בצל" (onion) → strip prefix → "צל" → "צל" in "צלי כתף" = True!
     """
     text_lower = text.lower()
     # 1. Direct substring match (handles most cases)
@@ -776,12 +878,14 @@ def _matches_any_variant(variants: list[str], text: str) -> bool:
         return True
 
     # 2. Word-level prefix stripping — for cases where substring fails
-    #    (e.g., very short keywords that might cause false positives with substring)
+    #    Only check: exact stem match OR variant found inside stem.
+    #    Never check stem-inside-variant (causes false positives with
+    #    short stems like "צל" matching long keywords like "צלי כתף").
     words = text_lower.split()
     for word in words:
         stems = _strip_hebrew_prefixes(word)
         for stem in stems:
-            if any(var == stem or var in stem or stem in var for var in variants):
+            if any(var == stem or var in stem for var in variants):
                 return True
 
     return False
@@ -889,7 +993,41 @@ async def run_compliance_check(
             }
             days_data.append(day_info)
 
-    # Load dish catalog for enhanced matching
+    # Flush parsed days to DB before AI check reads them
+    await db.flush()
+
+    # --- AI-powered check (default) ---
+    try:
+        logger.info(f"Running AI compliance check for check {check_id}")
+        ai_results = await run_ai_compliance_check(check_id, db)
+        logger.info(f"AI compliance check returned {len(ai_results)} items")
+
+        # Auto-extract dishes to catalog
+        extracted = await _auto_extract_dishes_to_catalog(
+            days_data, check.id, [], db, file_path=check.file_path
+        )
+
+        await db.commit()
+
+        # Re-read updated totals from check object
+        await db.refresh(check)
+        return {
+            "total_findings": check.total_findings or 0,
+            "critical_findings": check.critical_findings or 0,
+            "warnings": check.warnings or 0,
+            "passed_rules": check.passed_rules or 0,
+            "days_parsed": len(days_data),
+            "rules_checked": len(rules),
+            "dishes_above": check.dishes_above or 0,
+            "dishes_under": check.dishes_under or 0,
+            "dishes_even": check.dishes_even or 0,
+            "dishes_extracted": extracted,
+            "ai_powered": True,
+        }
+    except Exception as e:
+        logger.warning(f"AI compliance check failed, falling back to rule-based: {e}")
+
+    # --- Fallback: rule-based check (if AI unavailable) ---
     catalog_result = await db.execute(
         select(DishCatalog).where(DishCatalog.category.isnot(None))
     )
@@ -899,9 +1037,8 @@ async def run_compliance_check(
         for entry in catalog_entries
         if entry.category
     }
-    logger.info(f"Loaded {len(catalog_map)} categorized dishes from catalog")
+    logger.info(f"Fallback: loaded {len(catalog_map)} categorized dishes from catalog")
 
-    # Run rules against menu data (with catalog enhancement)
     check_results = _evaluate_rules(rules, days_data, catalog_map=catalog_map)
 
     critical_count = 0
@@ -943,7 +1080,6 @@ async def run_compliance_check(
         else:
             even_count += 1
 
-    # Update check totals
     check.total_findings = critical_count + warning_count
     check.critical_findings = critical_count
     check.warnings = warning_count
@@ -952,7 +1088,6 @@ async def run_compliance_check(
     check.dishes_under = under_count
     check.dishes_even = even_count
 
-    # Auto-extract all unique dishes to the catalog
     extracted = await _auto_extract_dishes_to_catalog(
         days_data, check.id, check_results, db, file_path=check.file_path
     )
@@ -970,6 +1105,7 @@ async def run_compliance_check(
         "dishes_under": under_count,
         "dishes_even": even_count,
         "dishes_extracted": extracted,
+        "ai_powered": False,
     }
 
 
@@ -1172,10 +1308,10 @@ def _check_single_rule(
             freq = params["max_per_week"]
             is_max = True
 
-        actual = _count_item_occurrences(item_keyword, item_counter, catalog_map)
+        found_days = _find_item_days(item_keyword, daily_categories)
+        actual = len(found_days)
         expected = round(freq * weeks_in_month)
         comparison = _derive_comparison(actual, expected)
-        found_days = _find_item_days(item_keyword, daily_categories)
 
         if is_max:
             passed = actual <= expected
@@ -1214,10 +1350,10 @@ def _check_single_rule(
             freq = params["max_per_month"]
             is_max = True
 
-        actual = _count_item_occurrences(item_keyword, item_counter, catalog_map)
+        found_days = _find_item_days(item_keyword, daily_categories)
+        actual = len(found_days)
         expected = round(freq)
         comparison = _derive_comparison(actual, expected)
-        found_days = _find_item_days(item_keyword, daily_categories)
 
         if is_max:
             passed = actual <= expected
@@ -1689,3 +1825,270 @@ def _check_single_rule(
             "comparison": "even",
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# AI-powered compliance check (replaces keyword matching)
+# ---------------------------------------------------------------------------
+
+AI_COMPLIANCE_CHECK_PROMPT = """You are a menu compliance checker for HP Israel corporate catering.
+
+Your job: compare CONTRACT REQUIREMENTS against the ACTUAL MENU and count how many times each required dish appears.
+
+CRITICAL RULES:
+1. Count unique DAYS a dish appears (not portions per day)
+2. Use intelligent Hebrew matching — the menu often uses different names for the same dish:
+   • "בשר צלי מס 5" or "צלי כתף" or "בשר צלי מספר 6" = "צלי כתף מספר 5/6"
+   • "נסיכה בחריימה" or "נסיכה ברוטב חריימה" or "דג חריימה" = "חריימה של נסיכה"
+   • "שניצלוני הבית" or "שניצל מקסיקני" or "שניצל פריך" = counts as "שניצל בהכנה מקומית"
+   • "פרגית על הגריל" or "פרגית ממולאה" or "פרגית במרינדה" = "פרגית צרפתית"
+   • "סטייק פרגית" = separate from "פרגית צרפתית" — count each independently
+   • "רבעי עוף" or "עופות טבית" or "עוף בגריל מסתובב" = "עופות שלמים"
+   • "חזה עוף בגריל במרינדה" or "חזה עוף על הגריל" = "חזה עוף בגריל"
+   • "סלט פטריות אסייאתי" = "סלט פטריות אסייתי" (typo tolerance)
+   • "עגבניות בצל סגול וזיתי קלמטה" = "סלט עגבניות איטלקי"
+   • "עגבניות חריפות" or "עגבניות פיקנטי" = "סלט עגבניות חריף"
+   • "ממולאים" includes "זוקיני ממולא" or "מפרום" or "מוסקה"
+   • "אסאדו" or "שורט ריבס" or "משפונדרה" = "אסאדו צלוי"
+   • "כבד עוף" = "כבד עוף בסילאן עם פירה"
+   • "כרע עוף ממולא" or "כרעיים ממולאות" = "כרע עוף ממולא"
+   • "בקלאוות בשר" or "בקלווה בשר" = "בקלאוות בשר"
+   • "בשר ראש" in any preparation = "בשר ראש"
+   • "לשון ברוטב" = "לשון ברוטב פטריות"
+   • "שווארמה הודו" or "ירך הודו" = "שווארמה הודו"
+   • "שווארמה פרגית" = separate from "שווארמה הודו"
+   • "סלט קיסר" or "קיסר סלט" = "סלט קיסר"
+   • "פיצוחים וירוקים" = look for items with nuts/seeds and greens
+   • "סלט אבוקדו" = any salad with avocado as main ingredient
+   • "טבולה" or "בורגול" = "סלט טבולה בורגול"
+   • "פיש אנד צ'יפס" or "פיש & צ'יפס" or "דג מטוגן עם צ'יפס" = "פיש & צ'יפס"
+   • "קציצות דגים" or "קציצות דג" = "קציצות דגים ביתיות"
+   • "סלמון" in any form = "פילה סלמון נורווגי"
+   • "אמנון" or "מושט" = "פילה אמנון"
+   • "לברק" = "פילה לברק"
+3. Frequency conversion:
+   - "פעם בשבוע" × 4 weeks = 4/month
+   - "פעמיים בחודש" = 2/month
+   - "3 פעמים בשבוע" × 4 = 12/month
+   - "שלוש פעמים בחודש" = 3/month
+   - "פעם ברבעון" = 0.25/month (round to 0 expected unless checking quarterly)
+   - "כל יום" = {total_days}/month (total working days)
+   - "לפחות פעם בשבוע" = at least 4/month
+4. If expected=0, the item is OPTIONAL — skip it (do not include in results)
+5. shortage = expected - actual (positive = missing/חוסר, negative = surplus/עודף)
+6. Group names MUST be one of: מיוחדים, סלטים, עוף, בקר, מנות גריל, דגים, קינוחים
+
+CONTRACT REQUIREMENTS:
+{rules_table}
+
+ACTUAL MENU ({month_name} {year}, {site_name}, {total_days} working days):
+{menu_text}
+
+Return ONLY a JSON array. Each item:
+{{
+  "group": "one of: מיוחדים/סלטים/עוף/בקר/מנות גריל/דגים/קינוחים",
+  "dish": "dish name from contract in Hebrew",
+  "frequency_text": "frequency in Hebrew (e.g. פעמיים בחודש)",
+  "expected": number,
+  "actual": number,
+  "shortage": number,
+  "found_dates": ["YYYY-MM-DD", ...],
+  "matched_items": ["actual menu item text that matched", ...],
+  "notes": "optional — e.g. הוגש בריסקט במקום סינטה"
+}}
+
+Include ALL contract requirements with expected > 0.
+Order by group, then by shortage descending (biggest shortages first within each group).
+"""
+
+HEBREW_MONTHS = {
+    1: "ינואר", 2: "פברואר", 3: "מרץ", 4: "אפריל",
+    5: "מאי", 6: "יוני", 7: "יולי", 8: "אוגוסט",
+    9: "ספטמבר", 10: "אוקטובר", 11: "נובמבר", 12: "דצמבר",
+}
+
+
+async def run_ai_compliance_check(
+    check_id: int,
+    db: AsyncSession,
+) -> list[dict]:
+    """Run AI-powered compliance check using Claude.
+
+    Sends full menu + contract rules to Claude for intelligent matching.
+    Returns results in the same format as the manual check spreadsheet.
+    """
+    # Load check
+    result = await db.execute(
+        select(MenuCheck).where(MenuCheck.id == check_id)
+    )
+    check = result.scalar_one_or_none()
+    if not check:
+        raise ValueError(f"MenuCheck {check_id} not found")
+
+    # Load site name
+    from backend.models.site import Site
+    site_result = await db.execute(select(Site).where(Site.id == check.site_id))
+    site = site_result.scalar_one_or_none()
+    site_name = site.name if site else "Unknown"
+
+    # Load parsed menu days
+    days_result = await db.execute(
+        select(MenuDay)
+        .where(MenuDay.menu_check_id == check_id)
+        .order_by(MenuDay.date)
+    )
+    days = days_result.scalars().all()
+    if not days:
+        raise ValueError(f"No parsed menu days for check {check_id}")
+
+    # Load active compliance rules
+    rules_result = await db.execute(
+        select(ComplianceRule).where(ComplianceRule.is_active == True)
+    )
+    rules = rules_result.scalars().all()
+
+    # Build compact rules table with frequency info
+    rules_lines = []
+    for r in rules:
+        cat = r.category or ""
+        params = r.parameters or {}
+        freq_text = params.get("frequency_text", "")
+        expected = params.get("count") or params.get("min_count") or params.get("expected", "")
+        desc = r.description or ""
+        line = f"- [{cat}] {r.name}"
+        if freq_text:
+            line += f" | {freq_text}"
+        if expected:
+            line += f" | expected: {expected}"
+        if desc and desc != r.name:
+            line += f" | {desc}"
+        rules_lines.append(line)
+    rules_table = "\n".join(rules_lines)
+
+    # Build compact daily menu text
+    menu_lines = []
+    for day in days:
+        items = day.menu_items or {}
+        all_items = []
+        for category, item_list in items.items():
+            if isinstance(item_list, list):
+                for item in item_list:
+                    item_str = str(item).strip()
+                    if item_str and len(item_str) >= 3:
+                        all_items.append(item_str)
+        date_str = day.date.isoformat() if day.date else ""
+        dow = day.day_of_week or ""
+        menu_lines.append(f"{date_str} ({dow}): {', '.join(all_items)}")
+    menu_text = "\n".join(menu_lines)
+
+    month_name = HEBREW_MONTHS.get(check.month, str(check.month))
+
+    # Build prompt
+    prompt = AI_COMPLIANCE_CHECK_PROMPT.format(
+        rules_table=rules_table,
+        menu_text=menu_text,
+        month_name=month_name,
+        year=check.year,
+        site_name=site_name,
+        total_days=len(days),
+    )
+
+    logger.info(
+        f"AI compliance check: {len(rules)} rules, {len(days)} days, "
+        f"prompt ~{len(prompt)} chars"
+    )
+
+    # Call Claude
+    response_format = [
+        {
+            "group": "string",
+            "dish": "string",
+            "frequency_text": "string",
+            "expected": 0,
+            "actual": 0,
+            "shortage": 0,
+            "found_dates": ["YYYY-MM-DD"],
+            "matched_items": ["string"],
+            "notes": "string",
+        }
+    ]
+
+    ai_results = await claude_service.generate_structured_response(
+        prompt=prompt,
+        system_prompt="You are a precise menu compliance auditor. Return only valid JSON.",
+        response_format=response_format,
+    )
+
+    if not isinstance(ai_results, list):
+        ai_results = ai_results.get("results", []) if isinstance(ai_results, dict) else []
+
+    logger.info(f"AI compliance check returned {len(ai_results)} items")
+
+    # Clear old check results and store new ones
+    from sqlalchemy import delete as sql_delete
+    await db.execute(
+        sql_delete(CheckResult).where(CheckResult.menu_check_id == check_id)
+    )
+
+    critical_count = 0
+    warning_count = 0
+    passed_count = 0
+    above_count = 0
+    under_count = 0
+    even_count = 0
+
+    for item in ai_results:
+        expected = item.get("expected", 0)
+        actual = item.get("actual", 0)
+        shortage = item.get("shortage", expected - actual)
+        comparison = "under" if shortage > 0 else ("above" if shortage < 0 else "even")
+        passed = shortage <= 0
+        severity = "critical" if shortage > 0 else "info"
+
+        result_obj = CheckResult(
+            menu_check_id=check_id,
+            rule_name=item.get("dish", ""),
+            rule_category=item.get("group", ""),
+            passed=passed,
+            severity=severity,
+            finding_text=f"{item.get('dish', '')}: Expected {expected}, Actual {actual}",
+            evidence={
+                "item_searched": item.get("dish", ""),
+                "expected_count": expected,
+                "actual_count": actual,
+                "comparison": comparison,
+                "found_on_days": item.get("found_dates", []),
+                "matched_items": item.get("matched_items", []),
+                "frequency_text": item.get("frequency_text", ""),
+                "shortage": shortage,
+                "notes": item.get("notes", ""),
+                "ai_checked": True,
+            },
+            reviewed=False,
+        )
+        db.add(result_obj)
+
+        if passed:
+            passed_count += 1
+        else:
+            critical_count += 1
+
+        if comparison == "above":
+            above_count += 1
+        elif comparison == "under":
+            under_count += 1
+        else:
+            even_count += 1
+
+    # Update check totals
+    check.total_findings = critical_count + warning_count
+    check.critical_findings = critical_count
+    check.warnings = warning_count
+    check.passed_rules = passed_count
+    check.dishes_above = above_count
+    check.dishes_under = under_count
+    check.dishes_even = even_count
+
+    await db.commit()
+
+    return ai_results

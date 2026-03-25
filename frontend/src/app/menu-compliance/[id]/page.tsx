@@ -6,10 +6,10 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
-  ArrowLeft, CheckCircle2, XCircle, FileText, Upload, Trash2,
+  ArrowLeft, CheckCircle2, XCircle, FileText, Upload, Trash2, Download,
   TrendingUp, TrendingDown, Equal, ArrowUpCircle, ArrowDownCircle, MinusCircle,
   RefreshCw, Calendar, Search, Pencil, Check, X, Loader2,
-  Eye, ChevronDown, ChevronUp, ListChecks
+  Eye, ChevronDown, ChevronUp, ListChecks, Sparkles
 } from 'lucide-react';
 import { menuComplianceAPI, dishCatalogAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -25,9 +25,11 @@ export default function MenuCheckDetailPage() {
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [rerunning, setRerunning] = useState(false);
+  const [aiChecking, setAiChecking] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState<any>(null);
+  const [downloading, setDownloading] = useState(false);
   const [filter, setFilter] = useState<FilterType>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -96,6 +98,35 @@ export default function MenuCheckDetailPage() {
       setExtractResult({ error: true });
     } finally {
       setExtracting(false);
+    }
+  };
+
+  const handleAiCheck = async () => {
+    setAiChecking(true);
+    try {
+      await menuComplianceAPI.aiCheck(checkId);
+      // After AI check completes, download the Excel with results
+      await menuComplianceAPI.exportExcel(checkId);
+      // Reload results to show updated data
+      const updated = await menuComplianceAPI.getResults(checkId);
+      setResults(updated);
+      const checkData = await menuComplianceAPI.getCheck(checkId);
+      setCheck(checkData);
+    } catch (error) {
+      console.error('AI check failed:', error);
+    } finally {
+      setAiChecking(false);
+    }
+  };
+
+  const handleDownloadExcel = async () => {
+    setDownloading(true);
+    try {
+      await menuComplianceAPI.exportExcel(checkId);
+    } catch (error) {
+      // Download failed
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -213,6 +244,31 @@ export default function MenuCheckDetailPage() {
                 <FileText className="w-4 h-4" />
               )}
               {extracting ? 'Extracting...' : 'Extract Dishes'}
+            </Button>
+            <Button
+              onClick={handleAiCheck}
+              disabled={aiChecking}
+              className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+            >
+              {aiChecking ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Sparkles className="w-4 h-4" />
+              )}
+              {aiChecking ? 'AI Checking...' : 'AI Check + Download'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleDownloadExcel}
+              disabled={downloading}
+              className="gap-2"
+            >
+              {downloading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              {downloading ? 'Downloading...' : 'Download Report'}
             </Button>
             <Button
               variant="outline"
@@ -581,6 +637,7 @@ function ResultRow({
   const [searching, setSearching] = useState(false);
 
   const evidence = result.evidence || {};
+  const isAiChecked = evidence.ai_checked === true;
   const hasComparison = evidence.expected_count !== undefined && evidence.actual_count !== undefined;
   const comparison = evidence.comparison || 'even';
   const expected = evidence.expected_count ?? null;
@@ -590,6 +647,10 @@ function ResultRow({
   const missingDays: string[] = evidence.missing_on_days || [];
   const searchedKeyword: string = evidence.item_searched || evidence.category_keyword || '';
   const ruleId: number | null = evidence.rule_id || null;
+  const matchedItems: string[] = evidence.matched_items || [];
+  const frequencyText: string = evidence.frequency_text || '';
+  const shortage: number = evidence.shortage ?? deficit ?? 0;
+  const notes: string = evidence.notes || '';
 
   const borderColor = comparison === 'under' ? 'border-red-400'
     : comparison === 'above' ? 'border-blue-400'
@@ -661,8 +722,8 @@ function ResultRow({
         <ComparisonBadge comparison={comparison} />
       </div>
 
-      {/* Searched keyword + search button */}
-      {searchedKeyword && (
+      {/* Searched keyword + search button (hide for AI results) */}
+      {searchedKeyword && !isAiChecked && (
         <div className="flex items-center gap-2 mb-2">
           <div className="flex items-center gap-1.5 text-xs text-gray-500">
             <Search className="w-3 h-3" />
@@ -733,6 +794,11 @@ function ResultRow({
         </div>
       )}
 
+      {/* Frequency text (AI) */}
+      {isAiChecked && frequencyText && (
+        <p className="text-xs text-gray-500 mb-1" dir="rtl">{frequencyText}</p>
+      )}
+
       {/* Expected vs Actual inline */}
       {hasComparison && expected !== null && actual !== null && (
         <div className="flex items-center gap-4 text-sm text-gray-600 mb-2">
@@ -744,6 +810,22 @@ function ResultRow({
             </span>
           )}
         </div>
+      )}
+
+      {/* Matched items from AI */}
+      {isAiChecked && matchedItems.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {matchedItems.map((item: string, idx: number) => (
+            <span key={idx} className="px-2 py-0.5 text-xs bg-purple-50 text-purple-800 border border-purple-200 rounded-md" dir="rtl">
+              {item}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Notes from AI */}
+      {isAiChecked && notes && (
+        <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded mb-2" dir="rtl">💡 {notes}</p>
       )}
 
       {/* Progress bar */}
