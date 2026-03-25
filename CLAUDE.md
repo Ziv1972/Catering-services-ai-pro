@@ -152,14 +152,15 @@ Daily Ops: `DailyMealCount`, `HistoricalMealData`, `Attachment`
 
 Hands-free email → database pipeline for FoodHouse daily meal counts:
 
-1. **IMAP Poller** (`backend/services/meal_email_poller.py`) — Background task polls Gmail for FoodHouse emails, extracts CSV, upserts into `daily_meal_counts`
+1. **IMAP Poller** (`backend/services/meal_email_poller.py`) — Daily at 5:00 AM Israel time + once on startup. Connects to `ziv@foodbiz.co.il` via Gmail IMAP, searches for unread emails with subject `HP_FC_REPORT`, parses `.xlsx` attachment (columns: `restaurant id`, `name`, `count deals`), upserts into `daily_meal_counts`
 2. **Webhook** (`POST /api/webhooks/daily-meals`) — Alternative: Power Automate sends JSON/CSV
 3. **CSV Upload** (`POST /api/webhooks/daily-meals/upload`) — Manual upload from UI (Hebrew cp1255 encoding)
 4. **Manual Trigger** (`POST /api/webhooks/daily-meals/poll-now`) — Force immediate IMAP check
-5. **Dashboard** — Stacked bar chart by meal type (Meat/Dairy/Main Only) with budget comparison
+5. **Dashboard** — Grouped bar chart (NZ + KG side-by-side), stacked by meal type. Per-site sidebar: meals vs 6-month avg, cost (meals × unit_price from latest proforma) vs budget
 
 Meal type parsing: `בשרי`→Meat, `חלבי`→Dairy, `עיקרית בלבד`→Main Only
 Site parsing: `נס ציונה`→NZ, `קרית גת`→KG
+Cost per meal: Meat/Dairy ≈₪39.57, Main Only ≈₪8.87 (from latest FoodHouse proforma)
 
 ## Test Infrastructure
 
@@ -255,8 +256,10 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 ### Phase 4: Daily Meal Automation
 - DailyMealCount model with upsert logic
 - Webhook endpoints for Power Automate + CSV upload
-- Dashboard: stacked bar chart by meal type with budget comparison
-- IMAP email poller for hands-free Gmail → database pipeline
+- IMAP email poller: `ziv@foodbiz.co.il` → Gmail IMAP → parses HP_FC_REPORT.xlsx → upserts meals
+- Daily scheduler: runs once at 5:00 AM Israel time + once on startup
+- Dashboard: grouped bar chart (NZ + KG side-by-side), stacked by meal type (Meat/Dairy/Main Only)
+- Per-site sidebar: meals vs 6-month avg + cost (meals × unit_price from proformas) vs budget
 - Manual trigger endpoint for testing
 
 ### Phase 5: UI/UX Overhaul + Price Lists
