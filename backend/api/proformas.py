@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pydantic import BaseModel
 import csv
 import io
+import json
 import logging
 
 from backend.database import get_db
@@ -128,6 +129,84 @@ def _parse_proforma_csv(raw: bytes) -> list[dict]:
         cleaned = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
         rows.append(cleaned)
     return rows
+
+
+async def _parse_proforma_pdf(raw: bytes) -> list[dict]:
+    """Parse PDF bytes into row dicts.
+
+    Strategy 1: Extract tables with pdfplumber (works for structured invoices).
+    Strategy 2: If no tables found, extract full text and use Claude AI to parse items.
+    """
+    import pdfplumber
+
+    rows: list[dict] = []
+
+    # --- Strategy 1: Table extraction ---
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        all_text_parts: list[str] = []
+        for page in pdf.pages:
+            all_text_parts.append(page.extract_text() or "")
+            tables = page.extract_tables()
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                # First row = headers
+                headers = [str(h).strip().lower() if h else f"col_{j}" for j, h in enumerate(table[0])]
+                for data_row in table[1:]:
+                    if all(c is None or str(c).strip() == "" for c in data_row):
+                        continue
+                    cleaned = {}
+                    for j, cell in enumerate(data_row):
+                        if j < len(headers):
+                            cleaned[headers[j]] = str(cell).strip() if cell is not None else ""
+                    rows.append(cleaned)
+
+    if rows:
+        return rows
+
+    # --- Strategy 2: AI extraction from raw text ---
+    full_text = "\n".join(all_text_parts).strip()
+    if not full_text:
+        raise ValueError("PDF has no extractable text (might be a scanned image)")
+
+    from backend.services.claude_service import claude_service
+
+    prompt = f"""Extract ALL line items from this Hebrew/English invoice/proforma text.
+Return a JSON array of objects. Each object must have these keys:
+- "מוצר" (product name)
+- "כמות" (quantity, number)
+- "מחיר" (unit price, number)
+- "יחידה" (unit, e.g. ק"ג, יח', ליטר — if not clear use "יח'")
+
+Skip subtotals, VAT, grand totals, headers, and empty rows.
+Return ONLY the JSON array, no markdown, no explanation.
+
+Invoice text:
+{full_text}"""
+
+    try:
+        ai_response = await claude_service.generate_response(
+            prompt=prompt,
+            system_prompt="You are a precise invoice data extractor. Return only valid JSON arrays.",
+        )
+        text_result = ai_response.strip()
+        # Strip markdown fences if present
+        if text_result.startswith("```"):
+            text_result = text_result.split("\n", 1)[1] if "\n" in text_result else text_result[3:]
+            if text_result.endswith("```"):
+                text_result = text_result[:-3]
+            text_result = text_result.strip()
+
+        parsed = json.loads(text_result)
+        if isinstance(parsed, list):
+            return [{k.strip().lower(): str(v).strip() for k, v in item.items()} for item in parsed]
+    except Exception as e:
+        logger.warning("AI PDF extraction failed: %s — falling back to raw text", e)
+
+    raise ValueError(
+        "Could not extract table data from PDF. "
+        "Try converting to Excel first, or ensure the PDF contains text (not scanned images)."
+    )
 
 
 def _parse_proforma_xlsx(raw: bytes) -> list[dict]:
@@ -329,15 +408,15 @@ async def upload_proforma(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Upload an XLSX or CSV file to create a proforma with line items."""
+    """Upload an XLSX, CSV, or PDF file to create a proforma with line items."""
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in ("xlsx", "xls", "csv", "tsv", "txt"):
+    if ext not in ("xlsx", "xls", "csv", "tsv", "txt", "pdf"):
         raise HTTPException(
             status_code=400,
-            detail="Supported formats: Excel (.xlsx) or CSV (.csv)",
+            detail="Supported formats: Excel (.xlsx), CSV (.csv), or PDF (.pdf)",
         )
 
     # Verify supplier exists
@@ -348,7 +427,9 @@ async def upload_proforma(
 
     raw = await file.read()
     try:
-        if ext in ("xlsx", "xls"):
+        if ext == "pdf":
+            rows = await _parse_proforma_pdf(raw)
+        elif ext in ("xlsx", "xls"):
             rows = _parse_proforma_xlsx(raw)
         else:
             rows = _parse_proforma_csv(raw)

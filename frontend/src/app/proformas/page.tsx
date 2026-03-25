@@ -331,8 +331,8 @@ export default function ProformasPage() {
                 Upload Proforma
               </CardTitle>
               <p className="text-sm text-gray-500">
-                Upload an Excel (.xlsx) or CSV file with product name, quantity, unit, and price columns.
-                Hebrew and English headers are auto-detected.
+                Upload an Excel (.xlsx), CSV, or PDF file with product name, quantity, unit, and price columns.
+                Hebrew and English headers are auto-detected. PDF invoices are parsed with AI.
               </p>
             </CardHeader>
             <CardContent>
@@ -384,11 +384,11 @@ export default function ProformasPage() {
                 </div>
 
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Excel / CSV File *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Excel / CSV / PDF File *</label>
                   <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-400 transition-colors">
                     <input
                       type="file"
-                      accept=".xlsx,.xls,.csv,.tsv,.txt"
+                      accept=".xlsx,.xls,.csv,.tsv,.txt,.pdf"
                       onChange={e => setUploadFile(e.target.files?.[0] || null)}
                       className="hidden"
                       id="proforma-file-upload"
@@ -398,9 +398,9 @@ export default function ProformasPage() {
                       {uploadFile ? (
                         <p className="text-sm text-green-700 font-medium">{uploadFile.name}</p>
                       ) : (
-                        <p className="text-sm text-gray-500">Click to select Excel (.xlsx) or CSV file</p>
+                        <p className="text-sm text-gray-500">Click to select Excel (.xlsx), CSV, or PDF file</p>
                       )}
-                      <p className="text-xs text-gray-400 mt-1">Excel recommended. CSV also supported (UTF-8 / Hebrew cp1255)</p>
+                      <p className="text-xs text-gray-400 mt-1">Excel recommended. CSV and PDF also supported. PDF parsed with AI.</p>
                     </label>
                   </div>
                 </div>
