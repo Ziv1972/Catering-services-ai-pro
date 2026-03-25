@@ -1121,25 +1121,69 @@ async def dashboard_daily_meals(
         for b in budget_result.scalars().all():
             budgets_by_site.setdefault(b.site_id, []).append(b)
 
-    # Get actual FoodHouse cost per site for current month (from proformas)
-    cost_by_site: dict[int, float] = {}
+    # Get latest meal unit prices from FoodHouse proformas per site
+    # Meal types: Meat/Dairy = "ארוחת צהריים בשרית/חלבית", Main Only = "מנה עיקרית"
+    from backend.models.proforma import ProformaItem
+    meal_prices_by_site: dict[int, dict[str, float]] = {}  # site_id -> {meal_type: price}
     if foodhouse:
-        cost_query = (
+        price_query = (
             select(
                 Proforma.site_id,
-                func.sum(Proforma.total_amount).label("total_cost"),
+                ProformaItem.product_name,
+                ProformaItem.unit_price,
             )
+            .join(ProformaItem, ProformaItem.proforma_id == Proforma.id)
             .where(
                 Proforma.supplier_id == foodhouse.id,
-                extract("month", Proforma.invoice_date) == current_month,
-                extract("year", Proforma.invoice_date) == today.year,
+                ProformaItem.product_name.op("LIKE")("%ארוח%"),
             )
-            .group_by(Proforma.site_id)
+            .order_by(Proforma.invoice_date.desc())
         )
-        cost_result = await db.execute(cost_query)
-        for row in cost_result:
-            if row.site_id:
-                cost_by_site[row.site_id] = round(float(row.total_cost))
+        price_result = await db.execute(price_query)
+        for row in price_result:
+            sid = row.site_id
+            if sid and sid not in meal_prices_by_site:
+                meal_prices_by_site[sid] = {}
+            if sid:
+                name_lower = row.product_name.lower()
+                if "בשרית" in name_lower and "Meat" not in meal_prices_by_site[sid]:
+                    meal_prices_by_site[sid]["Meat"] = row.unit_price
+                elif "חלבית" in name_lower and "Dairy" not in meal_prices_by_site[sid]:
+                    meal_prices_by_site[sid]["Dairy"] = row.unit_price
+
+        # Main Only price (תוספת למנה עיקרית)
+        main_query = (
+            select(
+                Proforma.site_id,
+                ProformaItem.unit_price,
+            )
+            .join(ProformaItem, ProformaItem.proforma_id == Proforma.id)
+            .where(
+                Proforma.supplier_id == foodhouse.id,
+                ProformaItem.product_name.op("LIKE")("%מנה עיקרית%"),
+            )
+            .order_by(Proforma.invoice_date.desc())
+        )
+        main_result = await db.execute(main_query)
+        for row in main_result:
+            sid = row.site_id
+            if sid and sid in meal_prices_by_site and "Main Only" not in meal_prices_by_site[sid]:
+                meal_prices_by_site[sid]["Main Only"] = row.unit_price
+
+    # Calculate cost per site: sum(meals_by_type × price_per_type)
+    # Group daily meals by (month, site_id, meal_type)
+    meals_by_type: dict[tuple[int, int, str], float] = {}  # (month, site_id, meal_type) -> qty
+    for r in records:
+        mt = r.meal_type_en or r.meal_type or "Unknown"
+        key = (r.date.month, r.site_id, mt)
+        meals_by_type[key] = meals_by_type.get(key, 0) + r.quantity
+
+    cost_by_site: dict[int, float] = {}
+    for (m, sid, mt), qty in meals_by_type.items():
+        if m == current_month:
+            prices = meal_prices_by_site.get(sid, {})
+            price = prices.get(mt, prices.get("Meat", 0))  # fallback to Meat price
+            cost_by_site[sid] = cost_by_site.get(sid, 0) + qty * price
 
     # Build per-site budget comparison for current month
     budget_comparison = []
@@ -1150,7 +1194,7 @@ async def dashboard_daily_meals(
         avg_meals = avg_meals_by_site.get(sid, 0)
         site_budgets = budgets_by_site.get(sid, [])
         month_budget = sum(getattr(b, MONTH_COLS[current_month - 1]) or 0 for b in site_budgets)
-        cost = cost_by_site.get(sid, 0)
+        cost = round(cost_by_site.get(sid, 0))
         budget_comparison.append({
             "month": current_month,
             "month_name": month_names[current_month - 1],
