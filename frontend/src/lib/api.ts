@@ -263,6 +263,32 @@ export const menuComplianceAPI = {
     return response.data;
   },
 
+  aiCheck: async (checkId: number) => {
+    const response = await api.post(
+      `/api/menu-compliance/checks/${checkId}/ai-check`,
+      {},
+      { timeout: 120000 }
+    );
+    return response.data;
+  },
+
+  exportExcel: async (checkId: number) => {
+    const response = await api.get(
+      `/api/menu-compliance/checks/${checkId}/export-excel`,
+      { responseType: 'blob' }
+    );
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    const disposition = response.headers['content-disposition'] || '';
+    const match = disposition.match(/filename="?(.+?)"?$/);
+    link.download = match ? match[1] : `compliance_report_${checkId}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  },
+
   reuploadFile: async (checkId: number, file: File) => {
     const formData = new FormData();
     formData.append('file', file);
