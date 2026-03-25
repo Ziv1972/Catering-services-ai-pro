@@ -267,7 +267,7 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - Branding: "Catering AI Pro" header, "HP Israel - Ziv Reshef Simchoni" subtitle + footer
 - Menu compliance rules: search box + category filter pills with counts
 
-### Phase 6: Agent Crew + Fine Rule Intelligence (Latest)
+### Phase 6: Agent Crew + Fine Rule Intelligence
 - **Agent Crew system**: 10-agent orchestration (1 manager + 9 specialists) with intent analysis, parallel execution, result synthesis
 - **All 6 AI agents implemented**: Budget Intelligence, Dietary Compliance, Event Coordination, Communication Hub (no longer stubs)
 - **Agent Crew frontend page**: `/agent-crew` with crew dashboard, chat interface, agent cards, interaction map
@@ -275,6 +275,15 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - **Auto-match complaints to fines**: AI suggests matching fine rule with confidence score when complaint is created, auto-links at ≥70% confidence
 - **Deploy fix**: Committed 8 missing agent crew files that caused Railway healthcheck failures
 - **File existence check**: Detects ephemeral filesystem file loss after Railway redeployment
+
+### Phase 6b: AI Menu Compliance Overhaul (Latest — 2026-03-25)
+- **AI-powered compliance check**: Replaced broken rule-based matching with Claude AI as default. Falls back to rules if API unavailable
+- **Intelligent Hebrew matching**: 30+ dish synonym examples in prompt (בריסקט=חזה בקר, שווארמה דג≠אמנון, etc.)
+- **Dynamic frequency calculation**: Uses actual working days per month, not hardcoded ×4 weeks
+- **Anomaly detection**: Flags vague dish names, consecutive-day repeats, same-day duplicates, >1 ground meat/day
+- **Version-numbered Excel export**: `KG menu check - April 2026 version 1.xlsx` with "חוסרים" sheet matching manual check format
+- **Frontend AI evidence**: Shows matched items, frequency text, notes from Claude; hides old "Searched keyword" UI for AI results
+- **Max tokens fix**: Increased from 4096 to 16384 for AI compliance check (was silently truncating)
 
 ## Session Summary Rules
 
@@ -299,14 +308,16 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 
 ## What's Next
 
-### Phase 6: Agent Crew + Fine Rule Intelligence (Current — In Progress)
+### Phase 6: Agent Crew + Fine Rule Intelligence (Complete)
 - [x] **Agent Crew system** — 10-agent orchestration with CrewManager, intent analysis, parallel execution
 - [x] **All 6 AI agents implemented** — Budget, Dietary, Event, Communication (no longer stubs)
 - [x] **Agent Crew frontend** — `/agent-crew` page with dashboard, chat, agent cards, interaction map
 - [x] **Fine rule import from PDF** — AI extracts rules in Hebrew, preview modal with per-rule toggle
 - [x] **Auto-match complaints to fines** — AI suggests matching fine rule with confidence score
+- [x] **AI-powered menu compliance** — Replaced broken rule-based check with Claude AI matching
+- [x] **Anomaly detection** — Vague names, consecutive days, duplicates, ground meat limit
+- [x] **Version-numbered Excel export** — `KG menu check - April 2026 version 1.xlsx`
 - [ ] First real fine import test (re-upload PDF after deploy, verify Hebrew extraction)
-- [ ] Fix `test_dashboard` test (key mismatch: `upcoming_meetings` → `meetings`)
 - [ ] First real FoodHouse email test — tune IMAP sender/subject filters
 
 ### Phase 7: Agent Intelligence Deepening
