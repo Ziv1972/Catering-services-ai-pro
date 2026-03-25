@@ -134,31 +134,65 @@ def _parse_proforma_csv(raw: bytes) -> list[dict]:
 async def _parse_proforma_pdf(raw: bytes) -> list[dict]:
     """Parse PDF bytes into row dicts.
 
-    Strategy 1: Extract tables with pdfplumber (works for structured invoices).
-    Strategy 2: If no tables found, extract full text and use Claude AI to parse items.
+    Strategy 1: Extract tables with pdfplumber, validate headers are recognizable.
+    Strategy 2: Extract full text and use Claude AI to parse items.
+    Hebrew PDFs often have reversed RTL text in pdfplumber — if headers
+    aren't recognizable after reversal attempt, we skip to AI.
     """
     import pdfplumber
 
     rows: list[dict] = []
+    all_text_parts: list[str] = []
+
+    # Known column keywords for validation
+    _all_keywords = [
+        "product", "item", "name", "description", "מוצר", "שם", "פריט", "תיאור",
+        "quantity", "qty", "כמות", "price", "cost", "מחיר", "עלות", "תעריף",
+        "unit", "uom", "יחידה", "יח",
+    ]
+
+    def _fix_reversed_hebrew(text: str) -> str:
+        """Reverse Hebrew text that pdfplumber extracted backwards (RTL issue)."""
+        if not text:
+            return text
+        hebrew_chars = sum(1 for c in text if "\u0590" <= c <= "\u05FF")
+        if hebrew_chars > len(text) * 0.3:
+            return text[::-1]
+        return text
+
+    def _headers_recognizable(headers: list[str]) -> bool:
+        """Check if at least one header matches a known keyword."""
+        for h in headers:
+            hl = h.lower().strip()
+            if any(k in hl for k in _all_keywords):
+                return True
+        return False
 
     # --- Strategy 1: Table extraction ---
     with pdfplumber.open(io.BytesIO(raw)) as pdf:
-        all_text_parts: list[str] = []
         for page in pdf.pages:
             all_text_parts.append(page.extract_text() or "")
             tables = page.extract_tables()
             for table in tables:
                 if not table or len(table) < 2:
                     continue
-                # First row = headers
-                headers = [str(h).strip().lower() if h else f"col_{j}" for j, h in enumerate(table[0])]
+                # Try headers as-is, then reversed
+                raw_headers = [str(h).strip().lower() if h else f"col_{j}" for j, h in enumerate(table[0])]
+                fixed_headers = [_fix_reversed_hebrew(h) for h in raw_headers]
+                headers = fixed_headers if _headers_recognizable(fixed_headers) else raw_headers
+
+                if not _headers_recognizable(headers):
+                    logger.info("PDF table headers not recognizable: %s — skipping to AI", headers[:5])
+                    continue
+
                 for data_row in table[1:]:
                     if all(c is None or str(c).strip() == "" for c in data_row):
                         continue
                     cleaned = {}
                     for j, cell in enumerate(data_row):
                         if j < len(headers):
-                            cleaned[headers[j]] = str(cell).strip() if cell is not None else ""
+                            val = str(cell).strip() if cell is not None else ""
+                            cleaned[headers[j]] = _fix_reversed_hebrew(val)
                     rows.append(cleaned)
 
     if rows:
