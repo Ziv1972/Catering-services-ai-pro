@@ -1056,23 +1056,56 @@ async def dashboard_daily_meals(
     chart_data = sorted(by_date.values(), key=lambda x: x["date"])
     meal_type_keys = sorted(meal_type_set)
 
-    # ── Monthly aggregates for budget comparison ──
-    # Sum daily meals by month
-    monthly_meals: dict[int, float] = {}
-    for r in records:
-        m = r.date.month
-        monthly_meals[m] = monthly_meals.get(m, 0) + r.quantity
+    # ── Monthly aggregates for budget comparison (per-site) ──
+    from backend.models.proforma import Proforma
+    from sqlalchemy import func, extract
 
-    # Get FoodHouse budget for comparison
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    current_month = today.month
+
+    # Sum daily meals by month AND site
+    monthly_meals_by_site: dict[tuple[int, int], float] = {}  # (month, site_id) -> qty
+    for r in records:
+        key = (r.date.month, r.site_id)
+        monthly_meals_by_site[key] = monthly_meals_by_site.get(key, 0) + r.quantity
+
+    # 6-month historical average meals per site per month
+    six_months_ago = today.replace(day=1) - timedelta(days=180)
+    hist_query = (
+        select(
+            extract("month", DailyMealCount.date).label("m"),
+            DailyMealCount.site_id,
+            func.sum(DailyMealCount.quantity).label("total"),
+        )
+        .where(
+            DailyMealCount.date >= six_months_ago,
+            DailyMealCount.date < today.replace(day=1),
+        )
+        .group_by(extract("month", DailyMealCount.date), DailyMealCount.site_id)
+    )
+    hist_result = await db.execute(hist_query)
+    hist_rows = hist_result.all()
+    # Average across months per site
+    site_month_totals: dict[int, list[float]] = {}  # site_id -> list of monthly totals
+    for row in hist_rows:
+        sid = row.site_id
+        if sid not in site_month_totals:
+            site_month_totals[sid] = []
+        site_month_totals[sid].append(float(row.total))
+    avg_meals_by_site: dict[int, float] = {
+        sid: round(sum(totals) / len(totals)) if totals else 0
+        for sid, totals in site_month_totals.items()
+    }
+
+    # Get FoodHouse supplier
     fh_result = await db.execute(
         select(Supplier).where(Supplier.name.ilike("%foodhouse%"))
     )
     foodhouse = fh_result.scalar_one_or_none()
 
-    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-    budget_comparison = []
+    # Get FoodHouse budgets per site
+    budgets_by_site: dict[int, list] = {}
     if foodhouse:
         budget_query = (
             select(SupplierBudget)
@@ -1084,18 +1117,50 @@ async def dashboard_daily_meals(
         )
         if site_id:
             budget_query = budget_query.where(SupplierBudget.site_id == site_id)
-
         budget_result = await db.execute(budget_query)
-        budgets = budget_result.scalars().all()
+        for b in budget_result.scalars().all():
+            budgets_by_site.setdefault(b.site_id, []).append(b)
 
-        for m in sorted(monthly_meals.keys()):
-            month_budget = sum(getattr(b, MONTH_COLS[m - 1]) or 0 for b in budgets)
-            budget_comparison.append({
-                "month": m,
-                "month_name": month_names[m - 1],
-                "meals": round(monthly_meals[m]),
-                "budget": round(month_budget),
-            })
+    # Get actual FoodHouse cost per site for current month (from proformas)
+    cost_by_site: dict[int, float] = {}
+    if foodhouse:
+        cost_query = (
+            select(
+                Proforma.site_id,
+                func.sum(Proforma.total_amount).label("total_cost"),
+            )
+            .where(
+                Proforma.supplier_id == foodhouse.id,
+                extract("month", Proforma.invoice_date) == current_month,
+                extract("year", Proforma.invoice_date) == today.year,
+            )
+            .group_by(Proforma.site_id)
+        )
+        cost_result = await db.execute(cost_query)
+        for row in cost_result:
+            if row.site_id:
+                cost_by_site[row.site_id] = round(float(row.total_cost))
+
+    # Build per-site budget comparison for current month
+    budget_comparison = []
+    target_sites = [site_id] if site_id else list(sites.keys())
+    for sid in target_sites:
+        site_name = sites.get(sid, "Unknown")
+        meals = round(monthly_meals_by_site.get((current_month, sid), 0))
+        avg_meals = avg_meals_by_site.get(sid, 0)
+        site_budgets = budgets_by_site.get(sid, [])
+        month_budget = sum(getattr(b, MONTH_COLS[current_month - 1]) or 0 for b in site_budgets)
+        cost = cost_by_site.get(sid, 0)
+        budget_comparison.append({
+            "month": current_month,
+            "month_name": month_names[current_month - 1],
+            "site_id": sid,
+            "site_name": site_name,
+            "meals": meals,
+            "avg_meals_6m": avg_meals,
+            "cost": cost,
+            "budget": round(month_budget),
+        })
 
     # ── Summary totals ──
     total_meals = sum(r.quantity for r in records)

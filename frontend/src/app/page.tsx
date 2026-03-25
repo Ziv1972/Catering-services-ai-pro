@@ -1625,39 +1625,73 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Budget comparison sidebar */}
+              {/* Per-site comparison sidebar */}
               <div>
-                <p className="text-xs font-medium text-gray-500 mb-2">Monthly Budget vs Actual</p>
+                <p className="text-xs font-medium text-gray-500 mb-3">
+                  {dailyMeals.budget_comparison?.[0]?.month_name || 'Monthly'} — By Site
+                </p>
                 {dailyMeals.budget_comparison?.length > 0 ? (
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {dailyMeals.budget_comparison.map((bc: any) => {
-                      const pct = bc.budget > 0 ? Math.round(bc.meals / bc.budget * 100) : 0;
+                      const mealsPct = bc.avg_meals_6m > 0 ? Math.round(bc.meals / bc.avg_meals_6m * 100) : 0;
+                      const costPct = bc.budget > 0 ? Math.round(bc.cost / bc.budget * 100) : 0;
+                      const mealsDiff = bc.avg_meals_6m > 0 ? bc.meals - bc.avg_meals_6m : 0;
                       return (
-                        <div key={bc.month} className="p-2 bg-gray-50 rounded-lg">
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="font-medium">{bc.month_name}</span>
-                            <span className="text-xs text-gray-500">
-                              {bc.meals.toLocaleString()} meals
-                              {bc.budget > 0 && ` / ₪${bc.budget.toLocaleString()}`}
-                            </span>
-                          </div>
-                          {bc.budget > 0 && (
-                            <div className="h-1.5 bg-gray-200 rounded-full">
-                              <div
-                                className={`h-1.5 rounded-full ${
-                                  pct > 90 ? 'bg-red-500' : pct > 70 ? 'bg-amber-500' : 'bg-green-500'
-                                }`}
-                                style={{ width: `${Math.min(pct, 100)}%` }}
-                              />
+                        <div key={bc.site_id} className="p-2.5 bg-gray-50 rounded-lg">
+                          <p className="text-xs font-semibold text-gray-700 mb-2">{bc.site_name}</p>
+
+                          {/* Meals vs 6-month avg */}
+                          <div className="mb-2">
+                            <div className="flex justify-between text-xs mb-0.5">
+                              <span className="text-gray-500">Meals</span>
+                              <span className={`font-medium ${mealsDiff > 0 ? 'text-green-600' : mealsDiff < 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                                {bc.meals.toLocaleString()}
+                                {bc.avg_meals_6m > 0 && (
+                                  <span className="text-gray-400 font-normal"> / {bc.avg_meals_6m.toLocaleString()} avg</span>
+                                )}
+                              </span>
                             </div>
-                          )}
+                            {bc.avg_meals_6m > 0 && (
+                              <div className="h-1.5 bg-gray-200 rounded-full">
+                                <div
+                                  className={`h-1.5 rounded-full ${
+                                    mealsPct > 110 ? 'bg-green-500' : mealsPct < 80 ? 'bg-red-500' : 'bg-blue-500'
+                                  }`}
+                                  style={{ width: `${Math.min(mealsPct, 100)}%` }}
+                                />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Cost vs budget */}
+                          <div>
+                            <div className="flex justify-between text-xs mb-0.5">
+                              <span className="text-gray-500">Cost</span>
+                              <span className="font-medium text-gray-600">
+                                ₪{(bc.cost || 0).toLocaleString()}
+                                {bc.budget > 0 && (
+                                  <span className="text-gray-400 font-normal"> / ₪{bc.budget.toLocaleString()}</span>
+                                )}
+                              </span>
+                            </div>
+                            {bc.budget > 0 && (
+                              <div className="h-1.5 bg-gray-200 rounded-full">
+                                <div
+                                  className={`h-1.5 rounded-full ${
+                                    costPct > 90 ? 'bg-red-500' : costPct > 70 ? 'bg-amber-500' : 'bg-green-500'
+                                  }`}
+                                  style={{ width: `${Math.min(costPct, 100)}%` }}
+                                />
+                              </div>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
                   </div>
                 ) : (
                   <div className="text-center py-6 text-xs text-gray-400">
-                    No budget configured for meals
+                    No meal data for this month
                   </div>
                 )}
               </div>
