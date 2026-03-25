@@ -822,7 +822,8 @@ def _classify_match(keyword: str, variants: list[str], item_text: str) -> str | 
         if var in item_text or var in item_normalized:
             return "contains"
 
-    # Prefix-stripped match
+    # Prefix-stripped match — only check var==stem or var-in-stem.
+    # Never check stem-in-var (causes false positives: "צל" in "צלי כתף")
     all_words = set(words + words_normalized)
     for word in all_words:
         stems = _strip_hebrew_prefixes(word)
@@ -830,9 +831,8 @@ def _classify_match(keyword: str, variants: list[str], item_text: str) -> str | 
             for var in variants:
                 if var == stem:
                     return "prefix"
-                if var in stem or stem in var:
-                    if len(var) >= 3 and len(stem) >= 3:
-                        return "prefix"
+                if var in stem and len(var) >= 3:
+                    return "prefix"
 
     # No fuzzy matching — too many false positives with Hebrew
     # Raw file search handles the cases fuzzy was meant to catch
@@ -1065,3 +1065,212 @@ async def delete_rule(
     rule.is_active = False
     await db.commit()
     return {"message": "Rule deactivated"}
+
+
+# ---------------------------------------------------------------------------
+# AI-powered compliance check
+# ---------------------------------------------------------------------------
+
+@router.post("/checks/{check_id}/ai-check")
+async def run_ai_check(
+    check_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run AI-powered compliance check using Claude.
+
+    Sends the full parsed menu + contract rules to Claude for intelligent
+    matching. Returns results in the manual-check spreadsheet format and
+    generates a downloadable Excel file with the check sheet added.
+    """
+    from backend.services.menu_analysis_service import run_ai_compliance_check
+
+    check_result = await db.execute(
+        select(MenuCheck).where(MenuCheck.id == check_id)
+    )
+    check = check_result.scalar_one_or_none()
+    if not check:
+        raise HTTPException(status_code=404, detail="Menu check not found")
+
+    try:
+        ai_results = await run_ai_compliance_check(check_id, db)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "message": f"AI check complete: {len(ai_results)} items checked",
+        "total_items": len(ai_results),
+        "shortages": sum(1 for r in ai_results if r.get("shortage", 0) > 0),
+        "surplus": sum(1 for r in ai_results if r.get("shortage", 0) < 0),
+        "ok": sum(1 for r in ai_results if r.get("shortage", 0) == 0),
+        "results": ai_results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Excel export
+# ---------------------------------------------------------------------------
+
+@router.get("/checks/{check_id}/export-excel")
+async def export_compliance_excel(
+    check_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export compliance check results as Excel with summary sheet."""
+    import io
+    import os
+    from copy import copy
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from fastapi.responses import StreamingResponse
+
+    check_result = await db.execute(
+        select(MenuCheck).where(MenuCheck.id == check_id)
+    )
+    check = check_result.scalar_one_or_none()
+    if not check:
+        raise HTTPException(status_code=404, detail="Menu check not found")
+
+    results_q = await db.execute(
+        select(CheckResult)
+        .where(CheckResult.menu_check_id == check_id)
+        .order_by(CheckResult.id)
+    )
+    results = results_q.scalars().all()
+
+    # Try to open original menu file, otherwise create new workbook
+    wb = None
+    if check.file_path and os.path.exists(check.file_path):
+        try:
+            wb = load_workbook(check.file_path)
+        except Exception:
+            wb = None
+    if wb is None:
+        wb = Workbook()
+        wb.active.title = "Menu"
+
+    # Remove existing report sheet if present
+    report_name = "חוסרים"
+    if report_name in wb.sheetnames:
+        del wb[report_name]
+    ws = wb.create_sheet(report_name, 0)
+
+    # Styles
+    header_font = Font(bold=True, size=11, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="4472C4")
+    red_fill = PatternFill("solid", fgColor="FFC7CE")
+    green_fill = PatternFill("solid", fgColor="C6EFCE")
+    blue_fill = PatternFill("solid", fgColor="BDD7EE")
+    red_font = Font(color="9C0006", bold=True)
+    green_font = Font(color="006100", bold=True)
+    blue_font = Font(color="003399", bold=True)
+    group_fill = PatternFill("solid", fgColor="D9E2F3")
+    group_font = Font(bold=True, size=11)
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+
+    # Headers — matching manual check format
+    headers = ["קבוצה", "סוג", "תדירות מינימלית", "תקן", "בפועל", "חוסר", "פריטים שנמצאו בתפריט", "הערות"]
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = thin_border
+
+    # Column widths
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 45
+    ws.column_dimensions["C"].width = 22
+    ws.column_dimensions["D"].width = 8
+    ws.column_dimensions["E"].width = 8
+    ws.column_dimensions["F"].width = 8
+    ws.column_dimensions["G"].width = 65
+    ws.column_dimensions["H"].width = 25
+
+    # Data rows — group by category
+    row_num = 2
+    current_group = None
+    for r in results:
+        evidence = r.evidence or {}
+        group = r.rule_category or ""
+        dish_name = r.rule_name or ""
+        frequency_text = evidence.get("frequency_text", "")
+        expected = evidence.get("expected_count")
+        actual = evidence.get("actual_count")
+        found_days = evidence.get("found_on_days") or []
+        matched_items = evidence.get("matched_items") or []
+        notes = evidence.get("notes", "")
+
+        if expected is None:
+            continue
+
+        deficit = (expected - actual) if actual is not None else expected
+
+        # Group header row
+        if group != current_group:
+            current_group = group
+            group_cell = ws.cell(row=row_num, column=1, value=group)
+            group_cell.font = group_font
+            group_cell.fill = group_fill
+            group_cell.border = thin_border
+            # Only fill first cell with group name, leave rest empty but styled
+            ws.cell(row=row_num, column=1, value=group)
+
+        ws.cell(row=row_num, column=1, value=group).border = thin_border
+        ws.cell(row=row_num, column=2, value=dish_name).border = thin_border
+        ws.cell(row=row_num, column=3, value=frequency_text).border = thin_border
+
+        exp_cell = ws.cell(row=row_num, column=4, value=expected)
+        exp_cell.border = thin_border
+        exp_cell.alignment = Alignment(horizontal="center")
+
+        act_cell = ws.cell(row=row_num, column=5, value=actual if actual is not None else 0)
+        act_cell.border = thin_border
+        act_cell.alignment = Alignment(horizontal="center")
+
+        def_cell = ws.cell(row=row_num, column=6, value=deficit)
+        def_cell.border = thin_border
+        def_cell.alignment = Alignment(horizontal="center")
+
+        if deficit > 0:
+            def_cell.fill = red_fill
+            def_cell.font = red_font
+        elif deficit < 0:
+            def_cell.fill = blue_fill
+            def_cell.font = blue_font
+        else:
+            def_cell.fill = green_fill
+            def_cell.font = green_font
+
+        # Show matched menu items (what Claude found)
+        items_text = ", ".join(matched_items) if matched_items else ""
+        items_cell = ws.cell(row=row_num, column=7, value=items_text)
+        items_cell.border = thin_border
+        items_cell.alignment = Alignment(wrap_text=True)
+
+        notes_cell = ws.cell(row=row_num, column=8, value=notes)
+        notes_cell.border = thin_border
+        notes_cell.alignment = Alignment(wrap_text=True)
+
+        row_num += 1
+
+    # RTL sheet direction
+    ws.sheet_view.rightToLeft = True
+
+    # Write to buffer
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    filename = f"compliance_check_{check.month}_{check.year}.xlsx"
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
