@@ -22,7 +22,7 @@ import asyncio
 import imaplib
 import email as email_lib
 from email.header import decode_header
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 import csv
 import io
@@ -617,28 +617,48 @@ async def poll_meal_emails() -> dict:
 # ──────────────────────────────────────────────────────
 
 async def start_meal_email_scheduler():
-    """Background loop that polls for meal emails at a configured interval."""
+    """Background scheduler that polls for meal emails once daily at a configured hour."""
+    from zoneinfo import ZoneInfo
+
     settings = get_settings()
 
     if not settings.IMAP_HOST:
         logger.info("IMAP not configured — meal email poller disabled")
         return
 
-    interval = max(settings.MEAL_POLL_INTERVAL_MIN, 5) * 60  # min 5 minutes
+    target_hour = settings.MEAL_POLL_HOUR  # e.g. 5 = 5:00 AM Israel time
+    tz = ZoneInfo("Asia/Jerusalem")
+
     logger.info(
         f"Meal email poller started: checking {settings.IMAP_EMAIL} "
-        f"every {settings.MEAL_POLL_INTERVAL_MIN} min"
+        f"daily at {target_hour:02d}:00 Israel time"
     )
 
     # Initial delay to let the app finish startup
     await asyncio.sleep(30)
 
+    # Run once on startup (catches any missed emails from downtime)
+    try:
+        result = await poll_meal_emails()
+        if result.get("emails_found", 0) > 0:
+            logger.info(f"Startup meal poll result: {result}")
+    except Exception as e:
+        logger.error(f"Startup meal poll error: {e}")
+
     while True:
+        # Calculate seconds until next target hour
+        now = datetime.now(tz)
+        next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if now >= next_run:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+
+        logger.info(f"Next meal poll at {next_run.isoformat()} ({wait_seconds / 3600:.1f}h from now)")
+        await asyncio.sleep(wait_seconds)
+
         try:
             result = await poll_meal_emails()
             if result.get("emails_found", 0) > 0:
                 logger.info(f"Meal poll result: {result}")
         except Exception as e:
             logger.error(f"Meal email scheduler error: {e}")
-
-        await asyncio.sleep(interval)

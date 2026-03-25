@@ -48,7 +48,8 @@ class Settings(BaseSettings):
     IMAP_PASSWORD: str = ""        # Gmail app password
     MEAL_EMAIL_SENDER: str = ""    # filter: sender address (partial match)
     MEAL_EMAIL_SUBJECT: str = ""   # filter: subject keyword (partial match)
-    MEAL_POLL_INTERVAL_MIN: int = 60  # check every N minutes
+    MEAL_POLL_INTERVAL_MIN: int = 1440  # check every N minutes (1440 = once/day)
+    MEAL_POLL_HOUR: int = 5        # hour of day to poll (0-23, Israel time)
 
     # Calendar (Google Calendar API)
     CALENDAR_CREDENTIALS_PATH: str = ""

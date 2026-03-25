@@ -1544,12 +1544,24 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Daily bars chart */}
+              {/* Daily bars chart — grouped by site, stacked by meal type */}
               <div className="lg:col-span-2">
-                <p className="text-xs font-medium text-gray-500 mb-2">Daily Meal Count by Type</p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-medium text-gray-500">Daily Meal Count by Type</p>
+                  {!dailyMealsSiteId && (
+                    <div className="flex items-center gap-3 text-[10px]">
+                      <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-gray-300" /> Left = NZ</span>
+                      <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-gray-500" /> Right = KG</span>
+                      <span className="mx-1 text-gray-300">|</span>
+                      <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#ef4444' }} /> Meat</span>
+                      <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#3b82f6' }} /> Dairy</span>
+                      <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#f59e0b' }} /> Main Only</span>
+                    </div>
+                  )}
+                </div>
                 <div className="h-56">
                   <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                    <BarChart data={dailyMeals.chart_data}>
+                    <BarChart data={dailyMeals.chart_data} barGap={0} barCategoryGap="20%">
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis
                         dataKey="date"
@@ -1567,21 +1579,47 @@ export default function Dashboard() {
                         }}
                         formatter={(val: any, name: any) => [Number(val).toLocaleString(), String(name)]}
                       />
-                      <Legend wrapperStyle={{ fontSize: 11 }} />
-                      {(dailyMeals.meal_type_keys || []).map((key: string, i: number) => (
-                        <Bar
-                          key={key}
-                          dataKey={key}
-                          stackId="meals"
-                          fill={
-                            key.includes('Meat') ? '#ef4444' :
-                            key.includes('Dairy') ? '#3b82f6' :
-                            key.includes('Main') ? '#f59e0b' :
-                            SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]
-                          }
-                          name={key}
-                        />
-                      ))}
+                      {dailyMealsSiteId ? (
+                        /* Single site — simple stacked bars */
+                        (dailyMeals.meal_type_keys || []).map((key: string, i: number) => (
+                          <Bar
+                            key={key}
+                            dataKey={key}
+                            stackId="meals"
+                            fill={
+                              key.includes('Meat') ? '#ef4444' :
+                              key.includes('Dairy') ? '#3b82f6' :
+                              key.includes('Main') ? '#f59e0b' :
+                              SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]
+                            }
+                            name={key}
+                          />
+                        ))
+                      ) : (
+                        /* All sites — grouped stacked: NZ stack + KG stack side by side */
+                        (dailyMeals.meal_type_keys || []).map((key: string, i: number) => {
+                          const siteMatch = key.match(/\(([^)]+)\)/);
+                          const siteName = siteMatch ? siteMatch[1] : 'default';
+                          const mealType = key.replace(/\s*\([^)]+\)/, '').trim();
+                          const opacity = siteName.includes('Kiryat') ? 0.75 : 1;
+                          const fill =
+                            mealType.includes('Meat') ? '#ef4444' :
+                            mealType.includes('Dairy') ? '#3b82f6' :
+                            mealType.includes('Main') ? '#f59e0b' :
+                            SUPPLIER_COLORS[i % SUPPLIER_COLORS.length];
+                          return (
+                            <Bar
+                              key={key}
+                              dataKey={key}
+                              stackId={siteName}
+                              fill={fill}
+                              fillOpacity={opacity}
+                              name={key}
+                              legendType="none"
+                            />
+                          );
+                        })
+                      )}
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
