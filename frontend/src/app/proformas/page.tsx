@@ -48,6 +48,11 @@ export default function ProformasPage() {
   const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null);
   const [vendorAnalysis, setVendorAnalysis] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  // Meal summary updater
+  const [showMealUpdate, setShowMealUpdate] = useState(false);
+  const [mealUpdateFiles, setMealUpdateFiles] = useState<{ nz: File | null; kg: File | null; summary: File | null }>({ nz: null, kg: null, summary: null });
+  const [mealUpdateMonth, setMealUpdateMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [mealUpdating, setMealUpdating] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -106,6 +111,31 @@ export default function ProformasPage() {
 
   const selectVendor = (supplierId: number | null) => {
     setSelectedSupplierId(prev => prev === supplierId ? null : supplierId);
+  };
+
+  const handleMealSummaryUpdate = async () => {
+    if (!mealUpdateFiles.nz || !mealUpdateFiles.kg || !mealUpdateFiles.summary) {
+      alert('Please select all 3 files: NZ proforma, KG proforma, and the meal summary Excel');
+      return;
+    }
+    setMealUpdating(true);
+    try {
+      const blob = await proformasAPI.updateMealSummary(
+        mealUpdateFiles.nz, mealUpdateFiles.kg, mealUpdateFiles.summary, mealUpdateMonth,
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `meal_summary_updated_${mealUpdateMonth}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setShowMealUpdate(false);
+      setMealUpdateFiles({ nz: null, kg: null, summary: null });
+    } catch (error: any) {
+      alert(error?.response?.data?.detail || 'Failed to update meal summary');
+    } finally {
+      setMealUpdating(false);
+    }
   };
 
   const addItem = () => {
@@ -218,13 +248,19 @@ export default function ProformasPage() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => { setShowUpload(!showUpload); setShowForm(false); }}
+              onClick={() => { setShowMealUpdate(!showMealUpdate); setShowUpload(false); setShowForm(false); }}
+              className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700"
+            >
+              <FileText className="h-4 w-4" /> Update Meals
+            </button>
+            <button
+              onClick={() => { setShowUpload(!showUpload); setShowForm(false); setShowMealUpdate(false); }}
               className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700"
             >
               <Upload className="h-4 w-4" /> Upload Excel
             </button>
             <button
-              onClick={() => { setShowForm(!showForm); setShowUpload(false); }}
+              onClick={() => { setShowForm(!showForm); setShowUpload(false); setShowMealUpdate(false); }}
               className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
             >
               <Plus className="h-4 w-4" /> Add Manual
@@ -286,8 +322,8 @@ export default function ProformasPage() {
                       <BarChart data={vendorAnalysis.spending_timeline}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₪${(Number(v)/1000).toFixed(0)}k`} />
-                        <Tooltip formatter={(v) => [`₪${Number(v).toLocaleString()}`, 'Spend']} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: string | number) => `₪${(Number(v)/1000).toFixed(0)}k`} />
+                        <Tooltip formatter={(v: string | number) => [`₪${Number(v).toLocaleString()}`, 'Spend']} />
                         <Bar dataKey="total" fill="#7c3aed" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
@@ -330,6 +366,81 @@ export default function ProformasPage() {
         )}
         {analysisLoading && selectedSupplierId && (
           <div className="text-center py-4 text-gray-400 mb-4">Loading vendor analysis...</div>
+        )}
+
+        {/* Meal Summary Update Dialog */}
+        {showMealUpdate && (
+          <Card className="mb-6 border-orange-200 bg-orange-50/30">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <FileText className="w-5 h-5 text-orange-600" />
+                Update Meal Summary Excel
+              </CardTitle>
+              <p className="text-sm text-gray-500">
+                Upload NZ + KG FoodHouse proformas to extract meal counts and update ריכוז מספרי ארוחות
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">NZ Proforma (Excel) *</label>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={e => setMealUpdateFiles({ ...mealUpdateFiles, nz: e.target.files?.[0] || null })}
+                    className="w-full text-sm border rounded-md p-2"
+                  />
+                  {mealUpdateFiles.nz && <p className="text-xs text-green-600 mt-1">✓ {mealUpdateFiles.nz.name}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">KG Proforma (Excel) *</label>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={e => setMealUpdateFiles({ ...mealUpdateFiles, kg: e.target.files?.[0] || null })}
+                    className="w-full text-sm border rounded-md p-2"
+                  />
+                  {mealUpdateFiles.kg && <p className="text-xs text-green-600 mt-1">✓ {mealUpdateFiles.kg.name}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Meal Summary File *</label>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={e => setMealUpdateFiles({ ...mealUpdateFiles, summary: e.target.files?.[0] || null })}
+                    className="w-full text-sm border rounded-md p-2"
+                  />
+                  {mealUpdateFiles.summary && <p className="text-xs text-green-600 mt-1">✓ {mealUpdateFiles.summary.name}</p>}
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Target Month</label>
+                  <input
+                    type="month"
+                    value={mealUpdateMonth}
+                    onChange={e => setMealUpdateMonth(e.target.value)}
+                    className="px-3 py-2 border rounded-md"
+                  />
+                </div>
+                <div className="flex gap-2 mt-5">
+                  <button
+                    onClick={handleMealSummaryUpdate}
+                    disabled={mealUpdating || !mealUpdateFiles.nz || !mealUpdateFiles.kg || !mealUpdateFiles.summary}
+                    className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 disabled:opacity-50"
+                  >
+                    {mealUpdating ? 'Processing...' : 'Update & Download'}
+                  </button>
+                  <button
+                    onClick={() => setShowMealUpdate(false)}
+                    className="px-4 py-2 border rounded-lg text-gray-600 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {showForm && (

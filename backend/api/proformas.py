@@ -793,6 +793,167 @@ async def get_vendor_spending(
     }
 
 
+@router.post("/update-meal-summary")
+async def update_meal_summary(
+    nz_file: UploadFile = File(..., alias="nz_file"),
+    kg_file: UploadFile = File(..., alias="kg_file"),
+    summary_file: UploadFile = File(..., alias="summary_file"),
+    target_month: str = Form(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Extract meal counts from NZ + KG FoodHouse proformas and update the meal summary Excel.
+
+    Reads ריכוז הכנסות sheet from each proforma:
+    - Row 5: ארוחת צהריים בשרית (HP INDIGO) → qty in column D
+    - Row 6: ארוחת צהריים בשרית (סאייטקס) → qty in column D
+    - Row 7: ארוחת ערב (HP)
+    - Row 8: ארוחת ערב (קבלנים)
+    - Row 9: ארוחת צהריים חלבית (HP INDIGO)
+    - Row 10: ארוחת צהריים חלבית (סאייטקס)
+    - Row 11: תוספת מנה עיקרית
+    - Row 14: ארוחת צהריים בשרית (קבלנים)  (note: row 12-13 are skipped)
+    - Row 15: ארוחת צהריים חלבית (קבלנים)
+    - K29: Working days
+
+    Updates the ריכוז מספרי ארוחות summary Excel by finding or creating the target month column.
+    """
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+    from datetime import datetime
+    from fastapi.responses import StreamingResponse
+
+    def _extract_meals(raw_bytes: bytes) -> dict:
+        """Extract meal data from a FoodHouse proforma ריכוז הכנסות or ריכוז ארוחות sheet."""
+        wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), data_only=True)
+
+        # Try ריכוז הכנסות first (has qty in col D), then ריכוז ארוחות
+        ws = None
+        qty_col = 4  # D
+        for sheet_name in wb.sheetnames:
+            if "ריכוז הכנסות" in sheet_name:
+                ws = wb[sheet_name]
+                qty_col = 4  # D = quantity column in ריכוז הכנסות
+                break
+            if "ריכוז ארוחות" in sheet_name:
+                ws = wb[sheet_name]
+                # In ריכוז ארוחות, quantities are in daily columns D-N.
+                # We need to sum across all day columns for monthly total.
+                qty_col = None  # signal to sum across day columns
+                break
+
+        if ws is None:
+            raise ValueError("Could not find ריכוז הכנסות or ריכוז ארוחות sheet")
+
+        def get_qty(row: int) -> float:
+            if qty_col is not None:
+                v = ws.cell(row, qty_col).value
+                return float(v) if v else 0.0
+            # Sum across day columns (D through last non-empty)
+            total = 0.0
+            for c in range(4, ws.max_column + 1):
+                v = ws.cell(row, c).value
+                if isinstance(v, (int, float)):
+                    total += v
+            return total
+
+        # Working days: K29 in ריכוז הכנסות
+        working_days = 0
+        wd_cell = ws.cell(29, 11).value  # K29
+        if isinstance(wd_cell, (int, float)):
+            working_days = int(wd_cell)
+
+        return {
+            "hp_meat": get_qty(5),        # ארוחת צהריים בשרית HP INDIGO
+            "scitex_meat": get_qty(6),     # ארוחת צהריים בשרית סאייטקס
+            "evening_hp": get_qty(7),      # ארוחת ערב HP
+            "evening_contractors": get_qty(8),  # ארוחת ערב קבלנים
+            "hp_dairy": get_qty(9),        # ארוחת צהריים חלבית HP INDIGO
+            "scitex_dairy": get_qty(10),   # ארוחת צהריים חלבית סאייטקס
+            "supplement": get_qty(11),     # תוספת מנה עיקרית
+            "contractors_meat": get_qty(14),  # ארוחת צהריים בשרית קבלנים (row 14, not 12/13)
+            "contractors_dairy": get_qty(15),  # ארוחת צהריים חלבית קבלנים
+            "working_days": working_days,
+        }
+
+    try:
+        nz_raw = await nz_file.read()
+        kg_raw = await kg_file.read()
+        summary_raw = await summary_file.read()
+
+        nz = _extract_meals(nz_raw)
+        kg = _extract_meals(kg_raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to parse proforma files: %s", e)
+        raise HTTPException(status_code=400, detail=f"Failed to parse proforma files: {e}")
+
+    # Compute aggregated values for summary Excel
+    # NZ site
+    nz_total_lunch = nz["hp_meat"] + nz["scitex_meat"] + nz["hp_dairy"] + nz["scitex_dairy"] + nz["contractors_meat"] + nz["contractors_dairy"]
+    nz_total_dairy = nz["hp_dairy"] + nz["scitex_dairy"] + nz["contractors_dairy"]
+    nz_total_evening = nz["evening_hp"] + nz["evening_contractors"]
+
+    # KG site
+    kg_total_lunch = kg["hp_meat"] + kg["scitex_meat"] + kg["hp_dairy"] + kg["scitex_dairy"] + kg["contractors_meat"] + kg["contractors_dairy"]
+    kg_total_dairy = kg["hp_dairy"] + kg["scitex_dairy"] + kg["contractors_dairy"]
+    kg_total_evening = kg["evening_hp"] + kg["evening_contractors"]
+
+    # Load and update summary workbook
+    wb_summary = openpyxl.load_workbook(io.BytesIO(summary_raw))
+    ws = wb_summary["Sheet1"]
+
+    # Parse target month to find or create the column
+    try:
+        target_dt = datetime.strptime(target_month, "%Y-%m")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="target_month must be YYYY-MM format")
+
+    # Find the column matching target month (row 4 has datetime dates)
+    target_col = None
+    for c in range(3, ws.max_column + 5):
+        cell_val = ws.cell(4, c).value
+        if isinstance(cell_val, datetime) and cell_val.year == target_dt.year and cell_val.month == target_dt.month:
+            target_col = c
+            break
+
+    if target_col is None:
+        # Add new column at the end
+        target_col = ws.max_column + 1
+        ws.cell(4, target_col, target_dt)
+        ws.cell(4, target_col).number_format = "MMM YYYY"
+
+    # Write NZ data
+    ws.cell(5, target_col, nz["working_days"])          # ימי עבודה NZ
+    ws.cell(6, target_col, int(nz_total_lunch))          # סה"כ צהרים נס ציונה
+    ws.cell(7, target_col, int(nz_total_dairy))           # סה"כ חלבי נס ציונה
+    ws.cell(8, target_col, int(nz["contractors_meat"]))   # סה"כ קבלנים בשרי
+    ws.cell(9, target_col, int(nz["contractors_dairy"]))  # סה"כ קבלנים חלבי
+    ws.cell(10, target_col, int(nz_total_evening))        # סה"כ ערב נס ציונה
+    ws.cell(11, target_col, int(nz["supplement"]))        # תוספת למנה עיקרית NZ
+
+    # Write KG data
+    ws.cell(12, target_col, kg["working_days"])           # ימי עבודה KG
+    ws.cell(13, target_col, int(kg_total_lunch))          # סה"כ צהרים קרית גת
+    ws.cell(14, target_col, int(kg_total_dairy))          # סה"כ חלבי צהרים קרית גת
+    ws.cell(15, target_col, int(kg["contractors_meat"]))  # סה"כ קבלנים צהרים בשרי
+    ws.cell(16, target_col, int(kg["contractors_dairy"])) # סה"כ קבלנים צהרים חלבי
+    ws.cell(17, target_col, int(kg_total_evening))        # סה"כ ערב קרית גת
+    ws.cell(18, target_col, int(kg["supplement"]))        # תוספת למנה עיקרית KG
+
+    # Save to buffer and return
+    output = io.BytesIO()
+    wb_summary.save(output)
+    output.seek(0)
+
+    filename = f"meal_summary_updated_{target_month}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/vendor-analysis/{supplier_id}")
 async def get_vendor_analysis(
     supplier_id: int,
