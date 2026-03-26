@@ -379,13 +379,8 @@ export const proformasAPI = {
     return response.data;
   },
 
-  updateMealSummary: async (summaryFile: File, targetMonth: string, nzFile?: File | null, kgFile?: File | null) => {
-    const formData = new FormData();
-    formData.append('summary_file', summaryFile);
-    formData.append('target_month', targetMonth);
-    if (nzFile) formData.append('nz_file', nzFile);
-    if (kgFile) formData.append('kg_file', kgFile);
-    const response = await api.post('/api/proformas/update-meal-summary', formData, {
+  generateMealSummary: async () => {
+    const response = await api.get('/api/proformas/generate-meal-summary', {
       responseType: 'blob',
     });
     return response.data;

@@ -48,13 +48,8 @@ export default function ProformasPage() {
   const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null);
   const [vendorAnalysis, setVendorAnalysis] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
-  // Meal summary updater
-  const [showMealUpdate, setShowMealUpdate] = useState(false);
-  const [mealSummaryFile, setMealSummaryFile] = useState<File | null>(null);
-  const [mealNzFile, setMealNzFile] = useState<File | null>(null);
-  const [mealKgFile, setMealKgFile] = useState<File | null>(null);
-  const [mealUpdateMonth, setMealUpdateMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [mealUpdating, setMealUpdating] = useState(false);
+  // Meal summary generator
+  const [mealDownloading, setMealDownloading] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -115,37 +110,30 @@ export default function ProformasPage() {
     setSelectedSupplierId(prev => prev === supplierId ? null : supplierId);
   };
 
-  const handleMealSummaryUpdate = async () => {
-    if (!mealSummaryFile) {
-      alert('Please select the meal summary Excel file (ריכוז מספרי ארוחות)');
-      return;
-    }
-    setMealUpdating(true);
+  const handleDownloadMealSummary = async () => {
+    setMealDownloading(true);
     try {
-      const blob = await proformasAPI.updateMealSummary(mealSummaryFile, mealUpdateMonth, mealNzFile, mealKgFile);
+      const blob = await proformasAPI.generateMealSummary();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `meal_summary_updated_${mealUpdateMonth}.xlsx`;
+      a.download = 'ריכוז_מספרי_ארוחות.xlsx';
       a.click();
       URL.revokeObjectURL(url);
-      setShowMealUpdate(false);
-      setMealSummaryFile(null);
     } catch (error: any) {
-      let detail = 'Failed to update meal summary';
+      let detail = 'No meal data found. Upload FoodHouse proformas first.';
       try {
         const data = error?.response?.data;
         if (data instanceof Blob) {
-          const text = await data.text();
-          const parsed = JSON.parse(text);
-          detail = parsed.detail || text;
+          const parsed = JSON.parse(await data.text());
+          detail = parsed.detail || detail;
         } else if (data?.detail) {
           detail = data.detail;
         }
       } catch { /* use default */ }
       alert(detail);
     } finally {
-      setMealUpdating(false);
+      setMealDownloading(false);
     }
   };
 
@@ -259,19 +247,20 @@ export default function ProformasPage() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => { setShowMealUpdate(!showMealUpdate); setShowUpload(false); setShowForm(false); }}
-              className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700"
+              onClick={handleDownloadMealSummary}
+              disabled={mealDownloading}
+              className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 disabled:opacity-50"
             >
-              <FileText className="h-4 w-4" /> Update Meals
+              <FileText className="h-4 w-4" /> {mealDownloading ? 'Generating...' : 'Meal Summary'}
             </button>
             <button
-              onClick={() => { setShowUpload(!showUpload); setShowForm(false); setShowMealUpdate(false); }}
+              onClick={() => { setShowUpload(!showUpload); setShowForm(false); }}
               className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700"
             >
               <Upload className="h-4 w-4" /> Upload Excel
             </button>
             <button
-              onClick={() => { setShowForm(!showForm); setShowUpload(false); setShowMealUpdate(false); }}
+              onClick={() => { setShowForm(!showForm); setShowUpload(false); }}
               className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
             >
               <Plus className="h-4 w-4" /> Add Manual
@@ -377,72 +366,6 @@ export default function ProformasPage() {
         )}
         {analysisLoading && selectedSupplierId && (
           <div className="text-center py-4 text-gray-400 mb-4">Loading vendor analysis...</div>
-        )}
-
-        {/* Meal Summary Update Dialog */}
-        {showMealUpdate && (
-          <Card className="mb-6 border-orange-200 bg-orange-50/30">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg flex items-center gap-2">
-                <FileText className="w-5 h-5 text-orange-600" />
-                Update Meal Summary Excel
-              </CardTitle>
-              <p className="text-sm text-gray-500">
-                Meal data is auto-extracted when FoodHouse proformas are uploaded.
-                For older months, attach the NZ/KG proforma Excel files below.
-              </p>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap items-end gap-4 mb-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">ריכוז מספרי ארוחות *</label>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={e => setMealSummaryFile(e.target.files?.[0] || null)}
-                    className="text-sm border rounded-md p-2"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Target Month</label>
-                  <input
-                    type="month"
-                    value={mealUpdateMonth}
-                    onChange={e => setMealUpdateMonth(e.target.value)}
-                    className="px-3 py-2 border rounded-md"
-                  />
-                </div>
-                <button
-                  onClick={handleMealSummaryUpdate}
-                  disabled={mealUpdating || !mealSummaryFile}
-                  className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 disabled:opacity-50"
-                >
-                  {mealUpdating ? 'Processing...' : 'Update & Download'}
-                </button>
-                <button
-                  onClick={() => setShowMealUpdate(false)}
-                  className="px-4 py-2 border rounded-lg text-gray-600 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-              </div>
-              <details className="text-sm">
-                <summary className="cursor-pointer text-gray-500 hover:text-gray-700">
-                  Optional: Attach FoodHouse proforma Excels (for months without auto-extracted data)
-                </summary>
-                <div className="flex gap-4 mt-2 p-3 bg-gray-50 rounded-lg">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">NZ Proforma</label>
-                    <input type="file" accept=".xlsx,.xls" onChange={e => setMealNzFile(e.target.files?.[0] || null)} className="text-xs border rounded p-1" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">KG Proforma</label>
-                    <input type="file" accept=".xlsx,.xls" onChange={e => setMealKgFile(e.target.files?.[0] || null)} className="text-xs border rounded p-1" />
-                  </div>
-                </div>
-              </details>
-            </CardContent>
-          </Card>
         )}
 
         {showForm && (

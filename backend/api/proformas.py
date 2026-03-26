@@ -874,147 +874,157 @@ async def get_vendor_spending(
     }
 
 
-@router.post("/update-meal-summary")
-async def update_meal_summary(
-    summary_file: UploadFile = File(..., alias="summary_file"),
-    target_month: str = Form(...),
-    nz_file: UploadFile = File(None, alias="nz_file"),
-    kg_file: UploadFile = File(None, alias="kg_file"),
+@router.get("/generate-meal-summary")
+async def generate_meal_summary(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update the ריכוז מספרי ארוחות summary Excel using meal breakdowns.
+    """Generate a new ריכוז מספרי ארוחות Excel from all MealBreakdown records in DB.
 
-    First checks DB for auto-extracted data. If not found, accepts optional
-    NZ/KG proforma Excel files to extract on the fly (for backfilling).
+    Creates a fresh Excel with monthly columns starting from Jan 2026,
+    matching the original file structure with NZ and KG site rows.
     """
     import openpyxl
-    from datetime import datetime
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from fastapi.responses import StreamingResponse
     from backend.models.meal_breakdown import MealBreakdown
 
-    try:
-        target_dt = datetime.strptime(target_month, "%Y-%m")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="target_month must be YYYY-MM format")
-
-    month_start = date(target_dt.year, target_dt.month, 1)
-
-    # Try DB first
     result = await db.execute(
-        select(MealBreakdown).where(MealBreakdown.invoice_month == month_start)
+        select(MealBreakdown).order_by(MealBreakdown.invoice_month.asc())
     )
-    breakdowns = result.scalars().all()
-    nz_data = next((b for b in breakdowns if b.site_id == 1), None)
-    kg_data = next((b for b in breakdowns if b.site_id == 2), None)
+    all_breakdowns = result.scalars().all()
 
-    # If no DB data, try extracting from uploaded files
-    if not nz_data and nz_file and nz_file.filename:
-        try:
-            nz_raw = await nz_file.read()
-            await _extract_and_save_meal_breakdown(nz_raw, 0, 0, 1, month_start, db)
-            r2 = await db.execute(select(MealBreakdown).where(MealBreakdown.invoice_month == month_start, MealBreakdown.site_id == 1))
-            nz_data = r2.scalar_one_or_none()
-        except Exception as e:
-            logger.warning("NZ file extraction failed: %s", e)
-
-    if not kg_data and kg_file and kg_file.filename:
-        try:
-            kg_raw = await kg_file.read()
-            await _extract_and_save_meal_breakdown(kg_raw, 0, 0, 2, month_start, db)
-            r2 = await db.execute(select(MealBreakdown).where(MealBreakdown.invoice_month == month_start, MealBreakdown.site_id == 2))
-            kg_data = r2.scalar_one_or_none()
-        except Exception as e:
-            logger.warning("KG file extraction failed: %s", e)
-
-    if not nz_data and not kg_data:
+    if not all_breakdowns:
         raise HTTPException(
             status_code=404,
-            detail=f"No meal breakdown data found for {target_month}. "
-                   f"Re-upload FoodHouse proformas for this month, or provide NZ/KG files below.",
+            detail="No meal breakdown data in DB. Upload FoodHouse proformas first (data is auto-extracted).",
         )
 
-    def to_dict(b: MealBreakdown | None) -> dict:
+    # Group by month
+    months_set: set[date] = set()
+    by_month_site: dict[tuple[date, int], MealBreakdown] = {}
+    for b in all_breakdowns:
+        months_set.add(b.invoice_month)
+        by_month_site[(b.invoice_month, b.site_id)] = b
+
+    sorted_months = sorted(months_set)
+
+    # Row labels matching original structure
+    nz_rows = [
+        ("ימי עבודה", "working_days"),
+        ('סה"כ צהרים נס ציונה', "total_lunch"),
+        ('סה"כ חלבי נס ציונה', "total_dairy"),
+        ('סה"כ קבלנים בשרי', "contractors_meat"),
+        ('סה"כ קבלנים חלבי', "contractors_dairy"),
+        ('סה"כ ערב נס ציונה', "total_evening"),
+        ('תוספת למנה עיקרית(HP+קבלנים)', "supplement"),
+    ]
+    kg_rows = [
+        ("ימי עבודה", "working_days"),
+        ('סה"כ צהרים קרית גת', "total_lunch"),
+        ('סה"כ חלבי צהרים קרית גת', "total_dairy"),
+        ('סה"כ קבלנים צהרים בשרי', "contractors_meat"),
+        ('סה"כ קבלנים צהרים חלבי', "contractors_dairy"),
+        ('סה"כ ערב קרית גת', "total_evening"),
+        ('תוספת למנה עיקרית(HP+קבלנים)', "supplement"),
+    ]
+
+    def compute(b: MealBreakdown | None, field: str) -> int | float:
         if b is None:
-            return {k: 0 for k in ["hp_meat", "scitex_meat", "evening_hp", "evening_contractors",
-                                     "hp_dairy", "scitex_dairy", "supplement", "contractors_meat",
-                                     "contractors_dairy", "working_days"]}
-        return {
-            "hp_meat": b.hp_meat or 0, "scitex_meat": b.scitex_meat or 0,
-            "evening_hp": b.evening_hp or 0, "evening_contractors": b.evening_contractors or 0,
-            "hp_dairy": b.hp_dairy or 0, "scitex_dairy": b.scitex_dairy or 0,
-            "supplement": b.supplement or 0, "contractors_meat": b.contractors_meat or 0,
-            "contractors_dairy": b.contractors_dairy or 0, "working_days": b.working_days or 0,
-        }
+            return 0
+        if field == "working_days":
+            return b.working_days or 0
+        if field == "total_lunch":
+            return int((b.hp_meat or 0) + (b.scitex_meat or 0) + (b.hp_dairy or 0) + (b.scitex_dairy or 0) + (b.contractors_meat or 0) + (b.contractors_dairy or 0))
+        if field == "total_dairy":
+            return int((b.hp_dairy or 0) + (b.scitex_dairy or 0) + (b.contractors_dairy or 0))
+        if field == "total_evening":
+            return int((b.evening_hp or 0) + (b.evening_contractors or 0))
+        if field == "contractors_meat":
+            return int(b.contractors_meat or 0)
+        if field == "contractors_dairy":
+            return int(b.contractors_dairy or 0)
+        if field == "supplement":
+            return int(b.supplement or 0)
+        return 0
 
-    nz = to_dict(nz_data)
-    kg = to_dict(kg_data)
+    # Build workbook
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "ריכוז ארוחות"
+    ws.sheet_view.rightToLeft = True
 
-    summary_raw = await summary_file.read()
+    header_font = Font(bold=True, size=11)
+    header_fill = PatternFill("solid", fgColor="D9E1F2")
+    site_fill = PatternFill("solid", fgColor="E2EFDA")
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
 
-    # Compute aggregated values for summary Excel
-    # NZ site
-    nz_total_lunch = nz["hp_meat"] + nz["scitex_meat"] + nz["hp_dairy"] + nz["scitex_dairy"] + nz["contractors_meat"] + nz["contractors_dairy"]
-    nz_total_dairy = nz["hp_dairy"] + nz["scitex_dairy"] + nz["contractors_dairy"]
-    nz_total_evening = nz["evening_hp"] + nz["evening_contractors"]
+    # Row 1: Title
+    ws.cell(1, 1, "ריכוז מספרי ארוחות").font = Font(bold=True, size=14)
 
-    # KG site
-    kg_total_lunch = kg["hp_meat"] + kg["scitex_meat"] + kg["hp_dairy"] + kg["scitex_dairy"] + kg["contractors_meat"] + kg["contractors_dairy"]
-    kg_total_dairy = kg["hp_dairy"] + kg["scitex_dairy"] + kg["contractors_dairy"]
-    kg_total_evening = kg["evening_hp"] + kg["evening_contractors"]
+    # Row 3: headers — col A = site, col B = label, cols C+ = months
+    ws.cell(3, 1, "אתר").font = header_font
+    ws.cell(3, 2, "פרטים").font = header_font
+    ws.column_dimensions["A"].width = 12
+    ws.column_dimensions["B"].width = 35
 
-    # Load and update summary workbook
-    wb_summary = openpyxl.load_workbook(io.BytesIO(summary_raw))
-    ws = wb_summary["Sheet1"]
+    month_names_he = {
+        1: "ינואר", 2: "פברואר", 3: "מרץ", 4: "אפריל", 5: "מאי", 6: "יוני",
+        7: "יולי", 8: "אוגוסט", 9: "ספטמבר", 10: "אוקטובר", 11: "נובמבר", 12: "דצמבר",
+    }
+    for ci, m in enumerate(sorted_months):
+        col = ci + 3
+        label = f"{month_names_he.get(m.month, str(m.month))} {m.year}"
+        cell = ws.cell(3, col, label)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = thin_border
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 14
 
-    # Parse target month to find or create the column
-    try:
-        target_dt = datetime.strptime(target_month, "%Y-%m")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="target_month must be YYYY-MM format")
+    # NZ rows (starting row 4)
+    start_row = 4
+    ws.cell(start_row, 1, "נס ציונה").font = Font(bold=True)
+    ws.cell(start_row, 1).fill = site_fill
+    for ri, (label, field) in enumerate(nz_rows):
+        row = start_row + ri
+        ws.cell(row, 2, label).border = thin_border
+        if ri == 0:
+            ws.cell(row, 1).fill = site_fill
+        for ci, m in enumerate(sorted_months):
+            b = by_month_site.get((m, 1))
+            val = compute(b, field)
+            cell = ws.cell(row, ci + 3, val)
+            cell.border = thin_border
+            cell.number_format = "#,##0"
 
-    # Find the column matching target month (row 4 has datetime dates)
-    target_col = None
-    for c in range(3, ws.max_column + 5):
-        cell_val = ws.cell(4, c).value
-        if isinstance(cell_val, datetime) and cell_val.year == target_dt.year and cell_val.month == target_dt.month:
-            target_col = c
-            break
+    # KG rows
+    kg_start = start_row + len(nz_rows) + 1
+    ws.cell(kg_start, 1, "קרית גת").font = Font(bold=True)
+    ws.cell(kg_start, 1).fill = site_fill
+    for ri, (label, field) in enumerate(kg_rows):
+        row = kg_start + ri
+        ws.cell(row, 2, label).border = thin_border
+        if ri == 0:
+            ws.cell(row, 1).fill = site_fill
+        for ci, m in enumerate(sorted_months):
+            b = by_month_site.get((m, 2))
+            val = compute(b, field)
+            cell = ws.cell(row, ci + 3, val)
+            cell.border = thin_border
+            cell.number_format = "#,##0"
 
-    if target_col is None:
-        # Add new column at the end
-        target_col = ws.max_column + 1
-        ws.cell(4, target_col, target_dt)
-        ws.cell(4, target_col).number_format = "MMM YYYY"
-
-    # Write NZ data
-    ws.cell(5, target_col, nz["working_days"])          # ימי עבודה NZ
-    ws.cell(6, target_col, int(nz_total_lunch))          # סה"כ צהרים נס ציונה
-    ws.cell(7, target_col, int(nz_total_dairy))           # סה"כ חלבי נס ציונה
-    ws.cell(8, target_col, int(nz["contractors_meat"]))   # סה"כ קבלנים בשרי
-    ws.cell(9, target_col, int(nz["contractors_dairy"]))  # סה"כ קבלנים חלבי
-    ws.cell(10, target_col, int(nz_total_evening))        # סה"כ ערב נס ציונה
-    ws.cell(11, target_col, int(nz["supplement"]))        # תוספת למנה עיקרית NZ
-
-    # Write KG data
-    ws.cell(12, target_col, kg["working_days"])           # ימי עבודה KG
-    ws.cell(13, target_col, int(kg_total_lunch))          # סה"כ צהרים קרית גת
-    ws.cell(14, target_col, int(kg_total_dairy))          # סה"כ חלבי צהרים קרית גת
-    ws.cell(15, target_col, int(kg["contractors_meat"]))  # סה"כ קבלנים צהרים בשרי
-    ws.cell(16, target_col, int(kg["contractors_dairy"])) # סה"כ קבלנים צהרים חלבי
-    ws.cell(17, target_col, int(kg_total_evening))        # סה"כ ערב קרית גת
-    ws.cell(18, target_col, int(kg["supplement"]))        # תוספת למנה עיקרית KG
-
-    # Save to buffer and return
     output = io.BytesIO()
-    wb_summary.save(output)
+    wb.save(output)
     output.seek(0)
 
-    filename = f"meal_summary_updated_{target_month}.xlsx"
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": 'attachment; filename="meal_summary.xlsx"'},
     )
 
 
