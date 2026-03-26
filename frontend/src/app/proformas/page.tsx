@@ -286,8 +286,8 @@ export default function ProformasPage() {
                       <BarChart data={vendorAnalysis.spending_timeline}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `₪${(v/1000).toFixed(0)}k`} />
-                        <Tooltip formatter={(v: number) => [`₪${v.toLocaleString()}`, 'Spend']} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₪${(Number(v)/1000).toFixed(0)}k`} />
+                        <Tooltip formatter={(v) => [`₪${Number(v).toLocaleString()}`, 'Spend']} />
                         <Bar dataKey="total" fill="#7c3aed" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
