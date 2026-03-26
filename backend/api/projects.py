@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from backend.database import get_db
 from backend.models.user import User
-from backend.models.project import Project, ProjectTask, ProjectDocument
+from backend.models.project import Project, ProjectTask, ProjectDocument, TaskStatusHistory
 from backend.api.auth import get_current_user
 
 UPLOAD_DIR = "uploads/projects"
@@ -39,6 +39,17 @@ class DocumentResponse(BaseModel):
         from_attributes = True
 
 
+class StatusHistoryResponse(BaseModel):
+    id: int
+    from_status: str
+    to_status: str
+    changed_at: Optional[datetime]
+    changed_by: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
 class TaskResponse(BaseModel):
     id: int
     project_id: int
@@ -55,6 +66,7 @@ class TaskResponse(BaseModel):
     notes: Optional[str]
     created_at: Optional[datetime]
     documents: List[DocumentResponse] = []
+    status_history: List[StatusHistoryResponse] = []
 
     class Config:
         from_attributes = True
@@ -173,7 +185,7 @@ async def list_projects(
     """List all projects with tasks"""
     query = (
         select(Project)
-        .options(selectinload(Project.tasks).selectinload(ProjectTask.documents), selectinload(Project.documents), selectinload(Project.site))
+        .options(selectinload(Project.tasks).selectinload(ProjectTask.documents), selectinload(Project.tasks).selectinload(ProjectTask.status_history), selectinload(Project.documents), selectinload(Project.site))
         .order_by(Project.updated_at.desc())
     )
     if status:
@@ -195,7 +207,7 @@ async def get_project(
     """Get a single project with all tasks"""
     result = await db.execute(
         select(Project)
-        .options(selectinload(Project.tasks).selectinload(ProjectTask.documents), selectinload(Project.documents), selectinload(Project.site))
+        .options(selectinload(Project.tasks).selectinload(ProjectTask.documents), selectinload(Project.tasks).selectinload(ProjectTask.status_history), selectinload(Project.documents), selectinload(Project.site))
         .where(Project.id == project_id)
     )
     project = result.scalar_one_or_none()
@@ -221,7 +233,7 @@ async def create_project(
 
     result = await db.execute(
         select(Project)
-        .options(selectinload(Project.tasks).selectinload(ProjectTask.documents), selectinload(Project.documents), selectinload(Project.site))
+        .options(selectinload(Project.tasks).selectinload(ProjectTask.documents), selectinload(Project.tasks).selectinload(ProjectTask.status_history), selectinload(Project.documents), selectinload(Project.site))
         .where(Project.id == project.id)
     )
     project = result.scalar_one()
@@ -238,7 +250,7 @@ async def update_project(
     """Update a project"""
     result = await db.execute(
         select(Project)
-        .options(selectinload(Project.tasks).selectinload(ProjectTask.documents), selectinload(Project.documents), selectinload(Project.site))
+        .options(selectinload(Project.tasks).selectinload(ProjectTask.documents), selectinload(Project.tasks).selectinload(ProjectTask.status_history), selectinload(Project.documents), selectinload(Project.site))
         .where(Project.id == project_id)
     )
     project = result.scalar_one_or_none()
@@ -318,8 +330,20 @@ async def update_task(
 
     updates = data.model_dump(exclude_none=True)
 
+    # Record status change history
+    new_status = updates.get("status")
+    if new_status and new_status != task.status:
+        history_entry = TaskStatusHistory(
+            task_id=task.id,
+            from_status=task.status,
+            to_status=new_status,
+            changed_at=datetime.utcnow(),
+            changed_by=current_user.full_name or current_user.email,
+        )
+        db.add(history_entry)
+
     # Auto-set completed_at when status changes to done
-    if updates.get("status") == "done" and task.status != "done":
+    if new_status == "done" and task.status != "done":
         updates["completed_at"] = datetime.utcnow()
 
     for key, value in updates.items():

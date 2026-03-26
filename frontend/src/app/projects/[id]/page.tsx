@@ -8,8 +8,10 @@ import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, Plus, CheckCircle2, Circle, Clock, Ban,
   Pencil, Trash2, Link2, Upload, FileText, Download,
-  X, Paperclip, File as FileIcon, Image as ImageIcon
+  X, Paperclip, File as FileIcon, Image as ImageIcon,
+  GanttChart, List
 } from 'lucide-react';
+import { differenceInDays, addDays, startOfDay, max as dateMax, min as dateMin } from 'date-fns';
 import { projectsAPI } from '@/lib/api';
 import { format } from 'date-fns';
 
@@ -167,6 +169,110 @@ function DocumentList({ documents, projectId, onDelete }: DocumentListProps) {
   );
 }
 
+const GANTT_STATUS_COLORS: Record<string, string> = {
+  pending: 'bg-gray-300',
+  in_progress: 'bg-blue-400',
+  done: 'bg-green-400',
+  blocked: 'bg-red-400',
+};
+
+function GanttView({ tasks, project }: { tasks: any[]; project: any }) {
+  const tasksWithDates = tasks.filter((t: any) => t.due_date);
+  if (tasksWithDates.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center">
+          <p className="text-gray-500">Add due dates to tasks to see the Gantt chart.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const today = startOfDay(new Date());
+  const dueDates = tasksWithDates.map((t: any) => new Date(t.due_date));
+  const createdDates = tasksWithDates.map((t: any) => t.created_at ? new Date(t.created_at) : today);
+  const allDates = [...dueDates, ...createdDates, today];
+  if (project.start_date) allDates.push(new Date(project.start_date));
+  if (project.target_end_date) allDates.push(new Date(project.target_end_date));
+
+  const timelineStart = startOfDay(dateMin(allDates));
+  const timelineEnd = startOfDay(addDays(dateMax(allDates), 3));
+  const totalDays = Math.max(differenceInDays(timelineEnd, timelineStart), 1);
+
+  // Generate month labels
+  const months: { label: string; left: number; width: number }[] = [];
+  let cursor = new Date(timelineStart);
+  while (cursor <= timelineEnd) {
+    const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    const visibleStart = monthStart < timelineStart ? timelineStart : monthStart;
+    const visibleEnd = monthEnd > timelineEnd ? timelineEnd : monthEnd;
+    const left = (differenceInDays(visibleStart, timelineStart) / totalDays) * 100;
+    const width = (differenceInDays(visibleEnd, visibleStart) + 1) / totalDays * 100;
+    months.push({ label: format(cursor, 'MMM yyyy'), left, width });
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+
+  const todayPos = (differenceInDays(today, timelineStart) / totalDays) * 100;
+
+  return (
+    <Card>
+      <CardContent className="py-4 overflow-x-auto">
+        {/* Month headers */}
+        <div className="relative h-6 mb-2 min-w-[600px]" style={{ marginLeft: '160px' }}>
+          {months.map((m, i) => (
+            <div key={i} className="absolute text-xs text-gray-500 font-medium border-l border-gray-200 pl-1"
+              style={{ left: `${m.left}%`, width: `${m.width}%` }}>
+              {m.label}
+            </div>
+          ))}
+        </div>
+
+        {/* Task bars */}
+        <div className="space-y-1.5 min-w-[600px]">
+          {tasksWithDates.map((t: any, idx: number) => {
+            const taskStart = t.created_at ? startOfDay(new Date(t.created_at)) : today;
+            const taskEnd = startOfDay(new Date(t.due_date));
+            const barStart = Math.max(0, differenceInDays(taskStart, timelineStart));
+            const barEnd = differenceInDays(taskEnd, timelineStart);
+            const leftPct = (barStart / totalDays) * 100;
+            const widthPct = Math.max(((barEnd - barStart + 1) / totalDays) * 100, 1);
+            const isOverdue = t.status !== 'done' && taskEnd < today;
+
+            return (
+              <div key={t.id} className="flex items-center gap-2 h-7">
+                <div className="w-[150px] flex-shrink-0 truncate text-xs font-medium text-gray-700 text-right pr-2">
+                  {t.title}
+                </div>
+                <div className="flex-1 relative h-full bg-gray-50 rounded">
+                  {/* Today marker */}
+                  <div className="absolute top-0 bottom-0 w-px bg-red-300 z-10"
+                    style={{ left: `${todayPos}%` }} />
+                  {/* Task bar */}
+                  <div
+                    className={`absolute top-1 bottom-1 rounded-sm ${isOverdue ? 'bg-red-300 border border-red-400' : GANTT_STATUS_COLORS[t.status] || 'bg-gray-300'}`}
+                    style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: '4px' }}
+                    title={`${t.title} — ${t.status} (Due: ${format(taskEnd, 'MMM d')})`}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Legend */}
+        <div className="flex items-center gap-4 mt-4 ml-[160px] text-xs text-gray-500">
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-gray-300" /> Pending</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-blue-400" /> In Progress</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-green-400" /> Done</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-red-400" /> Blocked</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-1 bg-red-300" /> Today</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -180,6 +286,7 @@ export default function ProjectDetailPage() {
   const [uploadingTask, setUploadingTask] = useState<number | null>(null);
   const [expandedTask, setExpandedTask] = useState<number | null>(null);
   const [taskForm, setTaskForm] = useState({ ...EMPTY_TASK_FORM });
+  const [viewMode, setViewMode] = useState<'list' | 'gantt'>('list');
 
   useEffect(() => { loadProject(); }, [projectId]);
 
@@ -392,7 +499,23 @@ export default function ProjectDetailPage() {
 
       {/* Tasks */}
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Tasks & Phases</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold">Tasks & Phases</h2>
+          <div className="flex items-center border rounded-md overflow-hidden">
+            <button
+              onClick={() => setViewMode('list')}
+              className={`px-2 py-1 text-xs flex items-center gap-1 ${viewMode === 'list' ? 'bg-purple-100 text-purple-700' : 'text-gray-500 hover:bg-gray-50'}`}
+            >
+              <List className="w-3.5 h-3.5" /> List
+            </button>
+            <button
+              onClick={() => setViewMode('gantt')}
+              className={`px-2 py-1 text-xs flex items-center gap-1 ${viewMode === 'gantt' ? 'bg-purple-100 text-purple-700' : 'text-gray-500 hover:bg-gray-50'}`}
+            >
+              <GanttChart className="w-3.5 h-3.5" /> Gantt
+            </button>
+          </div>
+        </div>
         <Button onClick={() => { setShowTaskForm(!showTaskForm); setEditingTask(null); setTaskForm({ ...EMPTY_TASK_FORM }); }} size="sm" className="bg-purple-600 hover:bg-purple-700">
           <Plus className="w-4 h-4 mr-1" /> Add Task
         </Button>
@@ -434,19 +557,24 @@ export default function ProjectDetailPage() {
         </Card>
       )}
 
-      {tasks.length === 0 ? (
+      {viewMode === 'gantt' && tasks.length > 0 && (
+        <GanttView tasks={tasks} project={project} />
+      )}
+
+      {viewMode === 'list' && tasks.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center">
             <p className="text-gray-500">No tasks yet. Add your first task above.</p>
           </CardContent>
         </Card>
-      ) : (
+      ) : viewMode === 'list' ? (
         <div className="space-y-2">
           {tasks.map((t: any, idx: number) => {
             const taskDocs = t.documents || [];
             const isExpanded = expandedTask === t.id;
+            const isOverdue = t.due_date && t.status !== 'done' && new Date(t.due_date) < new Date(new Date().toDateString());
             return (
-              <Card key={t.id} className={`${t.status === 'done' ? 'opacity-60' : ''}`}>
+              <Card key={t.id} className={`${t.status === 'done' ? 'opacity-60' : ''} ${isOverdue ? 'bg-red-50 border-red-200' : ''}`}>
                 <CardContent className="py-3">
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-gray-400 w-6">{idx + 1}</span>
@@ -473,8 +601,8 @@ export default function ProjectDetailPage() {
                         )}
                       </div>
                       {t.due_date && (
-                        <span className="text-xs text-gray-500">
-                          Due: {format(new Date(t.due_date), 'MMM d')}
+                        <span className={`text-xs ${isOverdue ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                          Due: {format(new Date(t.due_date), 'MMM d')}{isOverdue ? ' ⚠' : ''}
                         </span>
                       )}
                     </div>
@@ -523,6 +651,23 @@ export default function ProjectDetailPage() {
                           <p className="text-sm text-gray-700">{t.notes}</p>
                         </div>
                       )}
+                      {/* Status change history */}
+                      {t.status_history && t.status_history.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-gray-500 mb-1">Status Changes</p>
+                          <div className="space-y-1">
+                            {t.status_history.map((h: any) => (
+                              <div key={h.id} className="flex items-center gap-2 text-xs text-gray-500">
+                                <span className="text-gray-400">{format(new Date(h.changed_at), 'MMM d, HH:mm')}</span>
+                                <span className="font-medium text-gray-600">{h.from_status}</span>
+                                <span>→</span>
+                                <span className="font-medium text-gray-600">{h.to_status}</span>
+                                {h.changed_by && <span className="text-gray-400">by {h.changed_by}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {/* Status buttons for mobile */}
                       <div className="flex gap-1 sm:hidden flex-wrap">
                         {TASK_STATUSES.filter(s => s !== t.status).map(s => (
@@ -556,7 +701,7 @@ export default function ProjectDetailPage() {
             );
           })}
         </div>
-      )}
+      ) : null}
     </main>
   );
 }

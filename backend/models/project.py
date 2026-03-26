@@ -54,6 +54,20 @@ class ProjectTask(Base):
     # Relationships
     project = relationship("Project", back_populates="tasks")
     documents = relationship("ProjectDocument", back_populates="task", foreign_keys="ProjectDocument.task_id")
+    status_history = relationship("TaskStatusHistory", back_populates="task", order_by="TaskStatusHistory.changed_at")
+
+
+class TaskStatusHistory(Base):
+    __tablename__ = "task_status_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("project_tasks.id"), nullable=False)
+    from_status = Column(String, nullable=False)
+    to_status = Column(String, nullable=False)
+    changed_at = Column(DateTime, default=datetime.utcnow)
+    changed_by = Column(String, nullable=True)
+
+    task = relationship("ProjectTask", back_populates="status_history")
 
 
 class ProjectDocument(Base):
