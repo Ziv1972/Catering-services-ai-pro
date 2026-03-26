@@ -127,7 +127,7 @@ Multi-agent orchestration with intent analysis, parallel execution, and result s
 
 | Service | File | Purpose |
 |---------|------|---------|
-| Claude API | `backend/services/claude_service.py` | Async Anthropic API wrapper |
+| Claude API | `backend/services/claude_service.py` | Async Anthropic API wrapper (generate_response, generate_vision_response, generate_with_tools, generate_structured_response) |
 | IMAP Email Poller | `backend/services/meal_email_poller.py` | Background Gmail IMAP poller for FoodHouse daily meal reports |
 | Menu Analysis | `backend/services/menu_analysis_service.py` | Compliance check engine |
 
@@ -144,7 +144,7 @@ Core: `User`, `Site`, `Supplier`, `Product`, `Proforma`, `ProformaItem`
 Budget: `SupplierBudget`, `SupplierProductBudget`, `MaintenanceBudget`, `MaintenanceExpense`
 Compliance: `ComplianceRule`, `MenuCheck`, `CheckResult`, `FineRule`
 Operations: `Meeting`, `MeetingNote`, `Complaint`, `ComplaintPattern`, `Anomaly`
-Tasks: `Project`, `ProjectTask`, `ProjectDocument`, `TodoItem`
+Tasks: `Project`, `ProjectTask`, `ProjectDocument`, `TaskStatusHistory`, `TodoItem`
 Analytics: `ProductCategoryGroup`, `ProductCategoryMapping`, `WorkingDaysEntry`
 Daily Ops: `DailyMealCount`, `HistoricalMealData`, `Attachment`
 
@@ -231,7 +231,7 @@ async def action(
 
 Compliance rules, meal types, product names, and some domain data are in Hebrew. The system manages catering for HP Israel — Hebrew text in database seeds and UI is expected.
 
-## What's Been Built (50 commits)
+## What's Been Built (56 commits)
 
 ### Phase 1: Foundation
 - FastAPI backend with async SQLAlchemy, JWT auth, 2-site support
@@ -288,11 +288,30 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - **Frontend AI evidence**: Shows matched items, frequency text, notes from Claude; hides old "Searched keyword" UI for AI results
 - **Max tokens fix**: Increased from 4096 to 16384 for AI compliance check (was silently truncating)
 
-### Phase 6c: PDF Proforma Upload Fix (Latest — 2026-03-26)
+### Phase 6c: PDF Proforma Upload Fix (2026-03-26)
 - **PDF Hebrew RTL fix**: pdfplumber extracts reversed Hebrew text in RTL PDFs — parser now detects and reverses it
 - **Header validation**: After table extraction, validates headers against known keywords (מוצר, כמות, מחיר, product, quantity, price)
 - **AI fallback**: If pdfplumber headers are unrecognizable even after reversal, skips to Claude AI text extraction
 - **Three-strategy pipeline**: 1) pdfplumber table + fix reversed Hebrew → 2) AI structured extraction from raw text → 3) error with guidance
+
+### Phase 6d: Project Improvements + AI Assistant Tool-Use (Latest — 2026-03-26b)
+- **Overdue task highlight**: Tasks with past due dates + not done get light red background (`bg-red-50`), red due date text + ⚠ icon
+- **Task status change history**: `TaskStatusHistory` model logs every status change with from_status, to_status, changed_at, changed_by. Shown in expanded task view
+- **Gantt chart view**: List/Gantt toggle on project detail page. Custom component with horizontal task bars, month headers, today marker (red line), status-colored bars, legend
+- **AI Assistant tool-use**: Complete rewrite of `backend/api/chat.py` using Claude tool-use with 8 data query tools:
+  - `query_spending`: Product-level proforma items by supplier/site/month with optional product search
+  - `query_budgets`: Budget allocations with monthly breakdown
+  - `query_meals`: Daily meal counts by type and site
+  - `query_violations`: Violations with severity, fines, patterns
+  - `query_meetings`: Upcoming/past meetings
+  - `query_price_lists`: Price comparison across suppliers
+  - `query_projects`: Projects with tasks and deadlines
+  - `query_summary`: High-level operational dashboard
+- **Tool-use loop**: Claude chains up to 5 tool calls per question for comprehensive answers
+- **Chart rendering**: `ChatMessageRenderer` component parses ````chart` JSON blocks into inline Recharts bar/line/pie charts
+- **Table rendering**: Markdown tables in AI responses rendered as styled HTML tables
+- **Excel export**: `POST /api/chat/export` generates downloadable .xlsx files (spending items, budgets, meals)
+- **`generate_with_tools()`**: New method on `ClaudeService` for tool-use API calls
 
 ## Session Summary Rules
 
@@ -331,6 +350,7 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - [x] **PDF proforma upload RTL fix** — Hebrew reversal detection + AI fallback (session 2026-03-26)
 
 ### Phase 7: Agent Intelligence Deepening
+- [ ] **Agent Crew PM per project** — Appoint most capable agent as PM for each project (track progress, suggest takeovers, alert problems, meeting summaries with relevant professionals)
 - [ ] Dedicated agent implementations (data_analyst, supplier_manager, daily_ops_monitor currently share BudgetIntelligenceAgent)
 - [ ] Sequential task dependencies in crew (currently all parallel)
 - [ ] Persistent crew sessions (currently in-memory)
