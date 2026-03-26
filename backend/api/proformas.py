@@ -667,70 +667,41 @@ async def generate_meal_summary(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Generate ריכוז מספרי ארוחות Excel from FoodHouse ProformaItem records."""
+    """Generate ריכוז מספרי ארוחות Excel from MealBreakdown records (extracted from ריכוז הכנסות sheet)."""
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from fastapi.responses import StreamingResponse
+    from backend.models.meal_breakdown import MealBreakdown
 
-    cutoff = date(2026, 1, 1)
-    result = await db.execute(
-        select(Proforma)
-        .options(selectinload(Proforma.items), selectinload(Proforma.supplier), selectinload(Proforma.site))
-        .join(Supplier)
-        .where(Supplier.name.ilike("%food%"), Proforma.invoice_date >= cutoff)
-        .order_by(Proforma.invoice_date.asc())
-    )
-    proformas = result.scalars().all()
-    if not proformas:
-        raise HTTPException(status_code=404, detail="No FoodHouse proformas found from Jan 2026 onward.")
+    result = await db.execute(select(MealBreakdown).order_by(MealBreakdown.invoice_month.asc()))
+    breakdowns = result.scalars().all()
+    if not breakdowns:
+        raise HTTPException(
+            status_code=404,
+            detail="No meal breakdown data. Upload FoodHouse proforma Excels first (click Upload Excel with the original .xlsx files).",
+        )
 
-    def classify_item(name: str) -> str | None:
-        n = name.strip()
-        if ("צהריים" in n and "בשרי" in n and "קבלנ" not in n) or ("צהריים" in n and "INDIGO" in n and "חלבי" not in n):
-            return "lunch_meat_hp"
-        if "צהריים" in n and "בשרי" in n and "קבלנ" in n:
-            return "lunch_meat_contractors"
-        if "צהריים" in n and ("סאייטקס" in n or "סאיטקס" in n or "סאטקס" in n) and "חלבי" not in n:
-            return "lunch_meat_scitex"
-        if "צהריים" in n and "חלבי" in n and "קבלנ" not in n and "סאייטקס" not in n and "סאיטקס" not in n and "סאטקס" not in n:
-            return "lunch_dairy_hp"
-        if "צהריים" in n and "חלבי" in n and "קבלנ" in n:
-            return "lunch_dairy_contractors"
-        if "צהריים" in n and "חלבי" in n and ("סאייטקס" in n or "סאיטקס" in n or "סאטקס" in n):
-            return "lunch_dairy_scitex"
-        if ("ערב" in n and "HP" in n) or ("ערב" in n and "עובדי" in n and "HP" in n):
-            return "evening_hp"
-        if "ערב" in n and ("קבלנ" in n or ("עובדי" in n and "HP" not in n)):
-            return "evening_contractors"
-        if "ארח" in n and "ערב" in n:
-            return "evening_hp"
-        if "תוספת" in n and "מנה" in n:
-            return "supplement"
-        return None
-
-    agg: dict[tuple[date, int, str], float] = {}
+    by_key: dict[tuple[date, int], MealBreakdown] = {}
     months_set: set[date] = set()
-    for p in proformas:
-        sid = p.site_id or 0
-        month = date(p.invoice_date.year, p.invoice_date.month, 1)
-        months_set.add(month)
-        for item in (p.items or []):
-            cat = classify_item(item.product_name or "")
-            if cat:
-                key = (month, sid, cat)
-                agg[key] = agg.get(key, 0) + float(item.quantity or 0)
-
+    for b in breakdowns:
+        months_set.add(b.invoice_month)
+        by_key[(b.invoice_month, b.site_id)] = b
     sorted_months = sorted(months_set)
-    gv = lambda m, s, c: int(agg.get((m, s, c), 0))
+
+    def gv(b: MealBreakdown | None, field: str) -> int:
+        if b is None:
+            return 0
+        return int(getattr(b, field, 0) or 0)
 
     def make_rows(sid: int, label: str):
         return [
-            (f'סה"כ צהרים {label}', lambda m, s=sid: gv(m,s,"lunch_meat_hp")+gv(m,s,"lunch_meat_scitex")+gv(m,s,"lunch_dairy_hp")+gv(m,s,"lunch_dairy_scitex")+gv(m,s,"lunch_meat_contractors")+gv(m,s,"lunch_dairy_contractors")),
-            (f'סה"כ חלבי {label}', lambda m, s=sid: gv(m,s,"lunch_dairy_hp")+gv(m,s,"lunch_dairy_scitex")+gv(m,s,"lunch_dairy_contractors")),
-            ('סה"כ קבלנים בשרי' if sid==1 else 'סה"כ קבלנים צהרים בשרי', lambda m, s=sid: gv(m,s,"lunch_meat_contractors")),
-            ('סה"כ קבלנים חלבי' if sid==1 else 'סה"כ קבלנים צהרים חלבי', lambda m, s=sid: gv(m,s,"lunch_dairy_contractors")),
-            (f'סה"כ ערב {label}', lambda m, s=sid: gv(m,s,"evening_hp")+gv(m,s,"evening_contractors")),
-            ('תוספת למנה עיקרית(HP+קבלנים)', lambda m, s=sid: gv(m,s,"supplement")),
+            ("ימי עבודה", lambda m, s=sid: gv(by_key.get((m,s)), "working_days")),
+            (f'סה"כ צהרים {label}', lambda m, s=sid: gv(by_key.get((m,s)),"hp_meat")+gv(by_key.get((m,s)),"scitex_meat")),
+            (f'סה"כ חלבי {label}', lambda m, s=sid: gv(by_key.get((m,s)),"hp_dairy")+gv(by_key.get((m,s)),"scitex_dairy")),
+            ('סה"כ קבלנים בשרי' if sid==1 else 'סה"כ קבלנים צהרים בשרי', lambda m, s=sid: gv(by_key.get((m,s)),"contractors_meat")),
+            ('סה"כ קבלנים חלבי' if sid==1 else 'סה"כ קבלנים צהרים חלבי', lambda m, s=sid: gv(by_key.get((m,s)),"contractors_dairy")),
+            (f'סה"כ ערב {label}', lambda m, s=sid: gv(by_key.get((m,s)),"evening_hp")+gv(by_key.get((m,s)),"evening_contractors")),
+            ('תוספת למנה עיקרית(HP+קבלנים)', lambda m, s=sid: gv(by_key.get((m,s)),"supplement")),
         ]
 
     nz_rows = make_rows(1, "נס ציונה")
