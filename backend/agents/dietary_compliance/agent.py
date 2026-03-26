@@ -87,7 +87,7 @@ class DietaryComplianceAgent(BaseAgent):
     async def get_compliance_summary(self, db: AsyncSession) -> Dict[str, Any]:
         """Get overall compliance summary from existing checks"""
         result = await db.execute(
-            select(MenuCheck).order_by(MenuCheck.check_date.desc()).limit(10)
+            select(MenuCheck).order_by(MenuCheck.checked_at.desc()).limit(10)
         )
         checks = result.scalars().all()
 

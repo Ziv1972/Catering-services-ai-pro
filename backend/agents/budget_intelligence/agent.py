@@ -9,6 +9,7 @@ from backend.models.operations import Anomaly
 from backend.models.historical_data import HistoricalMealData
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from backend.utils.db_compat import extract_year_month
 from datetime import date, timedelta
 from typing import Dict, Any, List
 import json
@@ -100,7 +101,7 @@ class BudgetIntelligenceAgent(BaseAgent):
         cutoff = date.today() - timedelta(days=180)
 
         query = select(
-            func.strftime("%Y-%m", HistoricalMealData.date).label("month"),
+            extract_year_month(HistoricalMealData.date).label("month"),
             func.sum(HistoricalMealData.cost).label("total_cost"),
             func.sum(HistoricalMealData.meal_count).label("total_meals"),
         ).where(HistoricalMealData.date >= cutoff.isoformat())
