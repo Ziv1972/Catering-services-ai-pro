@@ -463,10 +463,24 @@ async def _extract_and_save_meal_breakdown(
         v = ws.cell(row, 4).value
         return float(v) if isinstance(v, (int, float)) else 0.0
 
+    # Find working days — search for "ימי עבודה" label, value is in the cell to the right or below
     working_days = 0
-    wd_cell = ws.cell(29, 11).value  # K29
-    if isinstance(wd_cell, (int, float)):
-        working_days = int(wd_cell)
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            cell_val = ws.cell(r, c).value
+            if cell_val and isinstance(cell_val, str) and "ימי עבודה" in cell_val:
+                # Check cell below for the number
+                below = ws.cell(r + 1, c).value
+                if isinstance(below, (int, float)):
+                    working_days = int(below)
+                    break
+                # Check cell to the right
+                right = ws.cell(r, c + 1).value
+                if isinstance(right, (int, float)):
+                    working_days = int(right)
+                    break
+        if working_days:
+            break
 
     month_start = date(invoice_date.year, invoice_date.month, 1)
 
@@ -478,24 +492,29 @@ async def _extract_and_save_meal_breakdown(
     if old:
         await db.delete(old)
 
+    vals = {
+        "hp_meat": get_qty(5), "scitex_meat": get_qty(6),
+        "evening_hp": get_qty(7), "evening_contractors": get_qty(8),
+        "hp_dairy": get_qty(9), "scitex_dairy": get_qty(10),
+        "supplement": get_qty(11),
+        "contractors_meat": get_qty(14), "contractors_dairy": get_qty(15),
+    }
+    # Log row labels for debugging
+    for r in [5, 6, 7, 8, 9, 10, 11, 14, 15]:
+        label = ws.cell(r, 2).value or ws.cell(r, 1).value or ""
+        logger.info("  ריכוז הכנסות row %d: '%s' = %s", r, str(label)[:50], get_qty(r))
+    logger.info("  Working days = %d", working_days)
+
     breakdown = MealBreakdown(
         proforma_id=proforma_id,
         site_id=site_id,
         invoice_month=month_start,
-        hp_meat=get_qty(5),
-        scitex_meat=get_qty(6),
-        evening_hp=get_qty(7),
-        evening_contractors=get_qty(8),
-        hp_dairy=get_qty(9),
-        scitex_dairy=get_qty(10),
-        supplement=get_qty(11),
-        contractors_meat=get_qty(14),
-        contractors_dairy=get_qty(15),
         working_days=working_days,
+        **vals,
     )
     db.add(breakdown)
     await db.commit()
-    logger.info("Saved meal breakdown for proforma %d (site %d, month %s)", proforma_id, site_id, month_start)
+    logger.info("Saved meal breakdown for proforma %d (site %d, month %s): %s", proforma_id, site_id, month_start, vals)
     return True
 
 
