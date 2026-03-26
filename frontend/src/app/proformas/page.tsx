@@ -51,6 +51,8 @@ export default function ProformasPage() {
   // Meal summary updater
   const [showMealUpdate, setShowMealUpdate] = useState(false);
   const [mealSummaryFile, setMealSummaryFile] = useState<File | null>(null);
+  const [mealNzFile, setMealNzFile] = useState<File | null>(null);
+  const [mealKgFile, setMealKgFile] = useState<File | null>(null);
   const [mealUpdateMonth, setMealUpdateMonth] = useState(new Date().toISOString().slice(0, 7));
   const [mealUpdating, setMealUpdating] = useState(false);
 
@@ -120,7 +122,7 @@ export default function ProformasPage() {
     }
     setMealUpdating(true);
     try {
-      const blob = await proformasAPI.updateMealSummary(mealSummaryFile, mealUpdateMonth);
+      const blob = await proformasAPI.updateMealSummary(mealSummaryFile, mealUpdateMonth, mealNzFile, mealKgFile);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -130,9 +132,17 @@ export default function ProformasPage() {
       setShowMealUpdate(false);
       setMealSummaryFile(null);
     } catch (error: any) {
-      const detail = error?.response?.data instanceof Blob
-        ? await error.response.data.text().then((t: string) => { try { return JSON.parse(t).detail; } catch { return t; } })
-        : error?.response?.data?.detail || 'Failed to update meal summary';
+      let detail = 'Failed to update meal summary';
+      try {
+        const data = error?.response?.data;
+        if (data instanceof Blob) {
+          const text = await data.text();
+          const parsed = JSON.parse(text);
+          detail = parsed.detail || text;
+        } else if (data?.detail) {
+          detail = data.detail;
+        }
+      } catch { /* use default */ }
       alert(detail);
     } finally {
       setMealUpdating(false);
@@ -378,14 +388,14 @@ export default function ProformasPage() {
                 Update Meal Summary Excel
               </CardTitle>
               <p className="text-sm text-gray-500">
-                Uses meal breakdown data auto-extracted from uploaded FoodHouse proformas (NZ + KG).
-                Just select the summary file and month.
+                Meal data is auto-extracted when FoodHouse proformas are uploaded.
+                For older months, attach the NZ/KG proforma Excel files below.
               </p>
             </CardHeader>
             <CardContent>
-              <div className="flex flex-wrap items-end gap-4">
+              <div className="flex flex-wrap items-end gap-4 mb-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">ריכוז מספרי ארוחות file *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">ריכוז מספרי ארוחות *</label>
                   <input
                     type="file"
                     accept=".xlsx,.xls"
@@ -416,6 +426,21 @@ export default function ProformasPage() {
                   Cancel
                 </button>
               </div>
+              <details className="text-sm">
+                <summary className="cursor-pointer text-gray-500 hover:text-gray-700">
+                  Optional: Attach FoodHouse proforma Excels (for months without auto-extracted data)
+                </summary>
+                <div className="flex gap-4 mt-2 p-3 bg-gray-50 rounded-lg">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">NZ Proforma</label>
+                    <input type="file" accept=".xlsx,.xls" onChange={e => setMealNzFile(e.target.files?.[0] || null)} className="text-xs border rounded p-1" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">KG Proforma</label>
+                    <input type="file" accept=".xlsx,.xls" onChange={e => setMealKgFile(e.target.files?.[0] || null)} className="text-xs border rounded p-1" />
+                  </div>
+                </div>
+              </details>
             </CardContent>
           </Card>
         )}

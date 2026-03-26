@@ -878,13 +878,15 @@ async def get_vendor_spending(
 async def update_meal_summary(
     summary_file: UploadFile = File(..., alias="summary_file"),
     target_month: str = Form(...),
+    nz_file: UploadFile = File(None, alias="nz_file"),
+    kg_file: UploadFile = File(None, alias="kg_file"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update the ריכוז מספרי ארוחות summary Excel using meal breakdowns stored in DB.
+    """Update the ריכוז מספרי ארוחות summary Excel using meal breakdowns.
 
-    Finds MealBreakdown records for the target month (NZ site_id=1, KG site_id=2).
-    Data is auto-extracted from FoodHouse proformas at upload time.
+    First checks DB for auto-extracted data. If not found, accepts optional
+    NZ/KG proforma Excel files to extract on the fly (for backfilling).
     """
     import openpyxl
     from datetime import datetime
@@ -898,19 +900,38 @@ async def update_meal_summary(
 
     month_start = date(target_dt.year, target_dt.month, 1)
 
-    # Find meal breakdowns for this month from DB
+    # Try DB first
     result = await db.execute(
         select(MealBreakdown).where(MealBreakdown.invoice_month == month_start)
     )
     breakdowns = result.scalars().all()
-
     nz_data = next((b for b in breakdowns if b.site_id == 1), None)
     kg_data = next((b for b in breakdowns if b.site_id == 2), None)
+
+    # If no DB data, try extracting from uploaded files
+    if not nz_data and nz_file and nz_file.filename:
+        try:
+            nz_raw = await nz_file.read()
+            await _extract_and_save_meal_breakdown(nz_raw, 0, 0, 1, month_start, db)
+            r2 = await db.execute(select(MealBreakdown).where(MealBreakdown.invoice_month == month_start, MealBreakdown.site_id == 1))
+            nz_data = r2.scalar_one_or_none()
+        except Exception as e:
+            logger.warning("NZ file extraction failed: %s", e)
+
+    if not kg_data and kg_file and kg_file.filename:
+        try:
+            kg_raw = await kg_file.read()
+            await _extract_and_save_meal_breakdown(kg_raw, 0, 0, 2, month_start, db)
+            r2 = await db.execute(select(MealBreakdown).where(MealBreakdown.invoice_month == month_start, MealBreakdown.site_id == 2))
+            kg_data = r2.scalar_one_or_none()
+        except Exception as e:
+            logger.warning("KG file extraction failed: %s", e)
 
     if not nz_data and not kg_data:
         raise HTTPException(
             status_code=404,
-            detail=f"No meal breakdown data found for {target_month}. Upload FoodHouse proformas for this month first.",
+            detail=f"No meal breakdown data found for {target_month}. "
+                   f"Re-upload FoodHouse proformas for this month, or provide NZ/KG files below.",
         )
 
     def to_dict(b: MealBreakdown | None) -> dict:
