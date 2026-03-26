@@ -93,6 +93,28 @@ class ClaudeService:
 
         return response.content[0].text
 
+    async def generate_with_tools(
+        self,
+        messages: list,
+        system_prompt: str,
+        tools: list,
+        max_tokens: Optional[int] = None,
+    ):
+        """
+        Send messages with tool definitions. Returns the full response object
+        so the caller can handle tool_use blocks and loop.
+        """
+        if not self._available or self.client is None:
+            raise RuntimeError("AI service not configured: ANTHROPIC_API_KEY is not set")
+
+        return await self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens or self.max_tokens,
+            system=system_prompt,
+            messages=messages,
+            tools=tools,
+        )
+
     async def generate_structured_response(
         self,
         prompt: str,

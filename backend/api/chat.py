@@ -1,48 +1,182 @@
 """
-Chat interface API - Natural language interaction with the AI system
+Chat interface API — AI assistant with tool-use for full data access.
+
+Claude can call data-query tools to look up specific information on demand,
+then synthesize the results into a comprehensive answer.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from pydantic import BaseModel
 from datetime import date, datetime, timedelta
+from typing import Optional
+import json
+import logging
 
 from backend.database import get_db
 from backend.models.user import User
-from backend.models.proforma import Proforma
+from backend.models.proforma import Proforma, ProformaItem
 from backend.models.supplier_budget import SupplierBudget
 from backend.models.supplier import Supplier
 from backend.models.site import Site
+from backend.models.product import Product
+from backend.models.price_list import PriceList, PriceListItem
 from backend.models.violation import Violation
 from backend.models.meeting import Meeting
 from backend.models.todo import TodoItem
 from backend.models.daily_meal_count import DailyMealCount
 from backend.models.operations import Anomaly
+from backend.models.project import Project, ProjectTask
 from backend.api.auth import get_current_user
 from backend.services.claude_service import claude_service
 from backend.utils.db_compat import extract_month
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
 CHAT_SYSTEM_PROMPT = """You are an AI assistant for Catering Services at HP Israel.
 You help Ziv manage catering operations across Nes Ziona (NZ) and Kiryat Gat (KG) sites.
 
-You have access to live data context injected below your user's message. Use it to give
-specific, data-driven answers. When the user asks about spending, budgets, meals, violations,
-or operations — reference the exact numbers from the context.
+You have tools to query live data from the system database. Use them to answer questions
+with exact numbers. Always query the data — never guess or say you don't have access.
 
 You can help with:
 - Budget analysis: spending vs budget per supplier, per site, per month
+- Product-level detail: what was ordered, quantities, prices, by supplier/site/month
 - Meal tracking: daily meal counts by type and site
 - Violation management: open violations, severity, patterns, fines
 - Meeting preparation and upcoming schedule
+- Project tracking: tasks, status, deadlines
 - Anomaly detection and operational alerts
+- Price list comparison across suppliers
 - Forecasting and trend analysis based on historical data
 
-Be concise, actionable, and data-driven. Respond in the same language as the user's message
-(Hebrew or English). Use ₪ for currency amounts."""
+When presenting data:
+- Use ₪ for currency amounts
+- Format numbers with commas (1,234)
+- Use tables when comparing multiple items
+- Be concise and actionable
+- Respond in the same language as the user (Hebrew or English)
+
+When the user asks for a chart, include a JSON block tagged with ```chart that the frontend
+can render. Use this format:
+```chart
+{"type": "bar|line|pie", "title": "...", "data": [{"name": "...", "value": 123}], "xKey": "name", "yKey": "value"}
+```"""
+
+# ---------------------------------------------------------------------------
+# Tool definitions for Claude
+# ---------------------------------------------------------------------------
+CHAT_TOOLS = [
+    {
+        "name": "query_spending",
+        "description": "Query actual spending from proformas (invoices). Can filter by supplier, site, date range, and get per-product detail. Use this for questions about how much was spent, what was ordered, quantities, etc.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "supplier_name": {"type": "string", "description": "Filter by supplier name (partial match, case insensitive). E.g. 'FoodHouse', 'שף'"},
+                "site_name": {"type": "string", "description": "Filter by site: 'Nes Ziona' or 'NZ' or 'נס ציונה' for Nes Ziona, 'Kiryat Gat' or 'KG' or 'קרית גת' for Kiryat Gat"},
+                "month": {"type": "integer", "description": "Month number (1-12)"},
+                "year": {"type": "integer", "description": "Year (default: current year)"},
+                "include_items": {"type": "boolean", "description": "If true, include product-level line items (quantities, prices). Default false for summary, true for product questions."},
+                "product_search": {"type": "string", "description": "Search for specific products by name (partial match). E.g. 'פירות', 'fruit', 'עוף'"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "query_budgets",
+        "description": "Query budget allocations for suppliers by year. Shows planned budget vs actual spending.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer", "description": "Budget year (default: current year)"},
+                "supplier_name": {"type": "string", "description": "Filter by supplier name (partial match)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "query_meals",
+        "description": "Query daily meal counts. Shows meals served by type (Meat/Dairy/Main Only) and site.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "site_name": {"type": "string", "description": "Filter by site name"},
+                "days": {"type": "integer", "description": "Number of days to look back (default: 30)"},
+                "month": {"type": "integer", "description": "Specific month (1-12)"},
+                "year": {"type": "integer", "description": "Year"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "query_violations",
+        "description": "Query violations/complaints with status, severity, fines, and patterns.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "Filter by status: open, investigating, resolved"},
+                "site_name": {"type": "string", "description": "Filter by site"},
+                "limit": {"type": "integer", "description": "Max results (default: 10)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "query_meetings",
+        "description": "Query upcoming or past meetings.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "upcoming": {"type": "boolean", "description": "True for upcoming, false for past (default: true)"},
+                "limit": {"type": "integer", "description": "Max results (default: 5)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "query_price_lists",
+        "description": "Query price lists and compare product prices across suppliers.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "supplier_name": {"type": "string", "description": "Filter by supplier"},
+                "product_search": {"type": "string", "description": "Search products by name"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "query_projects",
+        "description": "Query projects and their tasks with status and deadlines.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string", "description": "Filter by project name (partial match)"},
+                "include_tasks": {"type": "boolean", "description": "Include task details (default: true)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "query_summary",
+        "description": "Get a high-level operational summary: total suppliers, open violations, upcoming meetings, budget status, meal averages. Use for general status questions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+]
 
 
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
 class ChatMessage(BaseModel):
     message: str
 
@@ -52,428 +186,479 @@ class ChatResponse(BaseModel):
     suggestions: list[str] = []
 
 
-MONTH_COLS = ["jan", "feb", "mar", "apr", "may", "jun",
-              "jul", "aug", "sep", "oct", "nov", "dec"]
-MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
-               "July", "August", "September", "October", "November", "December"]
+# ---------------------------------------------------------------------------
+# Helper: resolve site name to ID
+# ---------------------------------------------------------------------------
+def _match_site(name: str, sites: dict) -> Optional[int]:
+    """Resolve a site name/alias to site ID."""
+    if not name:
+        return None
+    name_lower = name.lower().strip()
+    aliases = {
+        "nz": "nes ziona", "nes ziona": "nes ziona", "נס ציונה": "nes ziona",
+        "kg": "kiryat gat", "kiryat gat": "kiryat gat", "קרית גת": "kiryat gat",
+    }
+    normalized = aliases.get(name_lower, name_lower)
+    for sid, sname in sites.items():
+        if normalized in sname.lower() or sname.lower() in normalized:
+            return sid
+    return None
 
 
-async def _build_budget_context(db: AsyncSession, current_year: int, current_month: int, suppliers: dict) -> tuple[str, list]:
-    """Build per-supplier budget allocations for the current year."""
-    budget_result = await db.execute(
-        select(SupplierBudget)
-        .where(SupplierBudget.year == current_year, SupplierBudget.is_active == True)
-    )
-    budgets = budget_result.scalars().all()
-    if not budgets:
-        return "", []
+# ---------------------------------------------------------------------------
+# Tool execution handlers
+# ---------------------------------------------------------------------------
+async def _exec_query_spending(db: AsyncSession, params: dict, suppliers: dict, sites: dict) -> str:
+    """Execute spending query with optional product-level detail."""
+    year = params.get("year", date.today().year)
+    month = params.get("month")
+    include_items = params.get("include_items", False)
+    product_search = params.get("product_search")
+    supplier_name = params.get("supplier_name")
+    site_name = params.get("site_name")
 
-    lines = [f"Supplier budget allocations ({current_year}):"]
-    total_yearly = 0
-    total_monthly = 0
-    for b in budgets:
-        supplier_name = suppliers.get(b.supplier_id, f"Supplier #{b.supplier_id}")
-        monthly_val = getattr(b, MONTH_COLS[current_month - 1]) or 0
-        yearly_val = b.yearly_amount or 0
-        total_yearly += yearly_val
-        total_monthly += monthly_val
+    # If product search requested, force include_items
+    if product_search:
+        include_items = True
 
-        # Build monthly breakdown string for this supplier
-        monthly_vals = []
-        for mi in range(12):
-            val = getattr(b, MONTH_COLS[mi]) or 0
-            if val > 0:
-                monthly_vals.append(f"{MONTH_NAMES[mi][:3]}=₪{val:,.0f}")
-        monthly_str = ", ".join(monthly_vals) if monthly_vals else "no monthly data"
+    # Build filters
+    filters = [Proforma.invoice_date.isnot(None)]
 
-        lines.append(
-            f"  {supplier_name}: yearly=₪{yearly_val:,.0f}, "
-            f"this month ({MONTH_NAMES[current_month-1][:3]})=₪{monthly_val:,.0f} | {monthly_str}"
-        )
+    if month:
+        start = date(year, month, 1)
+        end = date(year, month + 1, 1) if month < 12 else date(year + 1, 1, 1)
+        filters.append(Proforma.invoice_date >= start)
+        filters.append(Proforma.invoice_date < end)
+    else:
+        filters.append(Proforma.invoice_date >= date(year, 1, 1))
+        filters.append(Proforma.invoice_date < date(year + 1, 1, 1))
 
-    lines.insert(1, f"  TOTALS: yearly=₪{total_yearly:,.0f}, this month=₪{total_monthly:,.0f}")
-    return "\n".join(lines), budgets
+    if supplier_name:
+        matching_ids = [sid for sid, sn in suppliers.items() if supplier_name.lower() in sn.lower()]
+        if matching_ids:
+            filters.append(Proforma.supplier_id.in_(matching_ids))
+        else:
+            return f"No supplier found matching '{supplier_name}'"
 
+    site_id = _match_site(site_name, sites) if site_name else None
+    if site_name and not site_id:
+        return f"No site found matching '{site_name}'"
+    if site_id:
+        filters.append(Proforma.site_id == site_id)
 
-async def _build_spending_context(
-    db: AsyncSession, current_year: int, current_month: int,
-    suppliers: dict, sites: dict, budgets: list
-) -> str:
-    """Build per-supplier × per-month × per-site actual spending (last 6 months)."""
-    # Determine 6-month window
-    months_window = []
-    for i in range(6):
-        m = current_month - i
-        y = current_year
-        if m <= 0:
-            m += 12
-            y -= 1
-        months_window.append((y, m))
-
-    start_date = date(months_window[-1][0], months_window[-1][1], 1)
-
-    month_expr = extract_month(Proforma.invoice_date)
-    spending_result = await db.execute(
+    # Summary query
+    result = await db.execute(
         select(
             Proforma.supplier_id,
             Proforma.site_id,
-            month_expr.label("month"),
-            func.sum(Proforma.total_amount).label("total"),
             func.count(Proforma.id).label("count"),
+            func.sum(Proforma.total_amount).label("total"),
         )
-        .where(
-            Proforma.invoice_date.isnot(None),
-            Proforma.invoice_date >= start_date,
-        )
-        .group_by(Proforma.supplier_id, Proforma.site_id, month_expr)
+        .where(and_(*filters))
+        .group_by(Proforma.supplier_id, Proforma.site_id)
     )
-    rows = spending_result.all()
+    rows = result.all()
 
     if not rows:
-        return ""
+        period = f"{year}/{month}" if month else str(year)
+        return f"No spending data found for the specified filters (period: {period})"
 
-    # Build lookup: { (supplier_id, site_id, month_int): {total, count} }
-    lookup = {}
+    lines = []
+    grand_total = 0
     for row in rows:
-        month_int = int(row.month)
-        lookup[(row.supplier_id, row.site_id, month_int)] = {
-            "total": float(row.total or 0),
-            "count": int(row.count or 0),
-        }
+        s_name = suppliers.get(row.supplier_id, f"Supplier #{row.supplier_id}")
+        st_name = sites.get(row.site_id, f"Site #{row.site_id}")
+        total = float(row.total or 0)
+        grand_total += total
+        lines.append(f"  {s_name} @ {st_name}: ₪{total:,.0f} ({row.count} invoices)")
 
-    # Build budget lookup for quick access
-    budget_map = {}  # { (supplier_id, month_int): budget_amount }
-    for b in budgets:
-        for mi in range(12):
-            val = getattr(b, MONTH_COLS[mi]) or 0
-            if val > 0:
-                budget_map[(b.supplier_id, mi + 1)] = (
-                    budget_map.get((b.supplier_id, mi + 1), 0) + val
-                )
+    period_label = f"{['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][month-1]} {year}" if month else str(year)
+    header = f"Spending summary ({period_label}):\n  TOTAL: ₪{grand_total:,.0f}\n"
+    result_text = header + "\n".join(lines)
 
-    sections = []
-
-    # --- Detailed per-supplier × per-month spending ---
-    # Group by supplier
-    supplier_data = {}
-    for (sid, stid, m), v in lookup.items():
-        supplier_data.setdefault(sid, []).append((stid, m, v))
-
-    detail_lines = ["Actual spending detail (supplier × month × site, last 6 months):"]
-    for sid in sorted(supplier_data.keys(), key=lambda x: suppliers.get(x, "")):
-        supplier_name = suppliers.get(sid, f"Supplier #{sid}")
-        entries = supplier_data[sid]
-
-        # Group by month for this supplier
-        monthly = {}
-        for stid, m, v in entries:
-            site_name = sites.get(stid, f"Site #{stid}")
-            monthly.setdefault(m, []).append((site_name, v["total"], v["count"]))
-
-        for year, month in months_window:
-            if month in monthly:
-                site_parts = []
-                month_total = 0
-                for site_name, total, count in monthly[month]:
-                    site_parts.append(f"{site_name}=₪{total:,.0f}({count} inv)")
-                    month_total += total
-
-                budget_val = budget_map.get((sid, month), 0)
-                variance_str = ""
-                if budget_val > 0 and year == current_year:
-                    variance = budget_val - month_total
-                    pct = (month_total / budget_val) * 100
-                    status = "under" if variance >= 0 else "OVER"
-                    variance_str = f" | budget=₪{budget_val:,.0f}, {status} by ₪{abs(variance):,.0f} ({pct:.0f}%)"
-
-                detail_lines.append(
-                    f"  {supplier_name} | {MONTH_NAMES[month-1][:3]} {year}: "
-                    f"₪{month_total:,.0f} [{', '.join(site_parts)}]{variance_str}"
-                )
-
-    sections.append("\n".join(detail_lines))
-
-    # --- Monthly totals summary ---
-    summary_lines = ["Monthly spending totals (last 6 months):"]
-    for year, month in months_window:
-        month_total = sum(
-            v["total"] for (sid, stid, m), v in lookup.items() if m == month
+    # Product-level detail
+    if include_items:
+        # Get proforma IDs matching filters
+        proforma_result = await db.execute(
+            select(Proforma.id, Proforma.supplier_id, Proforma.site_id)
+            .where(and_(*filters))
         )
-        if month_total > 0:
-            total_budget = sum(
-                budget_map.get((b.supplier_id, month), 0)
-                for b in budgets
-            ) if budgets else 0
-            # Deduplicate: budget_map already aggregated, so just sum unique supplier budgets
-            total_budget_month = sum(
-                v for (sid, mi), v in budget_map.items() if mi == month
+        proformas = proforma_result.all()
+        proforma_ids = [p.id for p in proformas]
+        proforma_map = {p.id: (suppliers.get(p.supplier_id, "?"), sites.get(p.site_id, "?")) for p in proformas}
+
+        if proforma_ids:
+            item_filters = [ProformaItem.proforma_id.in_(proforma_ids)]
+            if product_search:
+                item_filters.append(ProformaItem.product_name.ilike(f"%{product_search}%"))
+
+            item_result = await db.execute(
+                select(
+                    ProformaItem.product_name,
+                    ProformaItem.proforma_id,
+                    ProformaItem.quantity,
+                    ProformaItem.unit_price,
+                    ProformaItem.total_price,
+                    ProformaItem.unit,
+                )
+                .where(and_(*item_filters))
+                .order_by(ProformaItem.total_price.desc())
+                .limit(50)
             )
-            var_str = ""
-            if total_budget_month > 0 and year == current_year:
-                var = total_budget_month - month_total
-                pct = (month_total / total_budget_month) * 100
-                var_str = f" | budget=₪{total_budget_month:,.0f}, {'under' if var >= 0 else 'OVER'} ₪{abs(var):,.0f} ({pct:.0f}%)"
-            summary_lines.append(f"  {MONTH_NAMES[month-1]} {year}: ₪{month_total:,.0f}{var_str}")
+            items = item_result.all()
 
-    sections.append("\n".join(summary_lines))
+            if items:
+                result_text += f"\n\nProduct details ({len(items)} items):"
+                for item in items:
+                    supplier_site = proforma_map.get(item.proforma_id, ("?", "?"))
+                    qty_str = f"{item.quantity:,.1f}" if item.quantity else "?"
+                    unit_str = item.unit or ""
+                    price_str = f"₪{item.unit_price:,.2f}" if item.unit_price else "?"
+                    total_str = f"₪{item.total_price:,.2f}" if item.total_price else "?"
+                    result_text += (
+                        f"\n  {item.product_name}: {qty_str} {unit_str} × {price_str} = {total_str}"
+                        f" [{supplier_site[0]} @ {supplier_site[1]}]"
+                    )
+            elif product_search:
+                result_text += f"\n\nNo products found matching '{product_search}'"
 
-    # --- Site totals ---
-    site_totals = {}
-    for (sid, stid, m), v in lookup.items():
-        site_name = sites.get(stid, f"Site #{stid}")
-        site_totals[site_name] = site_totals.get(site_name, 0) + v["total"]
-
-    if site_totals:
-        site_lines = ["Spending by site (last 6 months):"]
-        for name, total in sorted(site_totals.items(), key=lambda x: x[1], reverse=True):
-            site_lines.append(f"  {name}: ₪{total:,.0f}")
-        sections.append("\n".join(site_lines))
-
-    return "\n\n".join(sections)
+    return result_text
 
 
-async def _build_meals_context(db: AsyncSession, sites: dict) -> str:
-    """Build daily meal count summary for the last 30 days."""
-    cutoff = date.today() - timedelta(days=30)
-    meal_result = await db.execute(
+async def _exec_query_budgets(db: AsyncSession, params: dict, suppliers: dict) -> str:
+    """Query budget allocations."""
+    year = params.get("year", date.today().year)
+    supplier_name = params.get("supplier_name")
+
+    filters = [SupplierBudget.year == year, SupplierBudget.is_active == True]
+    if supplier_name:
+        matching_ids = [sid for sid, sn in suppliers.items() if supplier_name.lower() in sn.lower()]
+        if matching_ids:
+            filters.append(SupplierBudget.supplier_id.in_(matching_ids))
+
+    result = await db.execute(select(SupplierBudget).where(and_(*filters)))
+    budgets = result.scalars().all()
+
+    if not budgets:
+        return f"No budgets found for {year}"
+
+    month_cols = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    lines = [f"Budget allocations ({year}):"]
+    total_yearly = 0
+    for b in budgets:
+        s_name = suppliers.get(b.supplier_id, f"Supplier #{b.supplier_id}")
+        yearly = b.yearly_amount or 0
+        total_yearly += yearly
+        monthly_parts = []
+        for i, col in enumerate(month_cols):
+            val = getattr(b, col) or 0
+            if val > 0:
+                monthly_parts.append(f"{month_names[i]}=₪{val:,.0f}")
+        lines.append(f"  {s_name}: yearly=₪{yearly:,.0f} | {', '.join(monthly_parts)}")
+
+    lines.insert(1, f"  TOTAL: ₪{total_yearly:,.0f}")
+    return "\n".join(lines)
+
+
+async def _exec_query_meals(db: AsyncSession, params: dict, sites: dict) -> str:
+    """Query meal counts."""
+    site_name = params.get("site_name")
+    days = params.get("days", 30)
+    month = params.get("month")
+    year = params.get("year", date.today().year)
+
+    filters = []
+    if month:
+        start = date(year, month, 1)
+        end = date(year, month + 1, 1) if month < 12 else date(year + 1, 1, 1)
+        filters.append(DailyMealCount.date >= start)
+        filters.append(DailyMealCount.date < end)
+    else:
+        cutoff = date.today() - timedelta(days=days)
+        filters.append(DailyMealCount.date >= cutoff)
+
+    site_id = _match_site(site_name, sites) if site_name else None
+    if site_id:
+        filters.append(DailyMealCount.site_id == site_id)
+
+    result = await db.execute(
         select(
             DailyMealCount.site_id,
             DailyMealCount.meal_type_en,
             func.sum(DailyMealCount.quantity).label("total"),
             func.count(DailyMealCount.id).label("days"),
+            func.avg(DailyMealCount.quantity).label("avg"),
         )
-        .where(DailyMealCount.date >= cutoff)
+        .where(and_(*filters))
         .group_by(DailyMealCount.site_id, DailyMealCount.meal_type_en)
     )
-    rows = meal_result.all()
-    if not rows:
-        return ""
+    rows = result.all()
 
-    lines = ["Daily meal counts (last 30 days):"]
-    site_meals = {}
+    if not rows:
+        return "No meal data found for the specified filters"
+
+    lines = ["Meal counts:"]
     for row in rows:
-        site_name = sites.get(row.site_id, f"Site #{row.site_id}")
+        st_name = sites.get(row.site_id, f"Site #{row.site_id}")
         meal_type = row.meal_type_en or "Unknown"
         total = float(row.total or 0)
-        days = int(row.days or 0)
-        avg = total / days if days > 0 else 0
-        site_meals.setdefault(site_name, []).append(
-            f"{meal_type}: {total:,.0f} total ({days} days, avg {avg:,.0f}/day)"
-        )
-
-    for site_name, meals in site_meals.items():
-        lines.append(f"  {site_name}:")
-        for m in meals:
-            lines.append(f"    {m}")
+        avg_val = float(row.avg or 0)
+        lines.append(f"  {st_name} — {meal_type}: {total:,.0f} total ({row.days} days, avg {avg_val:,.0f}/day)")
 
     return "\n".join(lines)
 
 
-async def _build_violations_context(db: AsyncSession, sites: dict) -> str:
-    """Build violation summary with categories, severities, and recent items."""
-    # Summary by status
-    status_result = await db.execute(
-        select(Violation.status, func.count(Violation.id))
-        .group_by(Violation.status)
-    )
-    status_counts = {row[0]: row[1] for row in status_result.all()}
-    if not status_counts:
-        return ""
+async def _exec_query_violations(db: AsyncSession, params: dict, sites: dict) -> str:
+    """Query violations."""
+    status = params.get("status")
+    site_name = params.get("site_name")
+    limit = params.get("limit", 10)
 
-    lines = ["Violations summary:"]
-    lines.append(f"  By status: {', '.join(f'{s}={c}' for s, c in status_counts.items())}")
+    filters = []
+    if status:
+        filters.append(Violation.status == status)
+    site_id = _match_site(site_name, sites) if site_name else None
+    if site_id:
+        filters.append(Violation.site_id == site_id)
 
-    # Open violations by category and severity
-    open_result = await db.execute(
-        select(
-            Violation.category,
-            Violation.severity,
-            Violation.site_id,
-            func.count(Violation.id).label("cnt"),
-            func.sum(Violation.fine_amount).label("fines"),
-        )
-        .where(Violation.status != "resolved")
-        .group_by(Violation.category, Violation.severity, Violation.site_id)
-    )
-    open_rows = open_result.all()
-    if open_rows:
-        lines.append("  Open violations breakdown:")
-        for row in open_rows:
-            site_name = sites.get(row.site_id, "Unknown")
-            fine_str = f", fines=₪{float(row.fines):,.0f}" if row.fines else ""
-            lines.append(
-                f"    {row.category or 'N/A'} | {row.severity or 'N/A'} | "
-                f"{site_name}: {row.cnt} violations{fine_str}"
-            )
-
-    # Recent 5 violations for detail
-    recent_result = await db.execute(
+    result = await db.execute(
         select(Violation)
-        .where(Violation.status != "resolved")
+        .where(and_(*filters)) if filters else select(Violation)
         .order_by(Violation.received_at.desc())
-        .limit(5)
+        .limit(limit)
     )
-    recent = recent_result.scalars().all()
-    if recent:
-        lines.append("  Recent open violations:")
-        for v in recent:
-            site_name = sites.get(v.site_id, "Unknown")
-            fine_str = f", fine=₪{v.fine_amount:,.0f}" if v.fine_amount else ""
-            text_preview = (v.violation_text or "")[:80]
-            lines.append(
-                f"    [{v.severity or 'N/A'}] {v.category or 'N/A'} @ {site_name} "
-                f"({v.status}){fine_str}: {text_preview}"
-            )
+    violations = result.scalars().all()
+
+    if not violations:
+        return "No violations found"
+
+    lines = [f"Violations ({len(violations)} results):"]
+    for v in violations:
+        st_name = sites.get(v.site_id, "?")
+        fine = f", fine=₪{v.fine_amount:,.0f}" if v.fine_amount else ""
+        text = (v.violation_text or "")[:100]
+        lines.append(
+            f"  [{v.severity or '?'}] {v.category or '?'} @ {st_name} — {v.status}{fine}"
+            f"\n    {text}"
+        )
 
     return "\n".join(lines)
 
 
-async def _build_meetings_context(db: AsyncSession, sites: dict) -> str:
-    """Build upcoming meetings detail."""
+async def _exec_query_meetings(db: AsyncSession, params: dict, sites: dict) -> str:
+    """Query meetings."""
+    upcoming = params.get("upcoming", True)
+    limit = params.get("limit", 5)
     now = datetime.now()
-    meeting_result = await db.execute(
-        select(Meeting)
-        .where(Meeting.scheduled_at >= now)
-        .order_by(Meeting.scheduled_at.asc())
-        .limit(5)
-    )
-    meetings = meeting_result.scalars().all()
+
+    query = select(Meeting)
+    if upcoming:
+        query = query.where(Meeting.scheduled_at >= now).order_by(Meeting.scheduled_at.asc())
+    else:
+        query = query.where(Meeting.scheduled_at < now).order_by(Meeting.scheduled_at.desc())
+    query = query.limit(limit)
+
+    result = await db.execute(query)
+    meetings = result.scalars().all()
+
     if not meetings:
-        return ""
+        return "No meetings found"
 
-    lines = [f"Upcoming meetings ({len(meetings)}):"]
+    label = "Upcoming" if upcoming else "Past"
+    lines = [f"{label} meetings ({len(meetings)}):"]
     for m in meetings:
-        site_name = sites.get(m.site_id, "")
-        site_str = f" @ {site_name}" if site_name else ""
+        st_name = sites.get(m.site_id, "")
+        site_str = f" @ {st_name}" if st_name else ""
         lines.append(
-            f"  {m.scheduled_at.strftime('%Y-%m-%d %H:%M')} | {m.title or 'Untitled'} "
-            f"({m.meeting_type or 'general'}{site_str}, {m.duration_minutes or 60}min)"
+            f"  {m.scheduled_at.strftime('%Y-%m-%d %H:%M')} | {m.title or 'Untitled'}"
+            f" ({m.meeting_type or 'general'}{site_str}, {m.duration_minutes or 60}min)"
         )
 
     return "\n".join(lines)
 
 
-async def _build_anomalies_context(db: AsyncSession) -> str:
-    """Build active anomaly alerts."""
-    anomaly_result = await db.execute(
-        select(Anomaly)
-        .where(Anomaly.resolved == False)
-        .order_by(Anomaly.detected_at.desc())
-        .limit(10)
-    )
-    anomalies = anomaly_result.scalars().all()
-    if not anomalies:
-        return ""
+async def _exec_query_price_lists(db: AsyncSession, params: dict, suppliers: dict) -> str:
+    """Query price lists."""
+    supplier_name = params.get("supplier_name")
+    product_search = params.get("product_search")
 
-    lines = [f"Active anomalies ({len(anomalies)}):"]
-    for a in anomalies:
-        exp = f"expected=₪{a.expected_value:,.0f}" if a.expected_value else ""
-        act = f"actual=₪{a.actual_value:,.0f}" if a.actual_value else ""
-        var = f"variance={a.variance_percent:.0f}%" if a.variance_percent else ""
-        metrics = ", ".join(filter(None, [exp, act, var]))
-        metrics_str = f" ({metrics})" if metrics else ""
-        lines.append(
-            f"  [{a.severity or 'N/A'}] {a.anomaly_type or 'unknown'} — "
-            f"{a.description or 'no details'}{metrics_str}"
-        )
+    query = select(PriceList)
+    if supplier_name:
+        matching_ids = [sid for sid, sn in suppliers.items() if supplier_name.lower() in sn.lower()]
+        if matching_ids:
+            query = query.where(PriceList.supplier_id.in_(matching_ids))
+
+    result = await db.execute(query.order_by(PriceList.effective_date.desc()).limit(10))
+    price_lists = result.scalars().all()
+
+    if not price_lists:
+        return "No price lists found"
+
+    lines = [f"Price lists ({len(price_lists)}):"]
+    for pl in price_lists:
+        s_name = suppliers.get(pl.supplier_id, "?")
+        lines.append(f"\n  {pl.name} ({s_name}) — effective: {pl.effective_date}")
+
+        # Get items
+        item_query = select(PriceListItem).where(PriceListItem.price_list_id == pl.id)
+        if product_search:
+            item_query = item_query.where(PriceListItem.product_name.ilike(f"%{product_search}%"))
+        item_query = item_query.order_by(PriceListItem.product_name).limit(30)
+
+        item_result = await db.execute(item_query)
+        items = item_result.scalars().all()
+        for item in items:
+            unit = item.unit or ""
+            lines.append(f"    {item.product_name}: ₪{item.price:,.2f}/{unit}" if item.price else f"    {item.product_name}: no price")
 
     return "\n".join(lines)
 
 
-async def _build_todos_context(db: AsyncSession, user: User, today: date) -> str:
-    """Build open tasks summary."""
-    todo_result = await db.execute(
-        select(func.count(TodoItem.id))
-        .where(TodoItem.user_id == user.id, TodoItem.status != "done")
-    )
-    open_todos = todo_result.scalar() or 0
-    if open_todos == 0:
-        return ""
+async def _exec_query_projects(db: AsyncSession, params: dict) -> str:
+    """Query projects and tasks."""
+    project_name = params.get("project_name")
+    include_tasks = params.get("include_tasks", True)
 
-    overdue_result = await db.execute(
-        select(func.count(TodoItem.id))
-        .where(
-            TodoItem.user_id == user.id,
-            TodoItem.status != "done",
-            TodoItem.due_date < today,
+    from sqlalchemy.orm import selectinload
+    query = select(Project).options(selectinload(Project.tasks), selectinload(Project.site))
+    if project_name:
+        query = query.where(Project.name.ilike(f"%{project_name}%"))
+
+    result = await db.execute(query)
+    projects = result.scalars().all()
+
+    if not projects:
+        return "No projects found"
+
+    lines = [f"Projects ({len(projects)}):"]
+    for p in projects:
+        site_name = p.site.name if p.site else "?"
+        tasks = list(p.tasks) if p.tasks else []
+        done = sum(1 for t in tasks if t.status == "done")
+        lines.append(
+            f"\n  {p.name} — {p.status} ({p.priority}) @ {site_name}"
+            f"\n    Progress: {done}/{len(tasks)} tasks"
+            f" | Target: {p.target_end_date or '?'}"
         )
-    )
-    overdue = overdue_result.scalar() or 0
-    text = f"Open tasks: {open_todos}"
-    if overdue > 0:
-        text += f" ({overdue} overdue)"
-    return text
+        if include_tasks and tasks:
+            for t in tasks:
+                overdue_mark = " ⚠OVERDUE" if t.due_date and t.status != "done" and t.due_date < date.today() else ""
+                lines.append(
+                    f"    - [{t.status}] {t.title}"
+                    f" (due: {t.due_date or '?'}, assigned: {t.assigned_to or '?'}){overdue_mark}"
+                )
+
+    return "\n".join(lines)
 
 
-async def _build_proformas_context(db: AsyncSession) -> str:
-    """Build total proforma stats."""
+async def _exec_query_summary(db: AsyncSession, sites: dict, suppliers: dict) -> str:
+    """Get high-level operational summary."""
+    now = datetime.now()
+    today = date.today()
+    year = today.year
+
+    lines = [f"Operational Summary ({today.strftime('%Y-%m-%d')}):"]
+
+    # Suppliers
+    lines.append(f"  Active suppliers: {len(suppliers)}")
+
+    # Proformas this year
     result = await db.execute(
         select(func.count(Proforma.id), func.sum(Proforma.total_amount))
+        .where(Proforma.invoice_date >= date(year, 1, 1))
     )
     row = result.one()
-    if row[0] and row[0] > 0:
-        return f"Total proformas in system: {row[0]}, total value: ₪{float(row[1]):,.0f}"
-    return ""
+    lines.append(f"  Proformas this year: {row[0] or 0}, total: ₪{float(row[1] or 0):,.0f}")
+
+    # Budget
+    budget_result = await db.execute(
+        select(func.sum(SupplierBudget.yearly_amount))
+        .where(SupplierBudget.year == year, SupplierBudget.is_active == True)
+    )
+    total_budget = float(budget_result.scalar() or 0)
+    lines.append(f"  Total budget {year}: ₪{total_budget:,.0f}")
+
+    # Open violations
+    viol_result = await db.execute(
+        select(func.count(Violation.id)).where(Violation.status != "resolved")
+    )
+    lines.append(f"  Open violations: {viol_result.scalar() or 0}")
+
+    # Upcoming meetings
+    meeting_result = await db.execute(
+        select(func.count(Meeting.id)).where(Meeting.scheduled_at >= now)
+    )
+    lines.append(f"  Upcoming meetings: {meeting_result.scalar() or 0}")
+
+    # Meals (last 7 days avg)
+    cutoff = today - timedelta(days=7)
+    meal_result = await db.execute(
+        select(func.sum(DailyMealCount.quantity))
+        .where(DailyMealCount.date >= cutoff)
+    )
+    total_meals_week = float(meal_result.scalar() or 0)
+    lines.append(f"  Meals last 7 days: {total_meals_week:,.0f}")
+
+    # Projects
+    proj_result = await db.execute(
+        select(func.count(Project.id)).where(Project.status.in_(["planning", "active"]))
+    )
+    lines.append(f"  Active projects: {proj_result.scalar() or 0}")
+
+    return "\n".join(lines)
 
 
-async def _build_context(db: AsyncSession, user: User) -> str:
-    """Build comprehensive live data context for the AI from the database."""
-    now = datetime.now()
-    current_year = now.year
-    current_month = now.month
-    today = date.today()
+# ---------------------------------------------------------------------------
+# Tool dispatch
+# ---------------------------------------------------------------------------
+TOOL_HANDLERS = {
+    "query_spending": _exec_query_spending,
+    "query_budgets": _exec_query_budgets,
+    "query_meals": _exec_query_meals,
+    "query_violations": _exec_query_violations,
+    "query_meetings": _exec_query_meetings,
+    "query_price_lists": _exec_query_price_lists,
+    "query_projects": _exec_query_projects,
+    "query_summary": _exec_query_summary,
+}
 
-    context_parts = []
+
+async def _execute_tool(tool_name: str, tool_input: dict, db: AsyncSession, suppliers: dict, sites: dict) -> str:
+    """Execute a tool and return the result as text."""
+    handler = TOOL_HANDLERS.get(tool_name)
+    if not handler:
+        return f"Unknown tool: {tool_name}"
 
     try:
-        # Load reference data
-        supplier_result = await db.execute(select(Supplier).where(Supplier.is_active == True))
-        suppliers = {s.id: s.name for s in supplier_result.scalars().all()}
+        # Different handlers have different signatures
+        if tool_name in ("query_spending",):
+            return await handler(db, tool_input, suppliers, sites)
+        elif tool_name in ("query_budgets",):
+            return await handler(db, tool_input, suppliers)
+        elif tool_name in ("query_meals",):
+            return await handler(db, tool_input, sites)
+        elif tool_name in ("query_violations", "query_meetings"):
+            return await handler(db, tool_input, sites)
+        elif tool_name in ("query_price_lists",):
+            return await handler(db, tool_input, suppliers)
+        elif tool_name in ("query_projects",):
+            return await handler(db, tool_input)
+        elif tool_name in ("query_summary",):
+            return await handler(db, sites, suppliers)
+        else:
+            return await handler(db, tool_input)
+    except Exception as e:
+        logger.error(f"Tool execution error ({tool_name}): {e}")
+        return f"Error executing {tool_name}: {str(e)}"
 
-        site_result = await db.execute(select(Site).where(Site.is_active == True))
-        sites = {s.id: s.name for s in site_result.scalars().all()}
 
-        # Build all context sections
-        budget_text, budgets = await _build_budget_context(db, current_year, current_month, suppliers)
-        if budget_text:
-            context_parts.append(budget_text)
-
-        spending_text = await _build_spending_context(
-            db, current_year, current_month, suppliers, sites, budgets
-        )
-        if spending_text:
-            context_parts.append(spending_text)
-
-        meals_text = await _build_meals_context(db, sites)
-        if meals_text:
-            context_parts.append(meals_text)
-
-        violations_text = await _build_violations_context(db, sites)
-        if violations_text:
-            context_parts.append(violations_text)
-
-        meetings_text = await _build_meetings_context(db, sites)
-        if meetings_text:
-            context_parts.append(meetings_text)
-
-        anomalies_text = await _build_anomalies_context(db)
-        if anomalies_text:
-            context_parts.append(anomalies_text)
-
-        todos_text = await _build_todos_context(db, user, today)
-        if todos_text:
-            context_parts.append(todos_text)
-
-        proformas_text = await _build_proformas_context(db)
-        if proformas_text:
-            context_parts.append(proformas_text)
-
-    except Exception:
-        pass
-
-    if context_parts:
-        return "\n\n--- LIVE DATA CONTEXT ---\n\n" + "\n\n".join(context_parts)
-    return ""
+# ---------------------------------------------------------------------------
+# Chat endpoint
+# ---------------------------------------------------------------------------
+MONTH_COLS = ["jan", "feb", "mar", "apr", "may", "jun",
+              "jul", "aug", "sep", "oct", "nov", "dec"]
 
 
 @router.post("/", response_model=ChatResponse)
@@ -483,7 +668,7 @@ async def chat(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Send a message to the AI assistant"""
+    """Send a message to the AI assistant with tool-use for full data access."""
     if not claude_service.is_available:
         raise HTTPException(
             status_code=503,
@@ -491,24 +676,73 @@ async def chat(
         )
 
     try:
-        context = await _build_context(db, current_user)
-        prompt = chat_message.message
-        if context:
-            prompt = f"{chat_message.message}\n{context}"
+        # Load reference data once
+        supplier_result = await db.execute(select(Supplier).where(Supplier.is_active == True))
+        suppliers = {s.id: s.name for s in supplier_result.scalars().all()}
 
-        response = await claude_service.generate_response(
-            prompt=prompt,
-            system_prompt=CHAT_SYSTEM_PROMPT,
-        )
+        site_result = await db.execute(select(Site).where(Site.is_active == True))
+        sites = {s.id: s.name for s in site_result.scalars().all()}
+
+        # Start conversation with user message
+        messages = [{"role": "user", "content": chat_message.message}]
+
+        # Tool-use loop (max 5 rounds to prevent infinite loops)
+        final_response = ""
+        for _ in range(5):
+            response = await claude_service.generate_with_tools(
+                messages=messages,
+                system_prompt=CHAT_SYSTEM_PROMPT,
+                tools=CHAT_TOOLS,
+                max_tokens=4096,
+            )
+
+            # Check if Claude wants to use tools
+            if response.stop_reason == "tool_use":
+                # Process all tool calls in this response
+                tool_results = []
+                assistant_content = []
+
+                for block in response.content:
+                    if block.type == "text":
+                        assistant_content.append({"type": "text", "text": block.text})
+                    elif block.type == "tool_use":
+                        assistant_content.append({
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        })
+                        # Execute the tool
+                        result = await _execute_tool(block.name, block.input, db, suppliers, sites)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+
+                # Add assistant response + tool results to messages
+                messages.append({"role": "assistant", "content": assistant_content})
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                # Claude is done — extract final text response
+                for block in response.content:
+                    if block.type == "text":
+                        final_response += block.text
+                break
+
+        if not final_response:
+            final_response = "I couldn't generate a response. Please try rephrasing your question."
 
         suggestions = [
-            "Prepare brief for next meeting",
-            "Show recent violations",
+            "Show spending breakdown by supplier",
+            "What products were ordered this month?",
             "Check budget status",
         ]
 
-        return ChatResponse(response=response, suggestions=suggestions)
+        return ChatResponse(response=final_response, suggestions=suggestions)
+
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
+        logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail="AI service temporarily unavailable. Please try again later.")
