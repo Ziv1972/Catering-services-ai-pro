@@ -13,6 +13,7 @@ import {
   UtensilsCrossed, Upload, Loader2,
 } from 'lucide-react';
 import { dashboardAPI, chatAPI, drillDownAPI, categoryAnalysisAPI, dailyMealsAPI } from '@/lib/api';
+import ChatMessageRenderer from '@/components/chat/ChatMessageRenderer';
 import { format } from 'date-fns';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -1929,11 +1930,11 @@ export default function Dashboard() {
                   key={i}
                   className={`p-3 rounded-lg text-sm ${
                     msg.role === 'user'
-                      ? 'bg-gray-100 text-gray-800 ml-4 md:ml-8'
+                      ? 'bg-gray-100 text-gray-800 ml-4 md:ml-8 whitespace-pre-wrap'
                       : 'bg-indigo-50 text-gray-800 mr-4 md:mr-8'
-                  } whitespace-pre-wrap`}
+                  }`}
                 >
-                  {msg.text}
+                  {msg.role === 'ai' ? <ChatMessageRenderer text={msg.text} /> : msg.text}
                 </div>
               ))}
               {chatLoading && (

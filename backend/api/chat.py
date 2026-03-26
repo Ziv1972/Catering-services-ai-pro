@@ -5,6 +5,7 @@ Claude can call data-query tools to look up specific information on demand,
 then synthesize the results into a comprehensive answer.
 """
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 import json
 import logging
+import io
 
 from backend.database import get_db
 from backend.models.user import User
@@ -746,3 +748,163 @@ async def chat(
     except Exception as e:
         logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail="AI service temporarily unavailable. Please try again later.")
+
+
+# ---------------------------------------------------------------------------
+# Data export endpoint — generate downloadable Excel from query
+# ---------------------------------------------------------------------------
+class ExportRequest(BaseModel):
+    query_type: str  # spending, budgets, meals, violations, price_lists
+    filters: dict = {}
+
+
+@router.post("/export")
+async def export_data(
+    req: ExportRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Export data as Excel file based on query type and filters."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl not installed")
+
+    # Load reference data
+    supplier_result = await db.execute(select(Supplier).where(Supplier.is_active == True))
+    suppliers = {s.id: s.name for s in supplier_result.scalars().all()}
+    site_result = await db.execute(select(Site).where(Site.is_active == True))
+    sites = {s.id: s.name for s in site_result.scalars().all()}
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = req.query_type.replace("_", " ").title()
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid")
+
+    if req.query_type == "spending":
+        # Export proforma items
+        year = req.filters.get("year", date.today().year)
+        month = req.filters.get("month")
+        site_name = req.filters.get("site_name")
+        supplier_name = req.filters.get("supplier_name")
+
+        filters = [Proforma.invoice_date.isnot(None)]
+        if month:
+            start = date(year, month, 1)
+            end = date(year, month + 1, 1) if month < 12 else date(year + 1, 1, 1)
+            filters.append(Proforma.invoice_date >= start)
+            filters.append(Proforma.invoice_date < end)
+        else:
+            filters.append(Proforma.invoice_date >= date(year, 1, 1))
+
+        site_id = _match_site(site_name, sites) if site_name else None
+        if site_id:
+            filters.append(Proforma.site_id == site_id)
+
+        if supplier_name:
+            matching = [sid for sid, sn in suppliers.items() if supplier_name.lower() in sn.lower()]
+            if matching:
+                filters.append(Proforma.supplier_id.in_(matching))
+
+        proforma_result = await db.execute(
+            select(Proforma).where(and_(*filters)).order_by(Proforma.invoice_date)
+        )
+        proformas = proforma_result.scalars().all()
+        proforma_ids = [p.id for p in proformas]
+        proforma_map = {p.id: p for p in proformas}
+
+        headers = ["Date", "Supplier", "Site", "Product", "Quantity", "Unit", "Unit Price", "Total"]
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+
+        if proforma_ids:
+            item_result = await db.execute(
+                select(ProformaItem)
+                .where(ProformaItem.proforma_id.in_(proforma_ids))
+                .order_by(ProformaItem.proforma_id)
+            )
+            items = item_result.scalars().all()
+            for row_idx, item in enumerate(items, 2):
+                p = proforma_map.get(item.proforma_id)
+                ws.cell(row=row_idx, column=1, value=str(p.invoice_date) if p else "")
+                ws.cell(row=row_idx, column=2, value=suppliers.get(p.supplier_id, "?") if p else "")
+                ws.cell(row=row_idx, column=3, value=sites.get(p.site_id, "?") if p else "")
+                ws.cell(row=row_idx, column=4, value=item.product_name)
+                ws.cell(row=row_idx, column=5, value=item.quantity)
+                ws.cell(row=row_idx, column=6, value=item.unit or "")
+                ws.cell(row=row_idx, column=7, value=item.unit_price)
+                ws.cell(row=row_idx, column=8, value=item.total_price)
+
+    elif req.query_type == "budgets":
+        year = req.filters.get("year", date.today().year)
+        budget_result = await db.execute(
+            select(SupplierBudget).where(SupplierBudget.year == year, SupplierBudget.is_active == True)
+        )
+        budgets = budget_result.scalars().all()
+
+        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        month_cols = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        headers = ["Supplier", "Yearly Total"] + month_names
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+
+        for row_idx, b in enumerate(budgets, 2):
+            ws.cell(row=row_idx, column=1, value=suppliers.get(b.supplier_id, "?"))
+            ws.cell(row=row_idx, column=2, value=b.yearly_amount or 0)
+            for mi, col_name in enumerate(month_cols):
+                ws.cell(row=row_idx, column=3 + mi, value=getattr(b, col_name) or 0)
+
+    elif req.query_type == "meals":
+        days = req.filters.get("days", 30)
+        cutoff = date.today() - timedelta(days=days)
+        meal_result = await db.execute(
+            select(DailyMealCount)
+            .where(DailyMealCount.date >= cutoff)
+            .order_by(DailyMealCount.date.desc())
+        )
+        meals = meal_result.scalars().all()
+
+        headers = ["Date", "Site", "Meal Type", "Quantity"]
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+
+        for row_idx, m in enumerate(meals, 2):
+            ws.cell(row=row_idx, column=1, value=str(m.date))
+            ws.cell(row=row_idx, column=2, value=sites.get(m.site_id, "?"))
+            ws.cell(row=row_idx, column=3, value=m.meal_type_en or m.meal_type or "?")
+            ws.cell(row=row_idx, column=4, value=m.quantity)
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported export type: {req.query_type}")
+
+    # Auto-size columns
+    for col in ws.columns:
+        max_length = 0
+        for cell in col:
+            try:
+                if cell.value and len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except Exception:
+                pass
+        ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 40)
+
+    # Write to bytes
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"{req.query_type}_export_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

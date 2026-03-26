@@ -691,8 +691,22 @@ export const todosAPI = {
 // Chat
 export const chatAPI = {
   send: async (message: string, signal?: AbortSignal) => {
-    const response = await api.post('/api/chat/', { message }, { signal, timeout: 30000 });
+    const response = await api.post('/api/chat/', { message }, { signal, timeout: 60000 });
     return response.data;
+  },
+  exportData: async (queryType: string, filters: Record<string, any> = {}) => {
+    const response = await api.post('/api/chat/export', { query_type: queryType, filters }, {
+      responseType: 'blob',
+      timeout: 30000,
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const a = document.createElement('a');
+    a.href = url;
+    const disposition = response.headers['content-disposition'];
+    const filename = disposition?.split('filename=')[1] || `${queryType}_export.xlsx`;
+    a.download = filename;
+    a.click();
+    window.URL.revokeObjectURL(url);
   },
 };
 
