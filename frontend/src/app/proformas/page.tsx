@@ -121,17 +121,16 @@ export default function ProformasPage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (error: any) {
-      let detail = 'No meal data found. Upload FoodHouse proformas first.';
-      try {
-        const data = error?.response?.data;
-        if (data instanceof Blob) {
-          const parsed = JSON.parse(await data.text());
-          detail = parsed.detail || detail;
-        } else if (data?.detail) {
-          detail = data.detail;
-        }
-      } catch { /* use default */ }
-      alert(detail);
+      let msg = 'No meal data found. Upload FoodHouse proformas first.';
+      const data = error?.response?.data;
+      if (data instanceof Blob) {
+        try { msg = (JSON.parse(await data.text())).detail; } catch { /* keep default */ }
+      } else if (typeof data === 'object' && data?.detail) {
+        msg = String(data.detail);
+      } else if (typeof data === 'string') {
+        msg = data;
+      }
+      alert(msg);
     } finally {
       setMealDownloading(false);
     }
