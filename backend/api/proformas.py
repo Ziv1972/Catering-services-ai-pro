@@ -448,30 +448,20 @@ async def _extract_and_save_meal_breakdown(
 
     wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
 
+    # MUST use ריכוז הכנסות (has monthly qty in col D). ריכוז ארוחות has daily monetary values.
     ws = None
-    qty_col = 4  # D column
+    qty_col = 4  # D column = כמות in ריכוז הכנסות
     for sheet_name in wb.sheetnames:
         if "ריכוז הכנסות" in sheet_name:
             ws = wb[sheet_name]
             break
-        if "ריכוז ארוחות" in sheet_name:
-            ws = wb[sheet_name]
-            qty_col = None  # sum across day columns
-            break
-
     if ws is None:
         return False
 
     def get_qty(row: int) -> float:
-        if qty_col is not None:
-            v = ws.cell(row, qty_col).value
-            return float(v) if isinstance(v, (int, float)) else 0.0
-        total = 0.0
-        for c in range(4, ws.max_column + 1):
-            v = ws.cell(row, c).value
-            if isinstance(v, (int, float)):
-                total += v
-        return total
+        """Read quantity from column D (כמות) in ריכוז הכנסות."""
+        v = ws.cell(row, 4).value
+        return float(v) if isinstance(v, (int, float)) else 0.0
 
     working_days = 0
     wd_cell = ws.cell(29, 11).value  # K29
