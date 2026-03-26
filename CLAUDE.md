@@ -279,7 +279,7 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - **Deploy fix**: Committed 8 missing agent crew files that caused Railway healthcheck failures
 - **File existence check**: Detects ephemeral filesystem file loss after Railway redeployment
 
-### Phase 6b: AI Menu Compliance Overhaul (Latest — 2026-03-25)
+### Phase 6b: AI Menu Compliance Overhaul (2026-03-25)
 - **AI-powered compliance check**: Replaced broken rule-based matching with Claude AI as default. Falls back to rules if API unavailable
 - **Intelligent Hebrew matching**: 30+ dish synonym examples in prompt (בריסקט=חזה בקר, שווארמה דג≠אמנון, etc.)
 - **Dynamic frequency calculation**: Uses actual working days per month, not hardcoded ×4 weeks
@@ -287,6 +287,12 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - **Version-numbered Excel export**: `KG menu check - April 2026 version 1.xlsx` with "חוסרים" sheet matching manual check format
 - **Frontend AI evidence**: Shows matched items, frequency text, notes from Claude; hides old "Searched keyword" UI for AI results
 - **Max tokens fix**: Increased from 4096 to 16384 for AI compliance check (was silently truncating)
+
+### Phase 6c: PDF Proforma Upload Fix (Latest — 2026-03-26)
+- **PDF Hebrew RTL fix**: pdfplumber extracts reversed Hebrew text in RTL PDFs — parser now detects and reverses it
+- **Header validation**: After table extraction, validates headers against known keywords (מוצר, כמות, מחיר, product, quantity, price)
+- **AI fallback**: If pdfplumber headers are unrecognizable even after reversal, skips to Claude AI text extraction
+- **Three-strategy pipeline**: 1) pdfplumber table + fix reversed Hebrew → 2) AI structured extraction from raw text → 3) error with guidance
 
 ## Session Summary Rules
 
@@ -321,7 +327,8 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - [x] **Anomaly detection** — Vague names, consecutive days, duplicates, ground meat limit
 - [x] **Version-numbered Excel export** — `KG menu check - April 2026 version 1.xlsx`
 - [ ] First real fine import test (re-upload PDF after deploy, verify Hebrew extraction)
-- [ ] First real FoodHouse email test — tune IMAP sender/subject filters
+- [x] First real FoodHouse email test — IMAP poller configured and live (session 2026-03-25b)
+- [x] **PDF proforma upload RTL fix** — Hebrew reversal detection + AI fallback (session 2026-03-26)
 
 ### Phase 7: Agent Intelligence Deepening
 - [ ] Dedicated agent implementations (data_analyst, supplier_manager, daily_ops_monitor currently share BudgetIntelligenceAgent)

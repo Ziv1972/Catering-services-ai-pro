@@ -281,6 +281,68 @@ graph TD
     style CM fill:#fbbf24,stroke:#d97706,color:#000
 ```
 
+## Daily Meals Automation Pipeline
+
+```mermaid
+flowchart LR
+    subgraph Sources["Data Sources"]
+        EMAIL["📧 Gmail IMAP<br/>ziv@foodbiz.co.il<br/>HP_FC_REPORT.xlsx"]
+        WEBHOOK["⚡ Power Automate<br/>JSON/CSV webhook"]
+        CSV["📄 Manual CSV<br/>Upload from UI"]
+        TRIGGER["🔄 Manual Trigger<br/>Force poll"]
+    end
+
+    subgraph Parser["Parsing Engine"]
+        IMAP["IMAP Poller<br/>Daily 5AM IST + startup"]
+        PARSE["Parse .xlsx<br/>restaurant id, name,<br/>count deals"]
+        UPSERT["Upsert DB<br/>daily_meal_counts"]
+        IMAP --> PARSE --> UPSERT
+    end
+
+    subgraph Dashboard["Dashboard Display"]
+        CHART["📊 Grouped Bar Chart<br/>NZ + KG side-by-side<br/>Stacked: Meat/Dairy/Main"]
+        SIDEBAR["📋 Per-Site Sidebar<br/>Meals vs 6-mo avg<br/>Cost vs budget"]
+    end
+
+    EMAIL --> IMAP
+    WEBHOOK --> UPSERT
+    CSV --> UPSERT
+    TRIGGER --> IMAP
+    UPSERT --> CHART
+    UPSERT --> SIDEBAR
+```
+
+## Proforma Upload Pipeline
+
+```mermaid
+flowchart LR
+    subgraph Upload["File Upload"]
+        XLSX["📊 Excel/CSV<br/>Direct table parse"]
+        PDF["📄 PDF Upload<br/>Hebrew invoices"]
+    end
+
+    subgraph PDFParse["PDF Parse Strategy"]
+        S1["1️⃣ pdfplumber<br/>Extract tables"]
+        S1V{"Headers<br/>recognizable?"}
+        S1F["Fix reversed<br/>Hebrew RTL"]
+        S2["2️⃣ Claude AI<br/>Text extraction"]
+        S1 --> S1F --> S1V
+        S1V -->|Yes| OUT
+        S1V -->|No| S2
+        S2 --> OUT
+    end
+
+    subgraph Result["Output"]
+        OUT["Structured rows:<br/>מוצר, כמות, מחיר, יחידה"]
+        DETECT["Column detection<br/>+ mapping"]
+        ITEMS["ProformaItems<br/>in database"]
+        OUT --> DETECT --> ITEMS
+    end
+
+    XLSX --> DETECT
+    PDF --> S1
+```
+
 ## Fine Rule Intelligence Flow
 
 ```mermaid
@@ -615,6 +677,9 @@ Production data migrated from FoodHouse Analytics:
 - [x] **Agent Crew frontend** — `/agent-crew` page with dashboard, chat, agent cards, interaction map
 - [x] **Fine rule import from PDF** — AI extracts Hebrew rules, preview modal with per-rule toggle
 - [x] **Auto-match complaints to fines** — AI suggests matching fine rule with confidence score
+- [x] **AI menu compliance** — Claude AI matching replaces rule-based, anomaly detection, Excel export
+- [x] **Daily meals IMAP live** — Gmail poller, grouped bar chart, per-site sidebar with cost vs budget
+- [x] **PDF proforma upload** — Hebrew RTL reversal fix, AI fallback for unrecognizable tables
 
 ### In Progress — Phase 7: Agent Intelligence Deepening
 - [ ] First real fine import test (re-upload PDF, verify Hebrew extraction)
