@@ -305,8 +305,14 @@ async def add_task(
     task = ProjectTask(project_id=project_id, **data.model_dump(exclude_none=True))
     db.add(task)
     await db.commit()
-    await db.refresh(task)
-    return task
+
+    # Re-fetch with eager-loaded relationships to avoid lazy-load crash in async
+    result = await db.execute(
+        select(ProjectTask)
+        .options(selectinload(ProjectTask.documents), selectinload(ProjectTask.status_history))
+        .where(ProjectTask.id == task.id)
+    )
+    return result.scalar_one()
 
 
 @router.put("/{project_id}/tasks/{task_id}", response_model=TaskResponse)
@@ -350,8 +356,14 @@ async def update_task(
         setattr(task, key, value)
 
     await db.commit()
-    await db.refresh(task)
-    return task
+
+    # Re-fetch with eager-loaded relationships to avoid lazy-load crash in async
+    result = await db.execute(
+        select(ProjectTask)
+        .options(selectinload(ProjectTask.documents), selectinload(ProjectTask.status_history))
+        .where(ProjectTask.id == task.id)
+    )
+    return result.scalar_one()
 
 
 @router.delete("/{project_id}/tasks/{task_id}")

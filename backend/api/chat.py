@@ -425,12 +425,11 @@ async def _exec_query_violations(db: AsyncSession, params: dict, sites: dict) ->
     if site_id:
         filters.append(Violation.site_id == site_id)
 
-    result = await db.execute(
-        select(Violation)
-        .where(and_(*filters)) if filters else select(Violation)
-        .order_by(Violation.received_at.desc())
-        .limit(limit)
-    )
+    query = select(Violation)
+    if filters:
+        query = query.where(and_(*filters))
+    query = query.order_by(Violation.received_at.desc()).limit(limit)
+    result = await db.execute(query)
     violations = result.scalars().all()
 
     if not violations:
@@ -746,8 +745,8 @@ async def chat(
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"Chat error: {e}")
-        raise HTTPException(status_code=500, detail="AI service temporarily unavailable. Please try again later.")
+        logger.exception(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)[:200]}")
 
 
 # ---------------------------------------------------------------------------

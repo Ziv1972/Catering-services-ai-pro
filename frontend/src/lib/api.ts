@@ -691,7 +691,7 @@ export const todosAPI = {
 // Chat
 export const chatAPI = {
   send: async (message: string, signal?: AbortSignal) => {
-    const response = await api.post('/api/chat/', { message }, { signal, timeout: 60000 });
+    const response = await api.post('/api/chat/', { message }, { signal, timeout: 120000 });
     return response.data;
   },
   exportData: async (queryType: string, filters: Record<string, any> = {}) => {

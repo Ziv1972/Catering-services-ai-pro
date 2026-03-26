@@ -317,6 +317,8 @@ export default function ProjectDetailPage() {
       setEditingTask(null);
       setTaskForm({ ...EMPTY_TASK_FORM });
       await loadProject();
+    } catch {
+      await loadProject();
     } finally { setSaving(false); }
   };
 
