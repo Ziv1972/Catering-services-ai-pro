@@ -879,74 +879,90 @@ async def generate_meal_summary(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Generate a new ריכוז מספרי ארוחות Excel from all MealBreakdown records in DB.
+    """Generate ריכוז מספרי ארוחות Excel directly from FoodHouse ProformaItem records.
 
-    Creates a fresh Excel with monthly columns starting from Jan 2026,
-    matching the original file structure with NZ and KG site rows.
+    Matches item names to meal categories using keyword patterns.
+    Covers all months from Jan 2026 onward.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from fastapi.responses import StreamingResponse
-    from backend.models.meal_breakdown import MealBreakdown
 
+    # Get FoodHouse proformas from Jan 2026+
+    cutoff = date(2026, 1, 1)
     result = await db.execute(
-        select(MealBreakdown).order_by(MealBreakdown.invoice_month.asc())
+        select(Proforma)
+        .options(selectinload(Proforma.items), selectinload(Proforma.supplier), selectinload(Proforma.site))
+        .join(Supplier)
+        .where(Supplier.name.ilike("%food%"), Proforma.invoice_date >= cutoff)
+        .order_by(Proforma.invoice_date.asc())
     )
-    all_breakdowns = result.scalars().all()
+    proformas = result.scalars().all()
 
-    if not all_breakdowns:
-        raise HTTPException(
-            status_code=404,
-            detail="No meal breakdown data in DB. Upload FoodHouse proformas first (data is auto-extracted).",
-        )
+    if not proformas:
+        raise HTTPException(status_code=404, detail="No FoodHouse proformas found from Jan 2026 onward.")
 
-    # Group by month
+    # Classify each proforma item into a meal category
+    def classify_item(name: str) -> str | None:
+        n = name.strip()
+        # Lunch meat (HP + Scitex, not contractors)
+        if ("צהריים" in n and "בשרי" in n and "קבלנ" not in n) or ("צהריים" in n and "INDIGO" in n and "חלבי" not in n):
+            return "lunch_meat_hp"
+        if "צהריים" in n and "בשרי" in n and "קבלנ" in n:
+            return "lunch_meat_contractors"
+        if "צהריים" in n and ("סאייטקס" in n or "סאיטקס" in n or "סאטקס" in n) and "חלבי" not in n:
+            return "lunch_meat_scitex"
+        # Lunch dairy
+        if "צהריים" in n and "חלבי" in n and "קבלנ" not in n and ("סאייטקס" not in n and "סאיטקס" not in n and "סאטקס" not in n):
+            return "lunch_dairy_hp"
+        if "צהריים" in n and "חלבי" in n and "קבלנ" in n:
+            return "lunch_dairy_contractors"
+        if "צהריים" in n and "חלבי" in n and ("סאייטקס" in n or "סאיטקס" in n or "סאטקס" in n):
+            return "lunch_dairy_scitex"
+        # Evening
+        if ("ערב" in n and "HP" in n) or ("ערב" in n and "עובדי" in n and "HP" in n):
+            return "evening_hp"
+        if "ערב" in n and ("קבלנ" in n or "עובדי" in n) and "HP" not in n:
+            return "evening_contractors"
+        if "ערב" in n and "קבלנ" not in n and "HP" not in n and "עובדי" not in n:
+            return "evening_hp"  # default evening to HP
+        # Supplement
+        if "תוספת" in n and "מנה" in n:
+            return "supplement"
+        return None
+
+    # Aggregate by (month, site_id, category)
+    data: dict[tuple[date, int, str], float] = {}
     months_set: set[date] = set()
-    by_month_site: dict[tuple[date, int], MealBreakdown] = {}
-    for b in all_breakdowns:
-        months_set.add(b.invoice_month)
-        by_month_site[(b.invoice_month, b.site_id)] = b
+
+    for p in proformas:
+        site_id = p.site_id or 0
+        month = date(p.invoice_date.year, p.invoice_date.month, 1)
+        months_set.add(month)
+        for item in (p.items or []):
+            cat = classify_item(item.product_name or "")
+            if cat:
+                key = (month, site_id, cat)
+                data[key] = data.get(key, 0) + float(item.quantity or 0)
 
     sorted_months = sorted(months_set)
 
-    # Row labels matching original structure
-    nz_rows = [
-        ("ימי עבודה", "working_days"),
-        ('סה"כ צהרים נס ציונה', "total_lunch"),
-        ('סה"כ חלבי נס ציונה', "total_dairy"),
-        ('סה"כ קבלנים בשרי', "contractors_meat"),
-        ('סה"כ קבלנים חלבי', "contractors_dairy"),
-        ('סה"כ ערב נס ציונה', "total_evening"),
-        ('תוספת למנה עיקרית(HP+קבלנים)', "supplement"),
-    ]
-    kg_rows = [
-        ("ימי עבודה", "working_days"),
-        ('סה"כ צהרים קרית גת', "total_lunch"),
-        ('סה"כ חלבי צהרים קרית גת', "total_dairy"),
-        ('סה"כ קבלנים צהרים בשרי', "contractors_meat"),
-        ('סה"כ קבלנים צהרים חלבי', "contractors_dairy"),
-        ('סה"כ ערב קרית גת', "total_evening"),
-        ('תוספת למנה עיקרית(HP+קבלנים)', "supplement"),
-    ]
+    def get_val(month: date, site_id: int, cat: str) -> int:
+        return int(data.get((month, site_id, cat), 0))
 
-    def compute(b: MealBreakdown | None, field: str) -> int | float:
-        if b is None:
-            return 0
-        if field == "working_days":
-            return b.working_days or 0
-        if field == "total_lunch":
-            return int((b.hp_meat or 0) + (b.scitex_meat or 0) + (b.hp_dairy or 0) + (b.scitex_dairy or 0) + (b.contractors_meat or 0) + (b.contractors_dairy or 0))
-        if field == "total_dairy":
-            return int((b.hp_dairy or 0) + (b.scitex_dairy or 0) + (b.contractors_dairy or 0))
-        if field == "total_evening":
-            return int((b.evening_hp or 0) + (b.evening_contractors or 0))
-        if field == "contractors_meat":
-            return int(b.contractors_meat or 0)
-        if field == "contractors_dairy":
-            return int(b.contractors_dairy or 0)
-        if field == "supplement":
-            return int(b.supplement or 0)
-        return 0
+    # Row definitions — (label, compute function)
+    def make_rows(site_id: int, site_label: str) -> list[tuple[str, any]]:
+        return [
+            (f'סה"כ צהרים {site_label}', lambda m, s=site_id: get_val(m, s, "lunch_meat_hp") + get_val(m, s, "lunch_meat_scitex") + get_val(m, s, "lunch_dairy_hp") + get_val(m, s, "lunch_dairy_scitex") + get_val(m, s, "lunch_meat_contractors") + get_val(m, s, "lunch_dairy_contractors")),
+            (f'סה"כ חלבי {site_label}', lambda m, s=site_id: get_val(m, s, "lunch_dairy_hp") + get_val(m, s, "lunch_dairy_scitex") + get_val(m, s, "lunch_dairy_contractors")),
+            ('סה"כ קבלנים בשרי' if site_id == 1 else 'סה"כ קבלנים צהרים בשרי', lambda m, s=site_id: get_val(m, s, "lunch_meat_contractors")),
+            ('סה"כ קבלנים חלבי' if site_id == 1 else 'סה"כ קבלנים צהרים חלבי', lambda m, s=site_id: get_val(m, s, "lunch_dairy_contractors")),
+            (f'סה"כ ערב {site_label}', lambda m, s=site_id: get_val(m, s, "evening_hp") + get_val(m, s, "evening_contractors")),
+            ('תוספת למנה עיקרית(HP+קבלנים)', lambda m, s=site_id: get_val(m, s, "supplement")),
+        ]
+
+    nz_rows = make_rows(1, "נס ציונה")
+    kg_rows = make_rows(2, "קרית גת")
 
     # Build workbook
     wb = openpyxl.Workbook()
@@ -962,10 +978,7 @@ async def generate_meal_summary(
         top=Side(style="thin"), bottom=Side(style="thin"),
     )
 
-    # Row 1: Title
     ws.cell(1, 1, "ריכוז מספרי ארוחות").font = Font(bold=True, size=14)
-
-    # Row 3: headers — col A = site, col B = label, cols C+ = months
     ws.cell(3, 1, "אתר").font = header_font
     ws.cell(3, 2, "פרטים").font = header_font
     ws.column_dimensions["A"].width = 12
@@ -977,43 +990,34 @@ async def generate_meal_summary(
     }
     for ci, m in enumerate(sorted_months):
         col = ci + 3
-        label = f"{month_names_he.get(m.month, str(m.month))} {m.year}"
-        cell = ws.cell(3, col, label)
+        cell = ws.cell(3, col, f"{month_names_he.get(m.month, str(m.month))} {m.year}")
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center")
         cell.border = thin_border
         ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 14
 
-    # NZ rows (starting row 4)
+    # NZ section
     start_row = 4
     ws.cell(start_row, 1, "נס ציונה").font = Font(bold=True)
     ws.cell(start_row, 1).fill = site_fill
-    for ri, (label, field) in enumerate(nz_rows):
+    for ri, (label, fn) in enumerate(nz_rows):
         row = start_row + ri
         ws.cell(row, 2, label).border = thin_border
-        if ri == 0:
-            ws.cell(row, 1).fill = site_fill
         for ci, m in enumerate(sorted_months):
-            b = by_month_site.get((m, 1))
-            val = compute(b, field)
-            cell = ws.cell(row, ci + 3, val)
+            cell = ws.cell(row, ci + 3, fn(m))
             cell.border = thin_border
             cell.number_format = "#,##0"
 
-    # KG rows
+    # KG section
     kg_start = start_row + len(nz_rows) + 1
     ws.cell(kg_start, 1, "קרית גת").font = Font(bold=True)
     ws.cell(kg_start, 1).fill = site_fill
-    for ri, (label, field) in enumerate(kg_rows):
+    for ri, (label, fn) in enumerate(kg_rows):
         row = kg_start + ri
         ws.cell(row, 2, label).border = thin_border
-        if ri == 0:
-            ws.cell(row, 1).fill = site_fill
         for ci, m in enumerate(sorted_months):
-            b = by_month_site.get((m, 2))
-            val = compute(b, field)
-            cell = ws.cell(row, ci + 3, val)
+            cell = ws.cell(row, ci + 3, fn(m))
             cell.border = thin_border
             cell.number_format = "#,##0"
 
