@@ -467,7 +467,9 @@ export default function Dashboard() {
     );
   }
 
-  const budgetSummary = data?.budget_summary || [];
+  const budgetSummaryAll = data?.budget_summary || [];
+  const budgetSummary = budgetSummaryAll.filter((b: any) => b.monthly_budget > 0);
+  const unbudgetedSuppliers = budgetSummaryAll.filter((b: any) => !b.monthly_budget || b.monthly_budget <= 0);
   const projects = data?.projects || [];
   const maintenance = data?.maintenance || [];
   const meetings = data?.meetings || [];
@@ -1200,10 +1202,30 @@ export default function Dashboard() {
                   </div>
                 ))}
 
-                {/* Proforma actual costs from FoodHouse */}
-                {proformaCosts.length > 0 && budgetSummary.length === 0 && (
+                {/* Unbudgeted Suppliers */}
+                {unbudgetedSuppliers.length > 0 && (
+                  <div className="mt-3 p-3 bg-amber-50/50 rounded-lg border border-amber-200/60">
+                    <p className="text-xs font-medium text-amber-700 mb-2 uppercase tracking-wider">Unbudgeted Vendors</p>
+                    {unbudgetedSuppliers.map((b: any, i: number) => (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between py-1.5 cursor-pointer hover:bg-amber-100/50 rounded px-2 -mx-2 transition-colors"
+                        onClick={() => openBudgetDrillDown(b.supplier_id, b.site_id, `${b.supplier_name} (${b.site_name})`, data?.proforma_year)}
+                      >
+                        <div>
+                          <p className="text-sm font-medium">{b.supplier_name}</p>
+                          <p className="text-xs text-muted-foreground">{b.site_name}</p>
+                        </div>
+                        <p className="text-sm font-semibold tabular-nums">{formatCurrency(b.monthly_actual)}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Proforma actual costs fallback */}
+                {proformaCosts.length > 0 && budgetSummary.length === 0 && unbudgetedSuppliers.length === 0 && (
                   <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
-                    <p className="text-sm font-medium text-amber-800 mb-2">FoodHouse Actual Costs ({proformaYear})</p>
+                    <p className="text-sm font-medium text-amber-800 mb-2">Actual Costs ({proformaYear})</p>
                     {proformaCosts.map((pc: any, i: number) => (
                       <div key={i} className="flex justify-between text-sm">
                         <span>Site {pc.site_id} ({pc.count} invoices)</span>

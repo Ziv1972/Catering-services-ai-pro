@@ -372,6 +372,13 @@ export const proformasAPI = {
     return response.data;
   },
 
+  getVendorAnalysis: async (supplierId: number, months?: number) => {
+    const response = await api.get(`/api/proformas/vendor-analysis/${supplierId}`, {
+      params: { months },
+    });
+    return response.data;
+  },
+
   create: async (data: any) => {
     const response = await api.post('/api/proformas', data);
     return response.data;

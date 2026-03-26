@@ -10,6 +10,10 @@ import {
 } from 'lucide-react';
 import { proformasAPI, suppliersAPI } from '@/lib/api';
 import { format } from 'date-fns';
+import {
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid,
+} from 'recharts';
 
 export default function ProformasPage() {
   const router = useRouter();
@@ -41,10 +45,22 @@ export default function ProformasPage() {
     proforma_number: '',
   });
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null);
+  const [vendorAnalysis, setVendorAnalysis] = useState<any>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
 
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    loadProformas();
+    if (selectedSupplierId) {
+      loadVendorAnalysis(selectedSupplierId);
+    } else {
+      setVendorAnalysis(null);
+    }
+  }, [selectedSupplierId]);
 
   const loadData = async () => {
     try {
@@ -58,10 +74,38 @@ export default function ProformasPage() {
       setSpending(spendingData.status === 'fulfilled' ? spendingData.value : null);
       setSuppliersList(suppliersData.status === 'fulfilled' ? suppliersData.value : []);
     } catch (error) {
-      console.error('Failed to load proformas:', error);
+      // silently fail
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadProformas = async () => {
+    try {
+      const data = await proformasAPI.list({
+        months: 12,
+        supplier_id: selectedSupplierId || undefined,
+      });
+      setProformas(data);
+    } catch {
+      // keep existing
+    }
+  };
+
+  const loadVendorAnalysis = async (supplierId: number) => {
+    setAnalysisLoading(true);
+    try {
+      const data = await proformasAPI.getVendorAnalysis(supplierId);
+      setVendorAnalysis(data);
+    } catch {
+      setVendorAnalysis(null);
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
+
+  const selectVendor = (supplierId: number | null) => {
+    setSelectedSupplierId(prev => prev === supplierId ? null : supplierId);
   };
 
   const addItem = () => {
@@ -165,7 +209,12 @@ export default function ProformasPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h2 className="text-2xl font-bold text-gray-900">Proformas</h2>
-            <p className="text-gray-500 text-sm">{proformas.length} invoices in last 12 months</p>
+            <p className="text-gray-500 text-sm">
+              {proformas.length} invoices
+              {selectedSupplierId
+                ? ` for ${suppliersList.find((s: any) => s.id === selectedSupplierId)?.name || 'vendor'}`
+                : ' in last 12 months'}
+            </p>
           </div>
           <div className="flex gap-2">
             <button
@@ -182,6 +231,106 @@ export default function ProformasPage() {
             </button>
           </div>
         </div>
+
+        {/* Vendor Filter Chips */}
+        {suppliersList.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button
+              onClick={() => setSelectedSupplierId(null)}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                !selectedSupplierId
+                  ? 'bg-purple-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              All Vendors
+            </button>
+            {suppliersList.map((s: any) => (
+              <button
+                key={s.id}
+                onClick={() => selectVendor(s.id)}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                  selectedSupplierId === s.id
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {s.name}
+                {selectedSupplierId === s.id && (
+                  <X className="inline w-3 h-3 ml-1" />
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Vendor Analysis Panel */}
+        {selectedSupplierId && vendorAnalysis && !analysisLoading && (
+          <Card className="mb-6 border-purple-200 bg-purple-50/30">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-purple-600" />
+                {suppliersList.find((s: any) => s.id === selectedSupplierId)?.name} Analysis
+                <span className="text-sm font-normal text-gray-500 ml-2">
+                  {vendorAnalysis.proforma_count} invoices · ₪{vendorAnalysis.total_spend?.toLocaleString()}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {/* Spending Timeline */}
+              {vendorAnalysis.spending_timeline?.length > 1 && (
+                <div className="mb-6">
+                  <p className="text-sm font-medium text-gray-700 mb-2">Monthly Spending</p>
+                  <div className="h-48">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={vendorAnalysis.spending_timeline}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `₪${(v/1000).toFixed(0)}k`} />
+                        <Tooltip formatter={(v: number) => [`₪${v.toLocaleString()}`, 'Spend']} />
+                        <Bar dataKey="total" fill="#7c3aed" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {/* Top Products Table */}
+              {vendorAnalysis.top_products?.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-gray-700 mb-2">Top Products</p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-gray-500">
+                          <th className="pb-2">Product</th>
+                          <th className="pb-2 text-right">Total Spend</th>
+                          <th className="pb-2 text-right">Qty</th>
+                          <th className="pb-2 text-right">Avg Price</th>
+                          <th className="pb-2 text-right">Invoices</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {vendorAnalysis.top_products.slice(0, 15).map((p: any) => (
+                          <tr key={p.name} className="border-b last:border-0">
+                            <td className="py-1.5 font-medium">{p.name}</td>
+                            <td className="py-1.5 text-right">₪{p.total_spend.toLocaleString()}</td>
+                            <td className="py-1.5 text-right">{p.total_qty.toLocaleString()}</td>
+                            <td className="py-1.5 text-right">₪{p.avg_price.toLocaleString()}</td>
+                            <td className="py-1.5 text-right text-gray-500">{p.invoice_count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+        {analysisLoading && selectedSupplierId && (
+          <div className="text-center py-4 text-gray-400 mb-4">Loading vendor analysis...</div>
+        )}
 
         {showForm && (
           <Card className="mb-6 border-blue-200">
@@ -490,9 +639,16 @@ export default function ProformasPage() {
                     ? ((vendor.total / spending.grand_total) * 100).toFixed(1)
                     : '0';
                   return (
-                    <div key={vendor.supplier} className="flex items-center justify-between p-3 border rounded-lg">
+                    <div
+                      key={vendor.supplier}
+                      className="flex items-center justify-between p-3 border rounded-lg hover:bg-purple-50 cursor-pointer transition-colors"
+                      onClick={() => {
+                        const match = suppliersList.find((s: any) => s.name === vendor.supplier);
+                        if (match) selectVendor(match.id);
+                      }}
+                    >
                       <div>
-                        <p className="font-medium text-gray-900">{vendor.supplier}</p>
+                        <p className="font-medium text-purple-700 hover:underline">{vendor.supplier}</p>
                         <p className="text-sm text-gray-500">{pct}% of total spend</p>
                       </div>
                       <p className="text-lg font-bold text-gray-900">

@@ -6,7 +6,7 @@ import {
   TrendingUp, Calendar, DollarSign, Utensils,
   AlertTriangle, FileText, BarChart3, X, ArrowLeft, ChevronRight, Check
 } from 'lucide-react';
-import { historicalAPI, categoryAnalysisAPI } from '@/lib/api';
+import { historicalAPI, categoryAnalysisAPI, suppliersAPI } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -128,6 +128,7 @@ interface CatDrillState {
     categoryName?: string;
     categoryDisplayHe?: string;
     productNames?: string[];
+    supplier_id?: number;
   };
   data: any;
   loading: boolean;
@@ -154,11 +155,15 @@ export default function AnalyticsPage() {
   const catHistoryRef = useRef<CatDrillState[]>([]);
   // Multi-product selection at Level 4
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  // Supplier filter
+  const [suppliersList, setSuppliersList] = useState<any[]>([]);
+  const [selectedSupplierId, setSelectedSupplierId] = useState<number | undefined>(undefined);
 
   const currentYear = new Date().getFullYear();
 
   useEffect(() => {
     loadAnalytics();
+    suppliersAPI.list(true).then(setSuppliersList).catch(() => {});
   }, []);
 
   const loadAnalytics = async () => {
@@ -248,9 +253,9 @@ export default function AnalyticsPage() {
     const y = year ?? currentYear;
     catHistoryRef.current = [];
     setSelectedProducts([]);
-    setCatDrill({ level: 1, context: { year: y, fromMonth: 1, toMonth: 12 }, data: null, loading: true });
+    setCatDrill({ level: 1, context: { year: y, fromMonth: 1, toMonth: 12, supplier_id: selectedSupplierId }, data: null, loading: true });
     try {
-      const result = await categoryAnalysisAPI.quantityMonthly({ year: y });
+      const result = await categoryAnalysisAPI.quantityMonthly({ year: y, supplier_id: selectedSupplierId });
       setCatDrill((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setCatDrill((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
@@ -260,9 +265,9 @@ export default function AnalyticsPage() {
   const refreshLevel1 = async (year: number, fromMonth: number, toMonth: number) => {
     catHistoryRef.current = [];
     setSelectedProducts([]);
-    setCatDrill({ level: 1, context: { year, fromMonth, toMonth }, data: null, loading: true });
+    setCatDrill({ level: 1, context: { year, fromMonth, toMonth, supplier_id: selectedSupplierId }, data: null, loading: true });
     try {
-      const result = await categoryAnalysisAPI.quantityMonthly({ year });
+      const result = await categoryAnalysisAPI.quantityMonthly({ year, supplier_id: selectedSupplierId });
       const filtered = {
         ...result,
         items: (result.items || []).filter((item: any) => item.month >= fromMonth && item.month <= toMonth),
@@ -282,7 +287,7 @@ export default function AnalyticsPage() {
       data: null, loading: true,
     } : null);
     try {
-      const result = await categoryAnalysisAPI.quantityBySite({ year: ctx.year, month });
+      const result = await categoryAnalysisAPI.quantityBySite({ year: ctx.year, month, supplier_id: ctx.supplier_id });
       setCatDrill((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setCatDrill((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
@@ -298,7 +303,7 @@ export default function AnalyticsPage() {
       data: null, loading: true,
     } : null);
     try {
-      const result = await categoryAnalysisAPI.quantityByCategory({ year: ctx.year, month: ctx.month!, site_id: siteId });
+      const result = await categoryAnalysisAPI.quantityByCategory({ year: ctx.year, month: ctx.month!, site_id: siteId, supplier_id: ctx.supplier_id });
       setCatDrill((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
       setCatDrill((prev) => prev ? { ...prev, data: { items: [] }, loading: false } : null);
@@ -316,7 +321,7 @@ export default function AnalyticsPage() {
     } : null);
     try {
       const result = await categoryAnalysisAPI.quantityCategoryMonthly({
-        year: ctx.year, site_id: ctx.site_id!, category_name: categoryName,
+        year: ctx.year, site_id: ctx.site_id!, category_name: categoryName, supplier_id: ctx.supplier_id,
       });
       const filtered = {
         ...result,
@@ -341,7 +346,7 @@ export default function AnalyticsPage() {
     } : null);
     try {
       const result = await categoryAnalysisAPI.quantityProducts({
-        year: ctx.year, month, site_id: ctx.site_id!, category_name: ctx.categoryName!,
+        year: ctx.year, month, site_id: ctx.site_id!, category_name: ctx.categoryName!, supplier_id: ctx.supplier_id,
       });
       setCatDrill((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
@@ -364,6 +369,7 @@ export default function AnalyticsPage() {
         site_id: ctx.site_id!,
         category_name: ctx.categoryName!,
         product_names: productNames.join(','),
+        supplier_id: ctx.supplier_id,
       });
       setCatDrill((prev) => prev ? { ...prev, data: result, loading: false } : null);
     } catch {
@@ -836,14 +842,35 @@ export default function AnalyticsPage() {
                   </Button>
                 </div>
                 {/* Time Period Picker — shown at ALL levels, always resets to L1 */}
-                <PeriodPicker
-                  selectedYear={catDrill.context.year}
-                  fromMonth={catDrill.context.fromMonth}
-                  toMonth={catDrill.context.toMonth}
-                  onYearChange={(y) => handlePeriodChange('year', y)}
-                  onFromMonthChange={(m) => handlePeriodChange('fromMonth', m)}
-                  onToMonthChange={(m) => handlePeriodChange('toMonth', m)}
-                />
+                <div className="flex flex-wrap items-center gap-3">
+                  <PeriodPicker
+                    selectedYear={catDrill.context.year}
+                    fromMonth={catDrill.context.fromMonth}
+                    toMonth={catDrill.context.toMonth}
+                    onYearChange={(y) => handlePeriodChange('year', y)}
+                    onFromMonthChange={(m) => handlePeriodChange('fromMonth', m)}
+                    onToMonthChange={(m) => handlePeriodChange('toMonth', m)}
+                  />
+                  {suppliersList.length > 0 && (
+                    <div className="flex items-center gap-1.5 p-3 bg-gray-50 rounded-lg text-sm">
+                      <span className="text-gray-500 font-medium">Vendor:</span>
+                      <select
+                        value={selectedSupplierId ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value ? Number(e.target.value) : undefined;
+                          setSelectedSupplierId(val);
+                          refreshLevel1(catDrill.context.year, catDrill.context.fromMonth, catDrill.context.toMonth);
+                        }}
+                        className="border rounded px-2 py-1 bg-white"
+                      >
+                        <option value="">All Vendors</option>
+                        {suppliersList.map((s: any) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="pt-4">
                 {catDrill.loading ? (

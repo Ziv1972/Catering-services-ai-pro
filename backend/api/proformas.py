@@ -196,7 +196,14 @@ async def _parse_proforma_pdf(raw: bytes) -> list[dict]:
                     rows.append(cleaned)
 
     if rows:
-        return rows
+        # Validate pdfplumber rows have usable column headers before returning
+        test_headers = list(rows[0].keys())
+        name_col, qty_col, _, price_col = _detect_proforma_columns(test_headers)
+        if name_col and (qty_col or price_col):
+            return rows
+        # Headers are mangled — discard and fall through to AI extraction
+        logger.info("pdfplumber rows have unusable headers %s — falling through to AI", test_headers[:3])
+        rows = []
 
     # --- Strategy 2: AI extraction from raw text ---
     full_text = "\n".join(all_text_parts).strip()
@@ -783,6 +790,102 @@ async def get_vendor_spending(
         "monthly_series": monthly_series,
         "vendor_totals": vendor_totals,
         "grand_total": round(sum(monthly_totals.values()), 2),
+    }
+
+
+@router.get("/vendor-analysis/{supplier_id}")
+async def get_vendor_analysis(
+    supplier_id: int,
+    months: int = Query(12, ge=1, le=24),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get detailed analysis of a vendor's proformas: spending timeline, top products, price trends."""
+    cutoff = date.today() - timedelta(days=months * 30)
+
+    # Get proformas for this supplier
+    result = await db.execute(
+        select(Proforma)
+        .options(selectinload(Proforma.items), selectinload(Proforma.site))
+        .where(Proforma.supplier_id == supplier_id, Proforma.invoice_date >= cutoff)
+        .order_by(Proforma.invoice_date.asc())
+    )
+    proformas = result.scalars().all()
+
+    # Monthly spending timeline
+    monthly_spending: dict[str, float] = {}
+    for p in proformas:
+        month_key = p.invoice_date.strftime("%Y-%m")
+        monthly_spending[month_key] = monthly_spending.get(month_key, 0) + (p.total_amount or 0)
+
+    spending_timeline = [
+        {"month": m, "total": round(v, 2)}
+        for m, v in sorted(monthly_spending.items())
+    ]
+
+    # Aggregate products across all proformas
+    product_agg: dict[str, dict] = {}
+    product_monthly: dict[str, dict[str, list[float]]] = {}
+
+    for p in proformas:
+        month_key = p.invoice_date.strftime("%Y-%m")
+        for item in (p.items or []):
+            name = (item.product_name or "").strip()
+            if not name:
+                continue
+            if name not in product_agg:
+                product_agg[name] = {"qty": 0, "total": 0, "count": 0, "prices": []}
+            product_agg[name]["qty"] += float(item.quantity or 0)
+            product_agg[name]["total"] += float(item.total_price or 0)
+            product_agg[name]["count"] += 1
+            if item.unit_price:
+                product_agg[name]["prices"].append(float(item.unit_price))
+
+            # For price trends
+            if name not in product_monthly:
+                product_monthly[name] = {}
+            if month_key not in product_monthly[name]:
+                product_monthly[name][month_key] = []
+            if item.unit_price:
+                product_monthly[name][month_key].append(float(item.unit_price))
+
+    # Top products by spend
+    top_products = sorted(
+        [
+            {
+                "name": name,
+                "total_spend": round(agg["total"], 2),
+                "total_qty": round(agg["qty"], 2),
+                "avg_price": round(sum(agg["prices"]) / len(agg["prices"]), 2) if agg["prices"] else 0,
+                "invoice_count": agg["count"],
+            }
+            for name, agg in product_agg.items()
+        ],
+        key=lambda x: x["total_spend"],
+        reverse=True,
+    )[:30]
+
+    # Price trends for top 10 products
+    top_names = [p["name"] for p in top_products[:10]]
+    all_months = sorted(set(m for pm in product_monthly.values() for m in pm))
+    price_trends = []
+    for name in top_names:
+        monthly_prices = product_monthly.get(name, {})
+        trend = {
+            "name": name,
+            "data": [
+                {"month": m, "price": round(sum(monthly_prices[m]) / len(monthly_prices[m]), 2) if m in monthly_prices else None}
+                for m in all_months
+            ],
+        }
+        price_trends.append(trend)
+
+    return {
+        "proforma_count": len(proformas),
+        "total_spend": round(sum(p.total_amount or 0 for p in proformas), 2),
+        "spending_timeline": spending_timeline,
+        "top_products": top_products,
+        "price_trends": price_trends,
     }
 
 
