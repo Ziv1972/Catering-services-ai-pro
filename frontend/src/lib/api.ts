@@ -379,10 +379,8 @@ export const proformasAPI = {
     return response.data;
   },
 
-  updateMealSummary: async (nzFile: File, kgFile: File, summaryFile: File, targetMonth: string) => {
+  updateMealSummary: async (summaryFile: File, targetMonth: string) => {
     const formData = new FormData();
-    formData.append('nz_file', nzFile);
-    formData.append('kg_file', kgFile);
     formData.append('summary_file', summaryFile);
     formData.append('target_month', targetMonth);
     const response = await api.post('/api/proformas/update-meal-summary', formData, {

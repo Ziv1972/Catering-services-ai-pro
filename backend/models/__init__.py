@@ -17,6 +17,7 @@ from backend.models.todo import TodoItem
 from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping, WorkingDaysEntry
 from backend.models.attachment import Attachment
 from backend.models.dish_catalog import DishCatalog
+from backend.models.meal_breakdown import MealBreakdown
 
 __all__ = [
     "User",
@@ -52,4 +53,5 @@ __all__ = [
     "WorkingDaysEntry",
     "Attachment",
     "DishCatalog",
+    "MealBreakdown",
 ]

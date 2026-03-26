@@ -50,7 +50,7 @@ export default function ProformasPage() {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   // Meal summary updater
   const [showMealUpdate, setShowMealUpdate] = useState(false);
-  const [mealUpdateFiles, setMealUpdateFiles] = useState<{ nz: File | null; kg: File | null; summary: File | null }>({ nz: null, kg: null, summary: null });
+  const [mealSummaryFile, setMealSummaryFile] = useState<File | null>(null);
   const [mealUpdateMonth, setMealUpdateMonth] = useState(new Date().toISOString().slice(0, 7));
   const [mealUpdating, setMealUpdating] = useState(false);
 
@@ -114,15 +114,13 @@ export default function ProformasPage() {
   };
 
   const handleMealSummaryUpdate = async () => {
-    if (!mealUpdateFiles.nz || !mealUpdateFiles.kg || !mealUpdateFiles.summary) {
-      alert('Please select all 3 files: NZ proforma, KG proforma, and the meal summary Excel');
+    if (!mealSummaryFile) {
+      alert('Please select the meal summary Excel file (ריכוז מספרי ארוחות)');
       return;
     }
     setMealUpdating(true);
     try {
-      const blob = await proformasAPI.updateMealSummary(
-        mealUpdateFiles.nz, mealUpdateFiles.kg, mealUpdateFiles.summary, mealUpdateMonth,
-      );
+      const blob = await proformasAPI.updateMealSummary(mealSummaryFile, mealUpdateMonth);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -130,9 +128,12 @@ export default function ProformasPage() {
       a.click();
       URL.revokeObjectURL(url);
       setShowMealUpdate(false);
-      setMealUpdateFiles({ nz: null, kg: null, summary: null });
+      setMealSummaryFile(null);
     } catch (error: any) {
-      alert(error?.response?.data?.detail || 'Failed to update meal summary');
+      const detail = error?.response?.data instanceof Blob
+        ? await error.response.data.text().then((t: string) => { try { return JSON.parse(t).detail; } catch { return t; } })
+        : error?.response?.data?.detail || 'Failed to update meal summary';
+      alert(detail);
     } finally {
       setMealUpdating(false);
     }
@@ -377,43 +378,21 @@ export default function ProformasPage() {
                 Update Meal Summary Excel
               </CardTitle>
               <p className="text-sm text-gray-500">
-                Upload NZ + KG FoodHouse proformas to extract meal counts and update ריכוז מספרי ארוחות
+                Uses meal breakdown data auto-extracted from uploaded FoodHouse proformas (NZ + KG).
+                Just select the summary file and month.
               </p>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div className="flex flex-wrap items-end gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">NZ Proforma (Excel) *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">ריכוז מספרי ארוחות file *</label>
                   <input
                     type="file"
                     accept=".xlsx,.xls"
-                    onChange={e => setMealUpdateFiles({ ...mealUpdateFiles, nz: e.target.files?.[0] || null })}
-                    className="w-full text-sm border rounded-md p-2"
+                    onChange={e => setMealSummaryFile(e.target.files?.[0] || null)}
+                    className="text-sm border rounded-md p-2"
                   />
-                  {mealUpdateFiles.nz && <p className="text-xs text-green-600 mt-1">✓ {mealUpdateFiles.nz.name}</p>}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">KG Proforma (Excel) *</label>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={e => setMealUpdateFiles({ ...mealUpdateFiles, kg: e.target.files?.[0] || null })}
-                    className="w-full text-sm border rounded-md p-2"
-                  />
-                  {mealUpdateFiles.kg && <p className="text-xs text-green-600 mt-1">✓ {mealUpdateFiles.kg.name}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Meal Summary File *</label>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={e => setMealUpdateFiles({ ...mealUpdateFiles, summary: e.target.files?.[0] || null })}
-                    className="w-full text-sm border rounded-md p-2"
-                  />
-                  {mealUpdateFiles.summary && <p className="text-xs text-green-600 mt-1">✓ {mealUpdateFiles.summary.name}</p>}
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Target Month</label>
                   <input
@@ -423,21 +402,19 @@ export default function ProformasPage() {
                     className="px-3 py-2 border rounded-md"
                   />
                 </div>
-                <div className="flex gap-2 mt-5">
-                  <button
-                    onClick={handleMealSummaryUpdate}
-                    disabled={mealUpdating || !mealUpdateFiles.nz || !mealUpdateFiles.kg || !mealUpdateFiles.summary}
-                    className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 disabled:opacity-50"
-                  >
-                    {mealUpdating ? 'Processing...' : 'Update & Download'}
-                  </button>
-                  <button
-                    onClick={() => setShowMealUpdate(false)}
-                    className="px-4 py-2 border rounded-lg text-gray-600 hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <button
+                  onClick={handleMealSummaryUpdate}
+                  disabled={mealUpdating || !mealSummaryFile}
+                  className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 disabled:opacity-50"
+                >
+                  {mealUpdating ? 'Processing...' : 'Update & Download'}
+                </button>
+                <button
+                  onClick={() => setShowMealUpdate(false)}
+                  className="px-4 py-2 border rounded-lg text-gray-600 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
               </div>
             </CardContent>
           </Card>

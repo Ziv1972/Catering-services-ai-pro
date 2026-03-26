@@ -439,6 +439,76 @@ def _detect_proforma_columns(headers: list[str]) -> tuple[str | None, str | None
     return name_col, qty_col, unit_col, price_col
 
 
+async def _extract_and_save_meal_breakdown(
+    raw: bytes, proforma_id: int, supplier_id: int, site_id: int, invoice_date: date, db: AsyncSession,
+) -> bool:
+    """Extract meal data from ריכוז הכנסות or ריכוז ארוחות sheet and save to MealBreakdown."""
+    import openpyxl
+    from backend.models.meal_breakdown import MealBreakdown
+
+    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
+
+    ws = None
+    qty_col = 4  # D column
+    for sheet_name in wb.sheetnames:
+        if "ריכוז הכנסות" in sheet_name:
+            ws = wb[sheet_name]
+            break
+        if "ריכוז ארוחות" in sheet_name:
+            ws = wb[sheet_name]
+            qty_col = None  # sum across day columns
+            break
+
+    if ws is None:
+        return False
+
+    def get_qty(row: int) -> float:
+        if qty_col is not None:
+            v = ws.cell(row, qty_col).value
+            return float(v) if isinstance(v, (int, float)) else 0.0
+        total = 0.0
+        for c in range(4, ws.max_column + 1):
+            v = ws.cell(row, c).value
+            if isinstance(v, (int, float)):
+                total += v
+        return total
+
+    working_days = 0
+    wd_cell = ws.cell(29, 11).value  # K29
+    if isinstance(wd_cell, (int, float)):
+        working_days = int(wd_cell)
+
+    month_start = date(invoice_date.year, invoice_date.month, 1)
+
+    # Upsert: delete old breakdown for this proforma, then insert new
+    existing = await db.execute(
+        select(MealBreakdown).where(MealBreakdown.proforma_id == proforma_id)
+    )
+    old = existing.scalar_one_or_none()
+    if old:
+        await db.delete(old)
+
+    breakdown = MealBreakdown(
+        proforma_id=proforma_id,
+        site_id=site_id,
+        invoice_month=month_start,
+        hp_meat=get_qty(5),
+        scitex_meat=get_qty(6),
+        evening_hp=get_qty(7),
+        evening_contractors=get_qty(8),
+        hp_dairy=get_qty(9),
+        scitex_dairy=get_qty(10),
+        supplement=get_qty(11),
+        contractors_meat=get_qty(14),
+        contractors_dairy=get_qty(15),
+        working_days=working_days,
+    )
+    db.add(breakdown)
+    await db.commit()
+    logger.info("Saved meal breakdown for proforma %d (site %d, month %s)", proforma_id, site_id, month_start)
+    return True
+
+
 @router.post("/upload")
 async def upload_proforma(
     file: UploadFile = File(...),
@@ -568,6 +638,16 @@ async def upload_proforma(
     await db.commit()
     await db.refresh(proforma)
 
+    # Auto-extract meal breakdown from FoodHouse proformas (ריכוז הכנסות sheet)
+    meal_extracted = False
+    if ext in ("xlsx", "xls"):
+        try:
+            meal_extracted = await _extract_and_save_meal_breakdown(
+                raw, proforma.id, proforma.supplier_id, proforma.site_id or 1, inv_date, db
+            )
+        except Exception as e:
+            logger.warning("Meal breakdown extraction skipped: %s", e)
+
     return {
         "id": proforma.id,
         "supplier_id": proforma.supplier_id,
@@ -578,6 +658,7 @@ async def upload_proforma(
         "skipped": skipped,
         "status": "pending",
         "message": f"Created proforma with {items_created} items from {file.filename}",
+        "meal_breakdown_extracted": meal_extracted,
     }
 
 
@@ -795,98 +876,60 @@ async def get_vendor_spending(
 
 @router.post("/update-meal-summary")
 async def update_meal_summary(
-    nz_file: UploadFile = File(..., alias="nz_file"),
-    kg_file: UploadFile = File(..., alias="kg_file"),
     summary_file: UploadFile = File(..., alias="summary_file"),
     target_month: str = Form(...),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Extract meal counts from NZ + KG FoodHouse proformas and update the meal summary Excel.
+    """Update the ריכוז מספרי ארוחות summary Excel using meal breakdowns stored in DB.
 
-    Reads ריכוז הכנסות sheet from each proforma:
-    - Row 5: ארוחת צהריים בשרית (HP INDIGO) → qty in column D
-    - Row 6: ארוחת צהריים בשרית (סאייטקס) → qty in column D
-    - Row 7: ארוחת ערב (HP)
-    - Row 8: ארוחת ערב (קבלנים)
-    - Row 9: ארוחת צהריים חלבית (HP INDIGO)
-    - Row 10: ארוחת צהריים חלבית (סאייטקס)
-    - Row 11: תוספת מנה עיקרית
-    - Row 14: ארוחת צהריים בשרית (קבלנים)  (note: row 12-13 are skipped)
-    - Row 15: ארוחת צהריים חלבית (קבלנים)
-    - K29: Working days
-
-    Updates the ריכוז מספרי ארוחות summary Excel by finding or creating the target month column.
+    Finds MealBreakdown records for the target month (NZ site_id=1, KG site_id=2).
+    Data is auto-extracted from FoodHouse proformas at upload time.
     """
     import openpyxl
-    from openpyxl.utils import get_column_letter
     from datetime import datetime
     from fastapi.responses import StreamingResponse
-
-    def _extract_meals(raw_bytes: bytes) -> dict:
-        """Extract meal data from a FoodHouse proforma ריכוז הכנסות or ריכוז ארוחות sheet."""
-        wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), data_only=True)
-
-        # Try ריכוז הכנסות first (has qty in col D), then ריכוז ארוחות
-        ws = None
-        qty_col = 4  # D
-        for sheet_name in wb.sheetnames:
-            if "ריכוז הכנסות" in sheet_name:
-                ws = wb[sheet_name]
-                qty_col = 4  # D = quantity column in ריכוז הכנסות
-                break
-            if "ריכוז ארוחות" in sheet_name:
-                ws = wb[sheet_name]
-                # In ריכוז ארוחות, quantities are in daily columns D-N.
-                # We need to sum across all day columns for monthly total.
-                qty_col = None  # signal to sum across day columns
-                break
-
-        if ws is None:
-            raise ValueError("Could not find ריכוז הכנסות or ריכוז ארוחות sheet")
-
-        def get_qty(row: int) -> float:
-            if qty_col is not None:
-                v = ws.cell(row, qty_col).value
-                return float(v) if v else 0.0
-            # Sum across day columns (D through last non-empty)
-            total = 0.0
-            for c in range(4, ws.max_column + 1):
-                v = ws.cell(row, c).value
-                if isinstance(v, (int, float)):
-                    total += v
-            return total
-
-        # Working days: K29 in ריכוז הכנסות
-        working_days = 0
-        wd_cell = ws.cell(29, 11).value  # K29
-        if isinstance(wd_cell, (int, float)):
-            working_days = int(wd_cell)
-
-        return {
-            "hp_meat": get_qty(5),        # ארוחת צהריים בשרית HP INDIGO
-            "scitex_meat": get_qty(6),     # ארוחת צהריים בשרית סאייטקס
-            "evening_hp": get_qty(7),      # ארוחת ערב HP
-            "evening_contractors": get_qty(8),  # ארוחת ערב קבלנים
-            "hp_dairy": get_qty(9),        # ארוחת צהריים חלבית HP INDIGO
-            "scitex_dairy": get_qty(10),   # ארוחת צהריים חלבית סאייטקס
-            "supplement": get_qty(11),     # תוספת מנה עיקרית
-            "contractors_meat": get_qty(14),  # ארוחת צהריים בשרית קבלנים (row 14, not 12/13)
-            "contractors_dairy": get_qty(15),  # ארוחת צהריים חלבית קבלנים
-            "working_days": working_days,
-        }
+    from backend.models.meal_breakdown import MealBreakdown
 
     try:
-        nz_raw = await nz_file.read()
-        kg_raw = await kg_file.read()
-        summary_raw = await summary_file.read()
+        target_dt = datetime.strptime(target_month, "%Y-%m")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="target_month must be YYYY-MM format")
 
-        nz = _extract_meals(nz_raw)
-        kg = _extract_meals(kg_raw)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error("Failed to parse proforma files: %s", e)
-        raise HTTPException(status_code=400, detail=f"Failed to parse proforma files: {e}")
+    month_start = date(target_dt.year, target_dt.month, 1)
+
+    # Find meal breakdowns for this month from DB
+    result = await db.execute(
+        select(MealBreakdown).where(MealBreakdown.invoice_month == month_start)
+    )
+    breakdowns = result.scalars().all()
+
+    nz_data = next((b for b in breakdowns if b.site_id == 1), None)
+    kg_data = next((b for b in breakdowns if b.site_id == 2), None)
+
+    if not nz_data and not kg_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No meal breakdown data found for {target_month}. Upload FoodHouse proformas for this month first.",
+        )
+
+    def to_dict(b: MealBreakdown | None) -> dict:
+        if b is None:
+            return {k: 0 for k in ["hp_meat", "scitex_meat", "evening_hp", "evening_contractors",
+                                     "hp_dairy", "scitex_dairy", "supplement", "contractors_meat",
+                                     "contractors_dairy", "working_days"]}
+        return {
+            "hp_meat": b.hp_meat or 0, "scitex_meat": b.scitex_meat or 0,
+            "evening_hp": b.evening_hp or 0, "evening_contractors": b.evening_contractors or 0,
+            "hp_dairy": b.hp_dairy or 0, "scitex_dairy": b.scitex_dairy or 0,
+            "supplement": b.supplement or 0, "contractors_meat": b.contractors_meat or 0,
+            "contractors_dairy": b.contractors_dairy or 0, "working_days": b.working_days or 0,
+        }
+
+    nz = to_dict(nz_data)
+    kg = to_dict(kg_data)
+
+    summary_raw = await summary_file.read()
 
     # Compute aggregated values for summary Excel
     # NZ site
