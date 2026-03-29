@@ -1298,8 +1298,21 @@ async def export_compliance_excel(
             def_cell.fill = green_fill
             def_cell.font = green_font
 
-        # Show matched menu items (what Claude found)
-        items_text = ", ".join(matched_items) if matched_items else ""
+        # Show matched menu items (what Claude found); fall back to dates if items missing
+        if matched_items:
+            items_text = ", ".join(matched_items)
+        elif found_days:
+            # Format dates as short strings (e.g. "1/4, 8/4, 15/4")
+            def _fmt(d):
+                try:
+                    from datetime import date as _date
+                    parts = str(d).split("-")
+                    return f"{int(parts[2])}/{int(parts[1])}" if len(parts) == 3 else str(d)
+                except Exception:
+                    return str(d)
+            items_text = ", ".join(_fmt(d) for d in found_days)
+        else:
+            items_text = ""
         items_cell = ws.cell(row=row_num, column=7, value=items_text)
         items_cell.border = thin_border
         items_cell.alignment = Alignment(wrap_text=True)

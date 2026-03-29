@@ -1916,9 +1916,11 @@ SECTION 1 — Contract compliance items (one per required dish):
   "actual": number,
   "shortage": number,
   "found_dates": ["YYYY-MM-DD", ...],
-  "matched_items": ["actual menu item text that matched", ...],
+  "matched_items": ["EXACT menu item text as it appeared in the menu — REQUIRED for every day where actual > 0", ...],
   "notes": "optional — e.g. הוגש בריסקט במקום סינטה"
 }}
+
+CRITICAL: matched_items MUST contain the exact text from the menu for every day counted in "actual". Never leave matched_items empty when actual > 0.
 
 SECTION 2 — Anomaly items (if any found):
 {{
