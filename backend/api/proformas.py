@@ -671,6 +671,48 @@ async def upload_proforma(
     }
 
 
+@router.get("/duplicates")
+async def find_duplicate_proformas(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Find potential duplicate proformas (same supplier + site + invoice_date + similar total)."""
+    result = await db.execute(
+        select(Proforma)
+        .options(selectinload(Proforma.supplier), selectinload(Proforma.items))
+        .order_by(Proforma.supplier_id, Proforma.site_id, Proforma.invoice_date)
+    )
+    proformas = result.scalars().all()
+
+    # Group by supplier_id + site_id + invoice_date
+    groups: dict = {}
+    for p in proformas:
+        key = (p.supplier_id, p.site_id, p.invoice_date.isoformat() if p.invoice_date else "none")
+        groups.setdefault(key, []).append(p)
+
+    duplicates = []
+    for key, group in groups.items():
+        if len(group) > 1:
+            duplicates.append({
+                "supplier_name": group[0].supplier.name if group[0].supplier else "Unknown",
+                "site_id": group[0].site_id,
+                "invoice_date": key[2],
+                "count": len(group),
+                "proformas": [
+                    {
+                        "id": p.id,
+                        "proforma_number": p.proforma_number,
+                        "total_amount": p.total_amount,
+                        "item_count": len(p.items) if p.items else 0,
+                        "status": p.status,
+                    }
+                    for p in group
+                ],
+            })
+
+    return {"duplicates": duplicates, "total_duplicate_groups": len(duplicates)}
+
+
 @router.get("/generate-meal-summary")
 async def generate_meal_summary(
     db: AsyncSession = Depends(get_db),
@@ -1244,13 +1286,42 @@ async def delete_proforma(
     if not proforma:
         raise HTTPException(status_code=404, detail="Proforma not found")
 
-    # Delete all items first
-    await db.execute(
-        select(ProformaItem).where(ProformaItem.proforma_id == proforma_id)
-    )
+    # Delete meal breakdowns, items, then the proforma itself
     from sqlalchemy import delete as sql_delete
+    from backend.models.meal_breakdown import MealBreakdown
+    await db.execute(sql_delete(MealBreakdown).where(MealBreakdown.proforma_id == proforma_id))
     await db.execute(sql_delete(ProformaItem).where(ProformaItem.proforma_id == proforma_id))
-    await db.delete(proforma)
+    await db.execute(sql_delete(Proforma).where(Proforma.id == proforma_id))
     await db.commit()
 
     return {"message": f"Proforma #{proforma_id} deleted", "id": proforma_id}
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: List[int]
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_proformas(
+    request: BulkDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete multiple proformas at once (for cleaning up duplicates)."""
+    from sqlalchemy import delete as sql_delete
+    from backend.models.meal_breakdown import MealBreakdown
+
+    deleted = []
+    not_found = []
+    for pid in request.ids:
+        result = await db.execute(select(Proforma).where(Proforma.id == pid))
+        if not result.scalar_one_or_none():
+            not_found.append(pid)
+            continue
+        await db.execute(sql_delete(MealBreakdown).where(MealBreakdown.proforma_id == pid))
+        await db.execute(sql_delete(ProformaItem).where(ProformaItem.proforma_id == pid))
+        await db.execute(sql_delete(Proforma).where(Proforma.id == pid))
+        deleted.append(pid)
+
+    await db.commit()
+    return {"deleted": deleted, "not_found": not_found}

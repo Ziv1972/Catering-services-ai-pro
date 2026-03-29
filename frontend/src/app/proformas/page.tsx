@@ -50,6 +50,10 @@ export default function ProformasPage() {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   // Meal summary generator
   const [mealDownloading, setMealDownloading] = useState(false);
+  // Duplicate detection
+  const [duplicates, setDuplicates] = useState<any[]>([]);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  const [duplicatesLoading, setDuplicatesLoading] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -215,6 +219,36 @@ export default function ProformasPage() {
     }
   };
 
+  const handleFindDuplicates = async () => {
+    setDuplicatesLoading(true);
+    try {
+      const result = await proformasAPI.getDuplicates();
+      setDuplicates(result.duplicates || []);
+      setShowDuplicates(true);
+    } catch (error: any) {
+      alert(error?.response?.data?.detail || 'Failed to check duplicates');
+    } finally {
+      setDuplicatesLoading(false);
+    }
+  };
+
+  const handleDeleteDuplicate = async (id: number) => {
+    if (!confirm(`Delete proforma #${id}?`)) return;
+    try {
+      await proformasAPI.delete(id);
+      setDuplicates(prev =>
+        prev.map(group => ({
+          ...group,
+          proformas: group.proformas.filter((p: any) => p.id !== id),
+          count: group.proformas.filter((p: any) => p.id !== id).length,
+        })).filter(group => group.count > 1)
+      );
+      await loadData();
+    } catch (error: any) {
+      alert(error?.response?.data?.detail || 'Delete failed');
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'paid': return 'bg-green-100 text-green-800 border-green-200';
@@ -246,6 +280,13 @@ export default function ProformasPage() {
           </div>
           <div className="flex gap-2">
             <button
+              onClick={handleFindDuplicates}
+              disabled={duplicatesLoading}
+              className="flex items-center gap-2 bg-amber-600 text-white px-4 py-2 rounded-lg hover:bg-amber-700 disabled:opacity-50"
+            >
+              <AlertTriangle className="h-4 w-4" /> {duplicatesLoading ? 'Checking...' : 'Find Duplicates'}
+            </button>
+            <button
               onClick={handleDownloadMealSummary}
               disabled={mealDownloading}
               className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 disabled:opacity-50"
@@ -266,6 +307,49 @@ export default function ProformasPage() {
             </button>
           </div>
         </div>
+
+        {/* Duplicate Detection Panel */}
+        {showDuplicates && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-semibold text-amber-800">
+                {duplicates.length > 0
+                  ? `Found ${duplicates.length} duplicate group(s)`
+                  : 'No duplicates found'}
+              </h3>
+              <button onClick={() => setShowDuplicates(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {duplicates.map((group, gi) => (
+              <div key={gi} className="mb-3 bg-white rounded border p-3">
+                <p className="text-sm font-medium mb-2">
+                  {group.supplier_name} | Site {group.site_id} | {group.invoice_date} ({group.count} copies)
+                </p>
+                <div className="space-y-1">
+                  {group.proformas.map((p: any, pi: number) => (
+                    <div key={p.id} className="flex items-center justify-between text-sm bg-gray-50 rounded px-3 py-1.5">
+                      <span>
+                        #{p.id} — {p.proforma_number || 'no number'} — {new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS' }).format(p.total_amount)} — {p.item_count} items
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {pi === 0 && <Badge variant="outline" className="text-green-700 border-green-300">Keep</Badge>}
+                        {pi > 0 && (
+                          <button
+                            onClick={() => handleDeleteDuplicate(p.id)}
+                            className="text-red-600 hover:text-red-800 flex items-center gap-1 text-xs"
+                          >
+                            <Trash2 className="h-3 w-3" /> Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Vendor Filter Chips */}
         {suppliersList.length > 0 && (

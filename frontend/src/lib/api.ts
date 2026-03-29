@@ -413,6 +413,16 @@ export const proformasAPI = {
     const response = await api.delete(`/api/proformas/${proformaId}`);
     return response.data;
   },
+
+  getDuplicates: async () => {
+    const response = await api.get('/api/proformas/duplicates');
+    return response.data;
+  },
+
+  bulkDelete: async (ids: number[]) => {
+    const response = await api.post('/api/proformas/bulk-delete', { ids });
+    return response.data;
+  },
 };
 
 // Suppliers
