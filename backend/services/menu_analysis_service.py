@@ -2040,27 +2040,31 @@ async def run_ai_compliance_check(
         f"prompt ~{len(prompt)} chars"
     )
 
-    # Call Claude
-    response_format = [
-        {
-            "group": "string",
-            "dish": "string",
-            "frequency_text": "string",
-            "expected": 0,
-            "actual": 0,
-            "shortage": 0,
-            "found_dates": ["YYYY-MM-DD"],
-            "matched_items": ["string"],
-            "notes": "string",
-        }
-    ]
-
-    ai_results = await claude_service.generate_structured_response(
+    # Call Claude — use generate_response directly so our detailed schema
+    # instructions in the prompt are not overridden by a second schema append
+    raw_response = await claude_service.generate_response(
         prompt=prompt,
-        system_prompt="You are a precise menu compliance auditor. Return only valid JSON.",
-        response_format=response_format,
+        system_prompt=(
+            "You are a precise menu compliance auditor. "
+            "Return ONLY a valid JSON array — no markdown, no code blocks, no extra text. "
+            "ALWAYS populate matched_items with the exact menu text for every item you counted."
+        ),
         max_tokens=16384,
     )
+
+    # Strip markdown code fences if present
+    raw_response = raw_response.strip()
+    if raw_response.startswith("```"):
+        raw_response = raw_response.split("\n", 1)[1] if "\n" in raw_response else raw_response[3:]
+    if raw_response.endswith("```"):
+        raw_response = raw_response[:-3]
+    raw_response = raw_response.strip()
+
+    try:
+        ai_results = json.loads(raw_response)
+    except json.JSONDecodeError as e:
+        logger.error(f"AI compliance: JSON parse error: {e}\nRaw: {raw_response[:500]}")
+        ai_results = []
 
     if not isinstance(ai_results, list):
         ai_results = ai_results.get("results", []) if isinstance(ai_results, dict) else []
