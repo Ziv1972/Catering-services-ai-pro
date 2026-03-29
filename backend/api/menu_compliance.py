@@ -1153,6 +1153,20 @@ async def export_compliance_excel(
     )
     results = results_q.scalars().all()
 
+    # Build rule description lookup — used as fallback notes in Excel
+    from sqlalchemy import or_
+    rules_q = await db.execute(
+        select(ComplianceRule).where(
+            ComplianceRule.is_active == True,
+            or_(ComplianceRule.site_id == None, ComplianceRule.site_id == check.site_id),
+        )
+    )
+    rule_desc_map: dict[str, str] = {
+        r.name: r.description
+        for r in rules_q.scalars().all()
+        if r.description and r.description != f"{(r.parameters or {}).get('frequency_text', '')} — {r.name}"
+    }
+
     # Try to open original menu file, otherwise create new workbook
     wb = None
     if check.file_path and os.path.exists(check.file_path):
@@ -1233,7 +1247,15 @@ async def export_compliance_excel(
         actual = evidence.get("actual_count")
         found_days = evidence.get("found_on_days") or []
         matched_items = evidence.get("matched_items") or []
-        notes = evidence.get("notes", "")
+        ai_notes = evidence.get("notes", "")
+        rule_desc = rule_desc_map.get(dish_name, "")
+        # Combine AI note + rule description (rule desc shown in parentheses if different)
+        if ai_notes and rule_desc and rule_desc not in ai_notes:
+            notes = f"{ai_notes} ({rule_desc})"
+        elif ai_notes:
+            notes = ai_notes
+        else:
+            notes = rule_desc
 
         if expected is None:
             continue

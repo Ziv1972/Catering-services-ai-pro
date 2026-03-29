@@ -1859,7 +1859,7 @@ CRITICAL RULES:
    • "בשר ראש" in any preparation = "בשר ראש"
    • "לשון ברוטב" = "לשון ברוטב פטריות"
    • "שווארמה הודו" or "ירך הודו" = "שווארמה הודו"
-   • "שווארמה פרגית" = separate from "שווארמה הודו"
+   • "שווארמה פרגית" = normally separate from "שווארמה הודו" BUT for NZ site: שווארמה פרגית is an APPROVED substitute for "שווארמה הודו ירך נקבה" — count it and note "הוגשה שווארמה פרגית כתחליף להודו"
    • "סלט קיסר" or "קיסר סלט" = "סלט קיסר"
    • "פיצוחים וירוקים" = look for items with nuts/seeds and greens
    • "סלט אבוקדו" = any salad with avocado as main ingredient
@@ -1891,6 +1891,13 @@ CRITICAL RULES:
    - Same dish appearing on CONSECUTIVE days (e.g., לברק on Apr 1 and Apr 2). Flag: "מנה חוזרת ימים רצופים"
    - Same dish appearing TWICE on the same day. Flag: "מנה כפולה באותו יום"
    - More than 1 ground-meat dish (בשר טחון: קציצות, המבורגר, קבב) on the same day. Flag: "יותר ממנת בשר טחון אחת ביום"
+8. SUBSTITUTION & COUNTING RULES (from compliance report notes):
+   • "שווארמה פרגית" is an APPROVED substitute for "שווארמה הודו ירך נקבה" (NZ) — count it as fulfilling that requirement and add note "הוגשה שווארמה פרגית כתחליף להודו"
+   • "אנטריקוט" is an APPROVED substitute for "סטייק סינטה" — count it and note "הוגש אנטריקוט כתחליף לסינטה"
+   • פרגית dishes requirement (NZ): these dishes ALL count toward the weekly פרגית requirement: קציצות פרגית, מסאחן פרגית, מוקפץ פרגית, שיפודי פרגית, סטייק פרגית. They are ALSO counted individually for their own rules.
+   • "פרגית ממולאת" and "כרע עוף ממולא" do NOT count toward the פרגית requirement — count them separately under עוף
+   • "שוברי שגרה" = a special THEME DAY (יום עיראקי, יום מרוקאי, etc.) — count days where menu features a special ethnic/regional cuisine theme
+   • "ימים מיוחדים" = a special OCCASION DAY (יום העצמאות, פורים, חנוכה, etc.) — count days that coincide with Israeli national/religious holidays
 
 CONTRACT REQUIREMENTS:
 {rules_table}

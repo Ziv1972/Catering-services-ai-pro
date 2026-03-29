@@ -24,6 +24,7 @@ export default function MenuCompliancePage() {
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<'uploading' | 'checking' | null>(null);
   const [rules, setRules] = useState<any[]>([]);
   const [showRules, setShowRules] = useState(false);
   const [showRuleForm, setShowRuleForm] = useState(false);
@@ -59,20 +60,30 @@ export default function MenuCompliancePage() {
   const handleUpload = async () => {
     if (!uploadForm.file) return;
     setUploading(true);
+    setUploadStatus('uploading');
     try {
-      await menuComplianceAPI.uploadMenu(
+      const result = await menuComplianceAPI.uploadMenu(
         uploadForm.file,
         uploadForm.siteId,
         uploadForm.month,
         uploadForm.year
       );
+      const checkId = result.id;
       setShowUpload(false);
       setUploadForm({ ...uploadForm, file: null });
-      await loadChecks();
+
+      // Run AI check automatically
+      setUploadStatus('checking');
+      await menuComplianceAPI.aiCheck(checkId);
+      await menuComplianceAPI.exportExcel(checkId);
+
+      // Navigate to detail page with results ready
+      router.push(`/menu-compliance/${checkId}`);
     } catch (error) {
       console.error('Failed to upload menu:', error);
     } finally {
       setUploading(false);
+      setUploadStatus(null);
     }
   };
 
@@ -250,7 +261,7 @@ export default function MenuCompliancePage() {
                   onClick={handleUpload}
                   disabled={!uploadForm.file || uploading}
                 >
-                  {uploading ? 'Uploading...' : 'Upload & Check'}
+                  {uploadStatus === 'uploading' ? 'מעלה קובץ...' : uploadStatus === 'checking' ? 'AI בודק תפריט...' : 'העלאה + בדיקת AI'}
                 </Button>
                 {uploadForm.file && (
                   <span className="text-sm text-gray-600">

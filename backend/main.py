@@ -501,13 +501,13 @@ async def lifespan(app: FastAPI):
             select(ComplianceRule).where(ComplianceRule.site_id == 1).limit(1)
         )
         if not nz_tagged.scalar():
-            def _nz(name, category, count, freq_text, item_keyword=None, priority=1):
+            def _nz(name, category, count, freq_text, item_keyword=None, priority=1, description=None):
                 return ComplianceRule(
                     name=name,
                     site_id=1,
                     rule_type="item_frequency_monthly",
                     category=category,
-                    description=f"{freq_text} — {name}",
+                    description=description or f"{freq_text} — {name}",
                     parameters={
                         "count": count,
                         "frequency_text": freq_text,
@@ -520,8 +520,10 @@ async def lifespan(app: FastAPI):
 
             nz_rules = [
                 # מיוחדים
-                _nz("שוברי שגרה", "מיוחדים", 2, "פעמיים בחודש"),
-                _nz("ימים מיוחדים", "מיוחדים", 1, "פעם בחודש"),
+                _nz("שוברי שגרה", "מיוחדים", 2, "פעמיים בחודש",
+                    description="יום תפריט מיוחד כגון יום עיראקי, יום מרוקאי וכד'"),
+                _nz("ימים מיוחדים", "מיוחדים", 1, "פעם בחודש",
+                    description="ארוע מיוחד כגון יום העצמאות, פורים, חנוכה"),
                 # סלטים
                 _nz("סלט פטריות אסייתי", "סלטים", 2, "פעמיים בחודש", "פטריות אסייתי"),
                 _nz("סלט טבולה בורגול", "סלטים", 2, "פעמיים בחודש", "טבולה"),
@@ -542,7 +544,8 @@ async def lifespan(app: FastAPI):
                 _nz("כרע עוף ממולא באורז", "עוף", 2, "פעמיים בחודש", "כרע ממולא"),
                 _nz("שניצל בהכנה מקומית 170 גרם", "עוף", 12, "3 פעמים בשבוע", "שניצל"),
                 _nz("כבד עוף עם בצל ופטריות על פירה", "עוף", 4, "פעם בשבוע", "כבד עוף"),
-                _nz("מסאחן פרגית", "עוף", 4, "פעם בשבוע", "מסאחן"),
+                _nz("מסאחן פרגית", "עוף", 4, "פעם בשבוע", "מסאחן",
+                    description="נספר גם כמנת פרגית לצורך דרישת פרגית פעמיים בשבוע"),
                 _nz("קציצות עוף חמוסטה", "עוף", 4, "פעם בשבוע", "חמוסטה"),
                 _nz("חזה עוף בגריל", "עוף", 12, "3 פעמים בשבוע", "חזה עוף"),
                 # בקר
@@ -554,10 +557,14 @@ async def lifespan(app: FastAPI):
                 _nz("כנאפה אסאדו", "בקר", 1, "פעם בחודש", "כנאפה"),
                 _nz("בשר ראש", "בקר", 2, "פעמיים בחודש", "בשר ראש"),
                 # מנות גריל
-                _nz("שווארמה הודו ירך נקבה", "מנות גריל", 4, "פעם בשבוע", "שווארמה הודו"),
-                _nz("קציצות פרגית", "מנות גריל", 4, "פעם בשבוע", "קציצות פרגית"),
-                _nz("סטייק פרגית", "מנות גריל", 4, "פעם בשבוע", "סטייק פרגית"),
-                _nz("סטייק סינטה", "מנות גריל", 2, "פעמיים בחודש", "סינטה"),
+                _nz("שווארמה הודו ירך נקבה", "מנות גריל", 4, "פעם בשבוע", "שווארמה הודו",
+                    description="שווארמה פרגית מאושרת כתחליף — יש לציין בהערות"),
+                _nz("קציצות פרגית", "מנות גריל", 4, "פעם בשבוע", "קציצות פרגית",
+                    description="חובת הגשה פרגית פעמיים בשבוע. מנות מאושרות: קציצות פרגית, מסאחן פרגית, מוקפץ פרגית, שיפודי פרגית, סטייק פרגית. פרגית ממולאת וכרע עוף ממולא — לא נספרים"),
+                _nz("סטייק פרגית", "מנות גריל", 4, "פעם בשבוע", "סטייק פרגית",
+                    description="נספר יחד עם קציצות פרגית לצורך דרישת פרגית פעמיים בשבוע"),
+                _nz("סטייק סינטה", "מנות גריל", 2, "פעמיים בחודש", "סינטה",
+                    description="אנטריקוט מאושר כתחליף — יש לציין בהערות"),
                 # דגים
                 _nz("פילה סלמון נורווגי", "דגים", 4, "פעם בשבוע", "סלמון"),
                 _nz("פילה אמנון", "דגים", 4, "פעם בשבוע", "אמנון"),
@@ -576,6 +583,24 @@ async def lifespan(app: FastAPI):
                 session.add(rule)
             await session.commit()
             logger.info(f"Seeded {len(nz_rules)} NZ compliance rules (site_id=1)")
+
+        # Migrate NZ rule descriptions — update existing rules with notes from compliance report
+        nz_desc_updates = [
+            ("שוברי שגרה", "יום תפריט מיוחד כגון יום עיראקי, יום מרוקאי וכד'"),
+            ("ימים מיוחדים", "ארוע מיוחד כגון יום העצמאות, פורים, חנוכה"),
+            ("מסאחן פרגית", "נספר גם כמנת פרגית לצורך דרישת פרגית פעמיים בשבוע"),
+            ("שווארמה הודו ירך נקבה", "שווארמה פרגית מאושרת כתחליף — יש לציין בהערות"),
+            ("קציצות פרגית", "חובת הגשה פרגית פעמיים בשבוע. מנות מאושרות: קציצות פרגית, מסאחן פרגית, מוקפץ פרגית, שיפודי פרגית, סטייק פרגית. פרגית ממולאת וכרע עוף ממולא — לא נספרים"),
+            ("סטייק פרגית", "נספר יחד עם קציצות פרגית לצורך דרישת פרגית פעמיים בשבוע"),
+            ("סטייק סינטה", "אנטריקוט מאושר כתחליף — יש לציין בהערות"),
+        ]
+        for rule_name, desc in nz_desc_updates:
+            await session.execute(
+                text("UPDATE compliance_rules SET description = :desc WHERE name = :name AND site_id = 1"),
+                {"desc": desc, "name": rule_name},
+            )
+        await session.commit()
+        logger.info("Updated NZ compliance rule descriptions with substitution notes")
 
     # Seed product category groups and mappings
     async with AsyncSessionLocal() as session:

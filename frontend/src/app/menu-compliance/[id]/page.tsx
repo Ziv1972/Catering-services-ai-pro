@@ -25,11 +25,11 @@ export default function MenuCheckDetailPage() {
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [rerunning, setRerunning] = useState(false);
-  const [aiChecking, setAiChecking] = useState(false);
+  const [aiChecking, setAiChecking] = useState(false); // used during recheck flow
   const [deleting, setDeleting] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState<any>(null);
-  const [downloading, setDownloading] = useState(false);
+
   const [filter, setFilter] = useState<FilterType>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -68,11 +68,16 @@ export default function MenuCheckDetailPage() {
     setRerunning(true);
     try {
       await menuComplianceAPI.reuploadFile(checkId, file);
+      // Run AI check automatically after reupload
+      setAiChecking(true);
+      await menuComplianceAPI.aiCheck(checkId);
+      await menuComplianceAPI.exportExcel(checkId);
       await loadCheckData();
     } catch (error) {
-      // Error re-uploading
+      // Error re-uploading or AI check
     } finally {
       setRerunning(false);
+      setAiChecking(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -101,34 +106,6 @@ export default function MenuCheckDetailPage() {
     }
   };
 
-  const handleAiCheck = async () => {
-    setAiChecking(true);
-    try {
-      await menuComplianceAPI.aiCheck(checkId);
-      // After AI check completes, download the Excel with results
-      await menuComplianceAPI.exportExcel(checkId);
-      // Reload results to show updated data
-      const updated = await menuComplianceAPI.getResults(checkId);
-      setResults(updated);
-      const checkData = await menuComplianceAPI.getCheck(checkId);
-      setCheck(checkData);
-    } catch (error) {
-      console.error('AI check failed:', error);
-    } finally {
-      setAiChecking(false);
-    }
-  };
-
-  const handleDownloadExcel = async () => {
-    setDownloading(true);
-    try {
-      await menuComplianceAPI.exportExcel(checkId);
-    } catch (error) {
-      // Download failed
-    } finally {
-      setDownloading(false);
-    }
-  };
 
   const handleGlobalSearch = async () => {
     if (!globalSearch.trim()) return;
@@ -246,42 +223,17 @@ export default function MenuCheckDetailPage() {
               {extracting ? 'Extracting...' : 'Extract Dishes'}
             </Button>
             <Button
-              onClick={handleAiCheck}
-              disabled={aiChecking}
-              className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
-            >
-              {aiChecking ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Sparkles className="w-4 h-4" />
-              )}
-              {aiChecking ? 'AI Checking...' : 'AI Check + Download'}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleDownloadExcel}
-              disabled={downloading}
-              className="gap-2"
-            >
-              {downloading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Download className="w-4 h-4" />
-              )}
-              {downloading ? 'Downloading...' : 'Download Report'}
-            </Button>
-            <Button
               variant="outline"
               onClick={handleRecheck}
-              disabled={rerunning}
+              disabled={rerunning || aiChecking}
               className="gap-2"
             >
-              {rerunning ? (
+              {(rerunning || aiChecking) ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Upload className="w-4 h-4" />
               )}
-              {rerunning ? 'Checking...' : 'Re-check (Upload File)'}
+              {rerunning ? 'מעלה קובץ...' : aiChecking ? 'AI בודק...' : 'העלאה מחדש + בדיקת AI'}
             </Button>
             {check.critical_findings > 0 ? (
               <Badge variant="destructive" className="text-lg px-4 py-2">
