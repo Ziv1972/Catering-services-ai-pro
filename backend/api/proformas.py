@@ -676,7 +676,7 @@ async def find_duplicate_proformas(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Find potential duplicate proformas (same supplier + site + invoice_date + similar total)."""
+    """Find potential duplicate proformas: same supplier+site+month, or similar totals within same month."""
     result = await db.execute(
         select(Proforma)
         .options(selectinload(Proforma.supplier), selectinload(Proforma.items))
@@ -684,24 +684,46 @@ async def find_duplicate_proformas(
     )
     proformas = result.scalars().all()
 
-    # Group by supplier_id + site_id + invoice_date
+    # Group by supplier_id + site_id + year-month (not exact date)
     groups: dict = {}
     for p in proformas:
-        key = (p.supplier_id, p.site_id, p.invoice_date.isoformat() if p.invoice_date else "none")
+        month_key = p.invoice_date.strftime("%Y-%m") if p.invoice_date else "none"
+        key = (p.supplier_id, p.site_id, month_key)
         groups.setdefault(key, []).append(p)
 
     duplicates = []
     for key, group in groups.items():
-        if len(group) > 1:
+        if len(group) <= 1:
+            continue
+
+        # Check for similar totals (within 5%) or same proforma number
+        has_similar = False
+        for i, a in enumerate(group):
+            for b in group[i + 1:]:
+                if a.total_amount and b.total_amount and a.total_amount > 0:
+                    ratio = abs(a.total_amount - b.total_amount) / max(a.total_amount, b.total_amount)
+                    if ratio < 0.05:
+                        has_similar = True
+                        break
+                if a.proforma_number and b.proforma_number and a.proforma_number == b.proforma_number:
+                    has_similar = True
+                    break
+            if has_similar:
+                break
+
+        # Always flag if >2 proformas in same month, or if similar totals found
+        if has_similar or len(group) > 2:
             duplicates.append({
                 "supplier_name": group[0].supplier.name if group[0].supplier else "Unknown",
                 "site_id": group[0].site_id,
-                "invoice_date": key[2],
+                "month": key[2],
                 "count": len(group),
+                "reason": "similar_total" if has_similar else "multiple_in_month",
                 "proformas": [
                     {
                         "id": p.id,
                         "proforma_number": p.proforma_number,
+                        "invoice_date": p.invoice_date.isoformat() if p.invoice_date else None,
                         "total_amount": p.total_amount,
                         "item_count": len(p.items) if p.items else 0,
                         "status": p.status,

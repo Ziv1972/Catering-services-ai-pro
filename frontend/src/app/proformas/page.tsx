@@ -324,13 +324,14 @@ export default function ProformasPage() {
             {duplicates.map((group, gi) => (
               <div key={gi} className="mb-3 bg-white rounded border p-3">
                 <p className="text-sm font-medium mb-2">
-                  {group.supplier_name} | Site {group.site_id} | {group.invoice_date} ({group.count} copies)
+                  {group.supplier_name} | Site {group.site_id} | {group.month} ({group.count} proformas)
+                  {group.reason === 'similar_total' && <span className="text-red-600 ml-2">Similar totals detected</span>}
                 </p>
                 <div className="space-y-1">
                   {group.proformas.map((p: any, pi: number) => (
                     <div key={p.id} className="flex items-center justify-between text-sm bg-gray-50 rounded px-3 py-1.5">
                       <span>
-                        #{p.id} — {p.proforma_number || 'no number'} — {new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS' }).format(p.total_amount)} — {p.item_count} items
+                        #{p.id} — {p.invoice_date} — {p.proforma_number || 'no number'} — {new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS' }).format(p.total_amount)} — {p.item_count} items
                       </span>
                       <div className="flex items-center gap-2">
                         {pi === 0 && <Badge variant="outline" className="text-green-700 border-green-300">Keep</Badge>}
