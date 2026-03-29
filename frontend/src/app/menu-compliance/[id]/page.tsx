@@ -224,6 +224,15 @@ export default function MenuCheckDetailPage() {
             </Button>
             <Button
               variant="outline"
+              onClick={() => menuComplianceAPI.exportExcel(checkId)}
+              className="gap-2"
+              title="הורד דוח Excel"
+            >
+              <Download className="w-4 h-4" />
+              הורד Excel
+            </Button>
+            <Button
+              variant="outline"
               onClick={handleRecheck}
               disabled={rerunning || aiChecking}
               className="gap-2"

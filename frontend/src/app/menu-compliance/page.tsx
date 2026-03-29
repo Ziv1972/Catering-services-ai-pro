@@ -61,6 +61,7 @@ export default function MenuCompliancePage() {
     if (!uploadForm.file) return;
     setUploading(true);
     setUploadStatus('uploading');
+    let checkId: number | null = null;
     try {
       const result = await menuComplianceAPI.uploadMenu(
         uploadForm.file,
@@ -68,22 +69,26 @@ export default function MenuCompliancePage() {
         uploadForm.month,
         uploadForm.year
       );
-      const checkId = result.id;
-      setShowUpload(false);
-      setUploadForm({ ...uploadForm, file: null });
+      checkId = result.id;
 
       // Run AI check automatically
       setUploadStatus('checking');
-      await menuComplianceAPI.aiCheck(checkId);
-      await menuComplianceAPI.exportExcel(checkId);
-
-      // Navigate to detail page with results ready
-      router.push(`/menu-compliance/${checkId}`);
+      try {
+        await menuComplianceAPI.aiCheck(checkId!);
+        await menuComplianceAPI.exportExcel(checkId!);
+      } catch {
+        // AI check failed — still navigate to detail page so user can retry
+      }
     } catch (error) {
       console.error('Failed to upload menu:', error);
     } finally {
       setUploading(false);
       setUploadStatus(null);
+      setShowUpload(false);
+      setUploadForm({ ...uploadForm, file: null });
+      if (checkId) {
+        router.push(`/menu-compliance/${checkId}`);
+      }
     }
   };
 
