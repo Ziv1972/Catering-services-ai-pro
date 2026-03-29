@@ -1292,21 +1292,8 @@ async def export_compliance_excel(
             def_cell.fill = green_fill
             def_cell.font = green_font
 
-        # Show matched menu items (what Claude found); fall back to dates if items missing
-        if matched_items:
-            items_text = ", ".join(matched_items)
-        elif found_days:
-            # Format dates as short strings (e.g. "1/4, 8/4, 15/4")
-            def _fmt(d):
-                try:
-                    from datetime import date as _date
-                    parts = str(d).split("-")
-                    return f"{int(parts[2])}/{int(parts[1])}" if len(parts) == 3 else str(d)
-                except Exception:
-                    return str(d)
-            items_text = ", ".join(_fmt(d) for d in found_days)
-        else:
-            items_text = ""
+        # Show matched menu items (exact text Claude found in the menu)
+        items_text = ", ".join(matched_items) if matched_items else ""
         items_cell = ws.cell(row=row_num, column=7, value=items_text)
         items_cell.border = thin_border
         items_cell.alignment = Alignment(wrap_text=True)
@@ -1332,6 +1319,100 @@ async def export_compliance_excel(
 
     # RTL sheet direction
     ws.sheet_view.rightToLeft = True
+
+    # Reconstruct weekly menu sheets from MenuDay data stored in DB
+    # (original file may be gone due to Railway ephemeral filesystem)
+    days_result = await db.execute(
+        select(MenuDay).where(MenuDay.menu_check_id == check_id).order_by(MenuDay.date)
+    )
+    menu_days = days_result.scalars().all()
+
+    if menu_days:
+        from collections import defaultdict
+
+        hebrew_days = {
+            "Sunday": "יום ראשון",
+            "Monday": "יום שני",
+            "Tuesday": "יום שלישי",
+            "Wednesday": "יום רביעי",
+            "Thursday": "יום חמישי",
+            "Friday": "יום שישי",
+            "Saturday": "שבת",
+        }
+
+        # Group days by week_number
+        weeks: dict = defaultdict(list)
+        for day in menu_days:
+            weeks[day.week_number].append(day)
+
+        for week_num in sorted(weeks.keys()):
+            week_days = sorted(weeks[week_num], key=lambda d: d.date)
+            sheet_name = f"שבוע {week_num}"
+
+            # Remove existing sheet (from original file) and recreate fresh
+            if sheet_name in wb.sheetnames:
+                del wb[sheet_name]
+
+            ws_week = wb.create_sheet(sheet_name)
+            ws_week.sheet_view.rightToLeft = True
+
+            # Collect all categories in order of first appearance
+            all_categories: list = []
+            seen_cats: set = set()
+            for day in week_days:
+                items_map = day.menu_items or {}
+                for cat in items_map.keys():
+                    if cat not in seen_cats:
+                        all_categories.append(cat)
+                        seen_cats.add(cat)
+
+            # Styles
+            date_hdr_fill = PatternFill("solid", fgColor="4472C4")
+            date_hdr_font = Font(bold=True, color="FFFFFF", size=10)
+            cat_fill = PatternFill("solid", fgColor="D9E2F3")
+            cat_font = Font(bold=True, size=10)
+
+            # Row 1 col A label
+            lbl = ws_week.cell(row=1, column=1, value="קטגוריה")
+            lbl.font = cat_font
+            lbl.fill = cat_fill
+
+            # Row 1: date headers in columns B, C, D …
+            for col_off, day in enumerate(week_days, 2):
+                day_heb = hebrew_days.get(day.day_of_week, day.day_of_week)
+                d = day.date
+                date_str = f"{day_heb} {d.day}/{d.month}/{str(d.year)[2:]}"
+                hcell = ws_week.cell(row=1, column=col_off, value=date_str)
+                hcell.font = date_hdr_font
+                hcell.fill = date_hdr_fill
+                hcell.alignment = Alignment(horizontal="center")
+
+            # Data rows: col A = category, cols B+ = items for that day
+            for row_off, cat in enumerate(all_categories, 2):
+                ccell = ws_week.cell(row=row_off, column=1, value=cat)
+                ccell.font = cat_font
+                ccell.fill = cat_fill
+
+                for col_off, day in enumerate(week_days, 2):
+                    items_map = day.menu_items or {}
+                    items_for_cat = items_map.get(cat, [])
+                    if isinstance(items_for_cat, list):
+                        cell_text = "\n".join(items_for_cat)
+                    else:
+                        cell_text = str(items_for_cat) if items_for_cat else ""
+                    dcell = ws_week.cell(row=row_off, column=col_off, value=cell_text)
+                    dcell.alignment = Alignment(wrap_text=True, vertical="top")
+
+            # Column widths
+            ws_week.column_dimensions["A"].width = 20
+            for col_off in range(len(week_days)):
+                col_letter = chr(ord("B") + col_off)
+                ws_week.column_dimensions[col_letter].width = 32
+
+            # Row heights
+            ws_week.row_dimensions[1].height = 18
+            for row_idx in range(2, len(all_categories) + 2):
+                ws_week.row_dimensions[row_idx].height = 45
 
     # Write to buffer
     buffer = io.BytesIO()
