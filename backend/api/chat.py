@@ -690,9 +690,16 @@ async def chat(
         # Tool-use loop (max 5 rounds to prevent infinite loops)
         final_response = ""
         for _ in range(5):
+            today = date.today()
+            system_prompt_with_date = (
+                f"Today's date is {today.strftime('%Y-%m-%d')} "
+                f"(day={today.day}, month={today.month}, year={today.year}). "
+                f"Always use this year ({today.year}) as the default year when querying data "
+                f"unless the user specifies a different year.\n\n"
+            ) + CHAT_SYSTEM_PROMPT
             response = await claude_service.generate_with_tools(
                 messages=messages,
-                system_prompt=CHAT_SYSTEM_PROMPT,
+                system_prompt=system_prompt_with_date,
                 tools=CHAT_TOOLS,
                 max_tokens=4096,
             )
