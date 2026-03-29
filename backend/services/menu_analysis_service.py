@@ -1888,7 +1888,7 @@ CRITICAL RULES:
 6. Group names MUST be one of: מיוחדים, סלטים, עוף, בקר, מנות גריל, דגים, קינוחים
 7. ANOMALY DETECTION — also flag these issues in the notes:
    - Vague dish names like "מנת דג", "מנת בשר", "מנת עוף" — the supplier MUST specify the exact dish. Flag: "שם מנה לא מדויק - הספק צריך לפרט"
-   - Same dish appearing on CONSECUTIVE days (e.g., לברק on Apr 1 and Apr 2). Flag: "מנה חוזרת ימים רצופים"
+   - Same dish appearing on CONSECUTIVE days — ONLY flag if the dish name is clearly the SAME dish (identical or near-identical name, same protein/ingredient). E.g. "פילה לברק" on Apr 1 AND Apr 2 = flag. "פילה לברק" on Apr 1 and "מסאחן פרגית" on Apr 2 = NOT the same dish, do NOT flag. Each consecutive-day anomaly must list only the matched items for THAT specific dish. Create a SEPARATE anomaly row for each dish with consecutive repeats. Flag: "מנה חוזרת ימים רצופים"
    - Same dish appearing TWICE on the same day. Flag: "מנה כפולה באותו יום"
    - More than 1 ground-meat dish (בשר טחון: קציצות, המבורגר, קבב) on the same day. Flag: "יותר ממנת בשר טחון אחת ביום"
 8. SUBSTITUTION & COUNTING RULES (from compliance report notes):

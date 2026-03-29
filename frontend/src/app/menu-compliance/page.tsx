@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   FileText, AlertTriangle, CheckCircle2, Upload, X, Plus, Pencil, BookOpen, Check, Search,
-  TrendingUp, TrendingDown, Equal, Trash2
+  TrendingUp, TrendingDown, Equal, Trash2, Download
 } from 'lucide-react';
 import { menuComplianceAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -498,14 +498,23 @@ export default function MenuCompliancePage() {
                       className="p-6 hover:shadow-lg transition-shadow cursor-pointer relative group"
                       onClick={() => router.push(`/menu-compliance/${check.id}`)}
                     >
-                      {/* Delete button */}
-                      <button
-                        onClick={(e) => handleDeleteCheck(e, check.id)}
-                        className="absolute top-3 right-3 p-1.5 rounded-md text-gray-300 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
-                        title="Delete check"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {/* Action buttons (top-right) */}
+                      <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); menuComplianceAPI.exportExcel(check.id); }}
+                          className="p-1.5 rounded-md text-gray-300 hover:text-blue-600 hover:bg-blue-50"
+                          title="הורד קובץ Excel"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => handleDeleteCheck(e, check.id)}
+                          className="p-1.5 rounded-md text-gray-300 hover:text-red-600 hover:bg-red-50"
+                          title="Delete check"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
 
                       <div className="flex justify-between items-start mb-4">
                         <div>
