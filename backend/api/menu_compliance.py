@@ -1212,10 +1212,10 @@ async def export_compliance_excel(
     title_cell.font = title_font
     title_cell.fill = title_fill
     title_cell.alignment = Alignment(horizontal="center")
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
 
-    # Headers — matching manual check format (row 2)
-    headers = ["קבוצה", "סוג", "תדירות מינימלית", "תקן", "בפועל", "חוסר", "פריטים שנמצאו בתפריט", "הערות"]
+    # Headers — 9 columns matching the manual check format exactly
+    headers = ["קבוצה", "סוג", "תדירות מינימלית", "תקן", "בפועל", "חוסר", "פריטים שנמצאו בתפריט", "הערות", "הערות נוספות"]
     for col_idx, h in enumerate(headers, 1):
         cell = ws.cell(row=2, column=col_idx, value=h)
         cell.font = header_font
@@ -1223,7 +1223,7 @@ async def export_compliance_excel(
         cell.alignment = Alignment(horizontal="center")
         cell.border = thin_border
 
-    # Column widths
+    # Column widths — matching original file exactly
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 45
     ws.column_dimensions["C"].width = 22
@@ -1232,6 +1232,7 @@ async def export_compliance_excel(
     ws.column_dimensions["F"].width = 8
     ws.column_dimensions["G"].width = 65
     ws.column_dimensions["H"].width = 25
+    ws.column_dimensions["I"].width = 66
     ws.row_dimensions[1].height = 22
     ws.row_dimensions[2].height = 18
 
@@ -1247,15 +1248,8 @@ async def export_compliance_excel(
         actual = evidence.get("actual_count")
         found_days = evidence.get("found_on_days") or []
         matched_items = evidence.get("matched_items") or []
-        ai_notes = evidence.get("notes", "")
-        rule_desc = rule_desc_map.get(dish_name, "")
-        # Combine AI note + rule description (rule desc shown in parentheses if different)
-        if ai_notes and rule_desc and rule_desc not in ai_notes:
-            notes = f"{ai_notes} ({rule_desc})"
-        elif ai_notes:
-            notes = ai_notes
-        else:
-            notes = rule_desc
+        ai_notes = evidence.get("notes", "")          # col H — check-specific observation
+        rule_desc = rule_desc_map.get(dish_name, "")  # col I — permanent rule description
 
         if expected is None:
             continue
@@ -1317,13 +1311,19 @@ async def export_compliance_excel(
         items_cell.border = thin_border
         items_cell.alignment = Alignment(wrap_text=True)
 
-        notes_cell = ws.cell(row=row_num, column=8, value=notes)
+        # Col H — הערות (check-specific AI note)
+        notes_cell = ws.cell(row=row_num, column=8, value=ai_notes)
         notes_cell.border = thin_border
         notes_cell.alignment = Alignment(wrap_text=True)
 
+        # Col I — הערות נוספות (permanent rule description)
+        extra_cell = ws.cell(row=row_num, column=9, value=rule_desc)
+        extra_cell.border = thin_border
+        extra_cell.alignment = Alignment(wrap_text=True)
+
         # Anomaly row styling
         if group == "חריגים":
-            for col_idx in range(1, 9):
+            for col_idx in range(1, 10):
                 cell = ws.cell(row=row_num, column=col_idx)
                 cell.fill = anomaly_fill
                 cell.font = anomaly_font
