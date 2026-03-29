@@ -211,9 +211,9 @@ export const menuComplianceAPI = {
     return response.data;
   },
 
-  listRules: async (activeOnly = false) => {
+  listRules: async (activeOnly = false, siteId?: number) => {
     const response = await api.get('/api/menu-compliance/rules', {
-      params: { active_only: activeOnly },
+      params: { active_only: activeOnly, ...(siteId !== undefined ? { site_id: siteId } : {}) },
     });
     return response.data;
   },

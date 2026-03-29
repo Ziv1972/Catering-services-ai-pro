@@ -32,6 +32,7 @@ export default function MenuCompliancePage() {
   const [savingRule, setSavingRule] = useState(false);
   const [ruleSearch, setRuleSearch] = useState('');
   const [ruleCategory, setRuleCategory] = useState<string | null>(null);
+  const [ruleSiteFilter, setRuleSiteFilter] = useState<number | null>(null);
   const [uploadForm, setUploadForm] = useState({
     siteId: 1,
     month: MONTHS[new Date().getMonth()],
@@ -147,7 +148,8 @@ export default function MenuCompliancePage() {
   const filteredRules = rules.filter((r: any) => {
     const matchesSearch = !ruleSearch || r.name.toLowerCase().includes(ruleSearch.toLowerCase()) || (r.description || '').toLowerCase().includes(ruleSearch.toLowerCase());
     const matchesCategory = !ruleCategory || r.category === ruleCategory;
-    return matchesSearch && matchesCategory;
+    const matchesSite = ruleSiteFilter === null || r.site_id === ruleSiteFilter || r.site_id === null;
+    return matchesSearch && matchesCategory && matchesSite;
   });
 
   const totalCritical = checks.reduce((sum: number, c: any) => sum + (c.critical_findings || 0), 0);
@@ -343,13 +345,26 @@ export default function MenuCompliancePage() {
                       className="w-full pl-9 pr-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
+                  {/* Site filter */}
+                  <div className="flex gap-2">
+                    {[{ label: 'הכל', val: null }, { label: 'נס ציונה', val: 1 }, { label: 'קרית גת', val: 2 }].map(opt => (
+                      <button
+                        key={String(opt.val)}
+                        onClick={() => setRuleSiteFilter(opt.val)}
+                        className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${ruleSiteFilter === opt.val ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                      >
+                        {opt.label} ({opt.val === null ? rules.length : rules.filter((r: any) => r.site_id === opt.val).length})
+                      </button>
+                    ))}
+                  </div>
+
                   {ruleCategories.length > 0 && (
                     <div className="flex flex-wrap gap-2">
                       <button
                         onClick={() => setRuleCategory(null)}
                         className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${!ruleCategory ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                       >
-                        All ({rules.length})
+                        All ({filteredRules.length})
                       </button>
                       {ruleCategories.map(cat => {
                         const count = rules.filter((r: any) => r.category === cat).length;
@@ -381,6 +396,9 @@ export default function MenuCompliancePage() {
                           <span className="font-medium text-sm">{r.name}</span>
                           <Badge className="text-xs bg-blue-50 text-blue-700 border-blue-200">{r.rule_type}</Badge>
                           {r.category && <Badge className="text-xs bg-gray-100 text-gray-600">{r.category}</Badge>}
+                          {r.site_id === 1 && <Badge className="text-xs bg-green-50 text-green-700 border-green-200">נס ציונה</Badge>}
+                          {r.site_id === 2 && <Badge className="text-xs bg-orange-50 text-orange-700 border-orange-200">קרית גת</Badge>}
+                          {r.site_id === null && <Badge className="text-xs bg-gray-50 text-gray-500">גלובלי</Badge>}
                         </div>
                         {r.description && <p className="text-xs text-gray-500 mt-0.5">{r.description}</p>}
                       </div>

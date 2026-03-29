@@ -220,6 +220,7 @@ async def lifespan(app: FastAPI):
             ("dish_catalog", "source_check_id", "INTEGER"),
             ("violations", "employee_phone", "VARCHAR"),
             ("violations", "restaurant_type", "VARCHAR"),
+            ("compliance_rules", "site_id", "INTEGER"),
         ]
         for table, column, col_type in migrations:
             try:
@@ -233,6 +234,16 @@ async def lifespan(app: FastAPI):
                 except Exception as e:
                     await session.rollback()
                     logger.warning(f"Could not add column {table}.{column}: {e}")
+
+    # Drop old unique constraint on compliance_rules.name so per-site duplicates work
+    async with AsyncSessionLocal() as session:
+        try:
+            await session.execute(text(
+                "ALTER TABLE compliance_rules DROP CONSTRAINT IF EXISTS compliance_rules_name_key"
+            ))
+            await session.commit()
+        except Exception:
+            await session.rollback()
 
     # Seed default user and sites
     async with AsyncSessionLocal() as session:
@@ -472,126 +483,99 @@ async def lifespan(app: FastAPI):
             await session.commit()
             logger.info("Product catalog and price lists seeded")
 
-    # Seed default menu compliance rules if none exist
+    # --- Compliance rules: migrate existing rules → KG (site_id=2), seed NZ rules ---
     async with AsyncSessionLocal() as session:
-        existing_rules = await session.execute(select(ComplianceRule))
-        if not existing_rules.scalars().first():
-            default_compliance_rules = [
-                # Daily mandatory categories (priority 1 = critical)
-                ComplianceRule(
-                    name="Daily main course required",
-                    rule_type="mandatory",
-                    category="Daily Requirements",
-                    description="Every day must include a main course (עיקרית)",
-                    parameters={"required_category": "עיקרית"},
-                    priority=1,
+        # Tag all existing null-site rules as KG (they were KG-specific from PDF import)
+        kg_tagged = await session.execute(
+            select(ComplianceRule).where(ComplianceRule.site_id == 2).limit(1)
+        )
+        if not kg_tagged.scalar():
+            await session.execute(
+                text("UPDATE compliance_rules SET site_id = 2 WHERE site_id IS NULL")
+            )
+            await session.commit()
+            logger.info("Tagged existing compliance rules as KG (site_id=2)")
+
+        # Seed NZ-specific rules from the חוסרים תפריט נס ציונה template
+        nz_tagged = await session.execute(
+            select(ComplianceRule).where(ComplianceRule.site_id == 1).limit(1)
+        )
+        if not nz_tagged.scalar():
+            def _nz(name, category, count, freq_text, item_keyword=None, priority=1):
+                return ComplianceRule(
+                    name=name,
+                    site_id=1,
+                    rule_type="item_frequency_monthly",
+                    category=category,
+                    description=f"{freq_text} — {name}",
+                    parameters={
+                        "count": count,
+                        "frequency_text": freq_text,
+                        "item_keyword": item_keyword or name,
+                        "expected_count": count,
+                    },
+                    priority=priority,
                     is_active=True,
-                ),
-                ComplianceRule(
-                    name="Daily salad bar required",
-                    rule_type="mandatory",
-                    category="Daily Requirements",
-                    description="Every day must include salads (סלטים)",
-                    parameters={"required_category": "סלטים"},
-                    priority=1,
-                    is_active=True,
-                ),
-                ComplianceRule(
-                    name="Daily soup required",
-                    rule_type="mandatory",
-                    category="Daily Requirements",
-                    description="Every day must include soup (מרק)",
-                    parameters={"required_category": "מרק"},
-                    priority=2,
-                    is_active=True,
-                ),
-                ComplianceRule(
-                    name="Daily side dishes required",
-                    rule_type="mandatory",
-                    category="Daily Requirements",
-                    description="Every day must include side dishes (תוספות)",
-                    parameters={"required_category": "תוספות"},
-                    priority=1,
-                    is_active=True,
-                ),
-                ComplianceRule(
-                    name="Daily bread required",
-                    rule_type="mandatory",
-                    category="Daily Requirements",
-                    description="Every day must include bread (לחם)",
-                    parameters={"required_category": "לחם"},
-                    priority=2,
-                    is_active=True,
-                ),
-                ComplianceRule(
-                    name="Daily drinks required",
-                    rule_type="mandatory",
-                    category="Daily Requirements",
-                    description="Every day must include beverages (שתיה)",
-                    parameters={"required_category": "שתיה"},
-                    priority=2,
-                    is_active=True,
-                ),
-                ComplianceRule(
-                    name="Daily dessert required",
-                    rule_type="mandatory",
-                    category="Daily Requirements",
-                    description="Every day must include dessert (קינוח)",
-                    parameters={"required_category": "קינוח"},
-                    priority=2,
-                    is_active=True,
-                ),
-                # Dietary variety rules
-                ComplianceRule(
-                    name="Fish served at least once per week",
-                    rule_type="frequency",
-                    category="Menu Variety",
-                    description="Fish must appear at least once per week",
-                    parameters={"item": "דג", "min_per_week": 1},
-                    priority=2,
-                    is_active=True,
-                ),
-                ComplianceRule(
-                    name="Vegetarian option available",
-                    rule_type="mandatory",
-                    category="Dietary",
-                    description="Vegetarian option must be available in the menu",
-                    parameters={"required_item": "צמחוני"},
-                    priority=1,
-                    is_active=True,
-                ),
-                ComplianceRule(
-                    name="Chicken not more than 3 times per week",
-                    rule_type="frequency",
-                    category="Menu Variety",
-                    description="Chicken should not be served more than 3 times per week",
-                    parameters={"item": "עוף", "max_per_week": 3},
-                    priority=2,
-                    is_active=True,
-                ),
-                ComplianceRule(
-                    name="Schnitzel not more than 2 times per week",
-                    rule_type="frequency",
-                    category="Menu Variety",
-                    description="Schnitzel should not be served more than 2 times per week",
-                    parameters={"item": "שניצל", "max_per_week": 2},
-                    priority=2,
-                    is_active=True,
-                ),
-                ComplianceRule(
-                    name="Fresh fruit available daily",
-                    rule_type="mandatory",
-                    category="Daily Requirements",
-                    description="Fresh fruit must be available (פירות)",
-                    parameters={"required_category": "פירות"},
-                    priority=2,
-                    is_active=True,
-                ),
+                )
+
+            nz_rules = [
+                # מיוחדים
+                _nz("שוברי שגרה", "מיוחדים", 2, "פעמיים בחודש"),
+                _nz("ימים מיוחדים", "מיוחדים", 1, "פעם בחודש"),
+                # סלטים
+                _nz("סלט פטריות אסייתי", "סלטים", 2, "פעמיים בחודש", "פטריות אסייתי"),
+                _nz("סלט טבולה בורגול", "סלטים", 2, "פעמיים בחודש", "טבולה"),
+                _nz("סלט אבוקדו", "סלטים", 2, "פעמיים בחודש (נובמבר–מרץ)", "אבוקדו"),
+                _nz("סלט ארטישוק", "סלטים", 1, "פעם בחודש", "ארטישוק"),
+                _nz("פיצוחים וירוקים", "סלטים", 4, "פעם בשבוע", "פיצוחים"),
+                _nz("סלט קינואה", "סלטים", 2, "פעמיים בחודש", "קינואה"),
+                _nz("סלט עגבניות איטלקי", "סלטים", 2, "פעמיים בחודש", "עגבניות איטלקי"),
+                _nz("סלט עגבניות חריף", "סלטים", 2, "פעמיים בחודש", "עגבניות חריף"),
+                _nz("סלט קיסר", "סלטים", 2, "פעמיים בחודש", "קיסר"),
+                _nz("סלט ויאטנמי אטריות זכוכית", "סלטים", 4, "פעם בשבוע", "ויאטנמי"),
+                _nz("סלט סלק ותפוח עץ", "סלטים", 4, "פעם בשבוע", "סלק"),
+                _nz("סלט קינואה עדשים", "סלטים", 4, "פעם בשבוע", "קינואה עדשים"),
+                _nz("סלט ווקאמה", "סלטים", 4, "פעם בשבוע", "ווקאמה"),
+                # עוף
+                _nz("עופות שלמים בגריל מסתובב", "עוף", 12, "3 פעמים בשבוע", "עוף שלם"),
+                _nz("טבית עופות צלויים עם אורז ובהרט", "עוף", 2, "פעמיים בחודש", "טבית"),
+                _nz("כרע עוף ממולא באורז", "עוף", 2, "פעמיים בחודש", "כרע ממולא"),
+                _nz("שניצל בהכנה מקומית 170 גרם", "עוף", 12, "3 פעמים בשבוע", "שניצל"),
+                _nz("כבד עוף עם בצל ופטריות על פירה", "עוף", 4, "פעם בשבוע", "כבד עוף"),
+                _nz("מסאחן פרגית", "עוף", 4, "פעם בשבוע", "מסאחן"),
+                _nz("קציצות עוף חמוסטה", "עוף", 4, "פעם בשבוע", "חמוסטה"),
+                _nz("חזה עוף בגריל", "עוף", 12, "3 פעמים בשבוע", "חזה עוף"),
+                # בקר
+                _nz("המבורגר ביתי", "בקר", 4, "פעם בשבוע", "המבורגר"),
+                _nz("מאפה בשר וחציל שרוף", "בקר", 4, "פעם בשבוע", "מאפה בשר"),
+                _nz("בקלאוות בשר", "בקר", 1, "פעם בחודש", "בקלאווה"),
+                _nz("צלי כתף מספר 5-6", "בקר", 2, "פעמיים בחודש", "צלי כתף"),
+                _nz("אסאדו צלוי באיטיות", "בקר", 3, "שלוש פעמים בחודש", "אסאדו"),
+                _nz("כנאפה אסאדו", "בקר", 1, "פעם בחודש", "כנאפה"),
+                _nz("בשר ראש", "בקר", 2, "פעמיים בחודש", "בשר ראש"),
+                # מנות גריל
+                _nz("שווארמה הודו ירך נקבה", "מנות גריל", 4, "פעם בשבוע", "שווארמה הודו"),
+                _nz("קציצות פרגית", "מנות גריל", 4, "פעם בשבוע", "קציצות פרגית"),
+                _nz("סטייק פרגית", "מנות גריל", 4, "פעם בשבוע", "סטייק פרגית"),
+                _nz("סטייק סינטה", "מנות גריל", 2, "פעמיים בחודש", "סינטה"),
+                # דגים
+                _nz("פילה סלמון נורווגי", "דגים", 4, "פעם בשבוע", "סלמון"),
+                _nz("פילה אמנון", "דגים", 4, "פעם בשבוע", "אמנון"),
+                _nz("חריימה של נסיכה", "דגים", 2, "פעמיים בחודש", "חריימה"),
+                _nz("פילה לברק", "דגים", 2, "פעמיים בחודש", "לברק"),
+                _nz("פיש וצ'יפס", "דגים", 1, "פעם בחודש", "פיש"),
+                _nz("קציצות דגים ביתיות", "דגים", 2, "פעמיים בחודש", "קציצות דגים"),
+                # קינוחים
+                _nz("סלט פירות", "קינוחים", 16, "כל יום", "פירות"),
+                _nz("עוגה", "קינוחים", 16, "כל יום", "עוגה"),
+                _nz("עוגת קארנץ שמרים", "קינוחים", 4, "פעם בשבוע לפחות", "קארנץ"),
+                _nz("קינוח כוס קרמבו", "קינוחים", 16, "כל יום", "קרמבו"),
+                _nz("קינוח ללא סוכר", "קינוחים", 16, "כל יום", "ללא סוכר"),
             ]
-            for rule in default_compliance_rules:
+            for rule in nz_rules:
                 session.add(rule)
             await session.commit()
-            logger.info(f"Seeded {len(default_compliance_rules)} default compliance rules")
+            logger.info(f"Seeded {len(nz_rules)} NZ compliance rules (site_id=1)")
 
     # Seed product category groups and mappings
     async with AsyncSessionLocal() as session:

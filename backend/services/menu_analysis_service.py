@@ -15,7 +15,7 @@ from typing import Optional
 from collections import Counter
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, or_
 
 from backend.models.menu_compliance import MenuCheck, MenuDay, CheckResult, ComplianceRule
 from backend.models.dish_catalog import DishCatalog
@@ -934,9 +934,12 @@ async def run_compliance_check(
     if not check:
         raise ValueError(f"MenuCheck {check_id} not found")
 
-    # Load active rules
+    # Load active rules for this site (site-specific + global)
     rules_result = await db.execute(
-        select(ComplianceRule).where(ComplianceRule.is_active == True)
+        select(ComplianceRule).where(
+            ComplianceRule.is_active == True,
+            or_(ComplianceRule.site_id == None, ComplianceRule.site_id == check.site_id),
+        )
     )
     rules = rules_result.scalars().all()
 
@@ -1968,9 +1971,12 @@ async def run_ai_compliance_check(
     if not days:
         raise ValueError(f"No parsed menu days for check {check_id}")
 
-    # Load active compliance rules
+    # Load active compliance rules for this site (site-specific + global)
     rules_result = await db.execute(
-        select(ComplianceRule).where(ComplianceRule.is_active == True)
+        select(ComplianceRule).where(
+            ComplianceRule.is_active == True,
+            or_(ComplianceRule.site_id == None, ComplianceRule.site_id == check.site_id),
+        )
     )
     rules = rules_result.scalars().all()
 

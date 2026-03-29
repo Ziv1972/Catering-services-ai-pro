@@ -87,6 +87,7 @@ def _generate_ampersand_variants(text: str) -> list:
 class ComplianceRuleResponse(BaseModel):
     id: int
     name: str
+    site_id: Optional[int] = None
     rule_type: str
     description: Optional[str]
     category: Optional[str]
@@ -100,6 +101,7 @@ class ComplianceRuleResponse(BaseModel):
 
 class ComplianceRuleCreate(BaseModel):
     name: str
+    site_id: Optional[int] = None
     rule_type: str = "mandatory"
     description: Optional[str] = None
     category: Optional[str] = None
@@ -109,6 +111,7 @@ class ComplianceRuleCreate(BaseModel):
 
 class ComplianceRuleUpdate(BaseModel):
     name: Optional[str] = None
+    site_id: Optional[int] = None
     rule_type: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
@@ -994,13 +997,19 @@ async def approve_matches(
 @router.get("/rules", response_model=List[ComplianceRuleResponse])
 async def list_rules(
     active_only: bool = False,
+    site_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """List all compliance rules"""
-    query = select(ComplianceRule).order_by(ComplianceRule.priority, ComplianceRule.name)
+    """List compliance rules, optionally filtered by site"""
+    from sqlalchemy import or_
+    query = select(ComplianceRule).order_by(ComplianceRule.site_id, ComplianceRule.category, ComplianceRule.name)
     if active_only:
         query = query.where(ComplianceRule.is_active == True)
+    if site_id is not None:
+        query = query.where(
+            or_(ComplianceRule.site_id == None, ComplianceRule.site_id == site_id)
+        )
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -1128,11 +1137,14 @@ async def export_compliance_excel(
     from fastapi.responses import StreamingResponse
 
     check_result = await db.execute(
-        select(MenuCheck).where(MenuCheck.id == check_id)
+        select(MenuCheck).options(selectinload(MenuCheck.site)).where(MenuCheck.id == check_id)
     )
     check = check_result.scalar_one_or_none()
     if not check:
         raise HTTPException(status_code=404, detail="Menu check not found")
+
+    site_name = check.site.name if check.site else ("נס ציונה" if check.site_id == 1 else "קרית גת")
+    site_code = check.site.code if check.site else ("NZ" if check.site_id == 1 else "KG")
 
     results_q = await db.execute(
         select(CheckResult)
@@ -1175,11 +1187,23 @@ async def export_compliance_excel(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin"),
     )
+    title_fill = PatternFill("solid", fgColor="1F3864")
+    title_font = Font(bold=True, size=13, color="FFFFFF")
 
-    # Headers — matching manual check format
+    # Title row with site name
+    from backend.services.menu_analysis_service import HEBREW_MONTHS
+    month_heb = HEBREW_MONTHS.get(check.month, check.month)
+    title_text = f"בדיקת תפריט {site_name} — {month_heb} {check.year}"
+    title_cell = ws.cell(row=1, column=1, value=title_text)
+    title_cell.font = title_font
+    title_cell.fill = title_fill
+    title_cell.alignment = Alignment(horizontal="center")
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+
+    # Headers — matching manual check format (row 2)
     headers = ["קבוצה", "סוג", "תדירות מינימלית", "תקן", "בפועל", "חוסר", "פריטים שנמצאו בתפריט", "הערות"]
     for col_idx, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell = ws.cell(row=2, column=col_idx, value=h)
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center")
@@ -1194,9 +1218,11 @@ async def export_compliance_excel(
     ws.column_dimensions["F"].width = 8
     ws.column_dimensions["G"].width = 65
     ws.column_dimensions["H"].width = 25
+    ws.row_dimensions[1].height = 22
+    ws.row_dimensions[2].height = 18
 
-    # Data rows — group by category
-    row_num = 2
+    # Data rows — group by category (start at row 3)
+    row_num = 3
     current_group = None
     for r in results:
         evidence = r.evidence or {}
@@ -1277,12 +1303,7 @@ async def export_compliance_excel(
     wb.save(buffer)
     buffer.seek(0)
 
-    # Build filename: "KG menu check - April 2026 version 1"
-    from backend.models.site import Site
-    site_result = await db.execute(select(Site).where(Site.id == check.site_id))
-    site = site_result.scalar_one_or_none()
-    site_code = site.code if site else "XX"
-
+    # Build filename using site_code resolved above
     # Count how many checks exist for same site/month/year to determine version
     version_result = await db.execute(
         select(MenuCheck)

@@ -2,21 +2,25 @@
 Menu compliance checking models
 Migrated from old FoodHouse Analytics 56-rule system
 """
-from sqlalchemy import Column, Integer, String, Text, Date, Boolean, ForeignKey, Float, JSON
+from sqlalchemy import Column, Integer, String, Text, Date, Boolean, ForeignKey, Float, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from backend.database import Base
 
 
 class ComplianceRule(Base):
-    """Compliance rule definition"""
+    """Compliance rule definition — can be site-specific (site_id set) or global (site_id=None)"""
     __tablename__ = "compliance_rules"
+    __table_args__ = (
+        UniqueConstraint("name", "site_id", name="uq_compliance_rule_name_site"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, nullable=False)
-    rule_type = Column(String, nullable=False)  # mandatory, frequency
+    name = Column(String, nullable=False)  # unique per (name, site_id) pair
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=True)  # None = global
+    rule_type = Column(String, nullable=False)  # mandatory, frequency, item_frequency_monthly, etc.
     description = Column(Text, nullable=True)
-    category = Column(String, nullable=True)  # Dietary, Menu Variety, Daily Requirements
-    parameters = Column(JSON, nullable=True)  # {"frequency": "daily", "max_per_week": 2}
+    category = Column(String, nullable=True)  # קבוצה: סלטים, עוף, בקר, דגים, etc.
+    parameters = Column(JSON, nullable=True)  # {"count": 2, "frequency_text": "פעמיים בחודש", "item_keyword": "..."}
     priority = Column(Integer, default=1)
     is_active = Column(Boolean, default=True)
 
