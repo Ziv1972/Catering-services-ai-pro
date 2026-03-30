@@ -2128,17 +2128,18 @@ async def run_ai_compliance_check(
 
         dish = _item.get("dish", "")
         found_dates = _item.get("found_dates", [])
-        if not found_dates:
-            continue
 
         # Keywords: words ≥3 chars, not in stop-list
         keywords = [w for w in dish.split() if len(w) >= 3 and w not in _SKIP]
         if not keywords:
             continue
 
+        # If Claude didn't return found_dates, search all menu days
+        dates_to_search = found_dates if found_dates else sorted(_date_items.keys())
+
         matched: list[str] = []
         seen: set[str] = set()
-        for d_str in found_dates:
+        for d_str in dates_to_search:
             for menu_item in _date_items.get(d_str, []):
                 if menu_item in seen:
                     continue
