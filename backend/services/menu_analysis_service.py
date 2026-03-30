@@ -2102,6 +2102,53 @@ async def run_ai_compliance_check(
 
     logger.info(f"AI compliance check returned {len(ai_results)} items")
 
+    # ---------------------------------------------------------------------------
+    # Fallback: populate matched_items from MenuDay records when Claude omits them
+    # For each result where actual > 0 but matched_items is empty, find menu items
+    # from the found_dates that contain keywords from the dish name.
+    # ---------------------------------------------------------------------------
+    # Build date → flat items map once
+    _date_items: dict[str, list[str]] = {}
+    for _day in days:
+        _key = _day.date.isoformat() if _day.date else ""
+        _flat: list[str] = []
+        for _cat_vals in (_day.menu_items or {}).values():
+            if isinstance(_cat_vals, list):
+                _flat.extend(str(x).strip() for x in _cat_vals if str(x).strip())
+        _date_items[_key] = _flat
+
+    # Hebrew stop-words / short particles to skip as keywords
+    _SKIP = {"של", "עם", "על", "את", "בו", "לו", "כן", "לא", "יש"}
+
+    for _item in ai_results:
+        if _item.get("matched_items"):
+            continue  # Claude already provided them
+        if not (_item.get("actual", 0) > 0):
+            continue  # Nothing was found, nothing to reconstruct
+
+        dish = _item.get("dish", "")
+        found_dates = _item.get("found_dates", [])
+        if not found_dates:
+            continue
+
+        # Keywords: words ≥3 chars, not in stop-list
+        keywords = [w for w in dish.split() if len(w) >= 3 and w not in _SKIP]
+        if not keywords:
+            continue
+
+        matched: list[str] = []
+        seen: set[str] = set()
+        for d_str in found_dates:
+            for menu_item in _date_items.get(d_str, []):
+                if menu_item in seen:
+                    continue
+                if any(kw in menu_item for kw in keywords):
+                    matched.append(menu_item)
+                    seen.add(menu_item)
+
+        if matched:
+            _item["matched_items"] = matched
+
     # Clear old check results and store new ones
     from sqlalchemy import delete as sql_delete
     await db.execute(
