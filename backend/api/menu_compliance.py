@@ -1167,20 +1167,6 @@ async def export_compliance_excel(
         if r.description and r.description != f"{(r.parameters or {}).get('frequency_text', '')} — {r.name}"
     }
 
-    # Build date → flat list of menu items lookup for matched_items fallback
-    days_for_lookup_q = await db.execute(
-        select(MenuDay).where(MenuDay.menu_check_id == check_id)
-    )
-    days_for_lookup = days_for_lookup_q.scalars().all()
-    date_to_items: dict[str, list[str]] = {}
-    for _day in days_for_lookup:
-        date_key = _day.date.isoformat() if _day.date else ""
-        flat: list[str] = []
-        for _cat_items in (_day.menu_items or {}).values():
-            if isinstance(_cat_items, list):
-                flat.extend(str(x).strip() for x in _cat_items if str(x).strip())
-        date_to_items[date_key] = flat
-
     # Try to open original menu file, otherwise create new workbook
     wb = None
     if check.file_path and os.path.exists(check.file_path):
@@ -1306,22 +1292,8 @@ async def export_compliance_excel(
             def_cell.fill = green_fill
             def_cell.font = green_font
 
-        # Show matched menu items — use Claude's list if available,
-        # otherwise reconstruct from MenuDay records for the found_on_days dates
-        if matched_items:
-            items_text = ", ".join(matched_items)
-        elif found_days:
-            # Fallback: collect all menu items from the days Claude found this dish
-            reconstructed: list[str] = []
-            seen_items: set[str] = set()
-            for d_str in found_days:
-                for menu_item in date_to_items.get(d_str, []):
-                    if menu_item not in seen_items:
-                        reconstructed.append(menu_item)
-                        seen_items.add(menu_item)
-            items_text = ", ".join(reconstructed) if reconstructed else ""
-        else:
-            items_text = ""
+        # Show matched menu items (exact text Claude found in the menu)
+        items_text = ", ".join(matched_items) if matched_items else ""
         items_cell = ws.cell(row=row_num, column=7, value=items_text)
         items_cell.border = thin_border
         items_cell.alignment = Alignment(wrap_text=True)
