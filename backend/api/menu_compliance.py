@@ -1175,15 +1175,56 @@ async def export_compliance_excel(
     all_menu_days = menu_days_q.scalars().all()
 
     # Build date → flat item list for keyword lookup
-    # Generic catering category words that appear in many dish names — excluded
-    # from keyword matching so we don't match every salad when searching for one.
-    _EXPORT_SKIP = {"של", "עם", "על", "את", "בו", "לו", "כן", "לא", "יש"}
+    # Generic catering CATEGORY words excluded from keyword extraction.
+    # NOT included: preparation words (בגריל, מטוגן) — kept as fallback.
+    # NOT included: "קציצות" — it IS distinctive (קציצות פרגית ≠ קציצות עוף).
+    _EXPORT_SKIP = {"של", "עם", "על", "את", "בו", "לו", "כן", "לא", "יש", "על", "עם"}
     _GENERIC_WORDS = {
-        "סלט", "סלטי", "מנת", "מנה", "מנות", "פילה", "קציצות",
-        "ביתי", "ביתית", "ביתיות", "מקומי", "מקומית", "ברוטב",
-        "מבושל", "מבושלת", "צלוי", "צלויה", "טרי", "טרייה",
-        "ממולא", "ממולאת", "בגריל", "בתנור", "מטוגן", "מטוגנת",
+        "סלט", "סלטי", "מנת", "מנה", "מנות", "פילה",
+        "ביתי", "ביתית", "ביתיות", "מקומי", "מקומית",
+        "ברוטב", "טרי", "טרייה",
     }
+
+    # Hebrew final-letter normalization: ך→כ  ם→מ  ן→נ  ף→פ  ץ→צ
+    # Required because "חריף" (ends with ף final-Pe) ≠ "חריפות" (has פ regular-Pe)
+    _HEB_FINAL = str.maketrans("ךםןףץ", "כמנפצ")
+
+    def _norm(text: str) -> str:
+        return text.translate(_HEB_FINAL)
+
+    def _extract_keywords(dish: str) -> list[str]:
+        """Extract distinctive search keywords from a dish name.
+
+        - Normalize Hebrew final letters (ף→פ etc.)
+        - Strip leading ו-conjunction (ותפוח → תפוח)
+        - Exclude stop-words and generic catering category words
+        - Minimum 3 chars; fall back to all words >= 3 if all are generic
+        """
+        words = []
+        for w in dish.split():
+            w2 = _norm(w[1:] if w.startswith("ו") and len(w) > 2 else w)
+            if len(w2) >= 3 and w2 not in _EXPORT_SKIP:
+                words.append(w2)
+        specific = [w for w in words if w not in _GENERIC_WORDS]
+        return specific if specific else words
+
+    def _menu_item_matches(menu_item: str, keywords: list[str]) -> bool:
+        """Match a menu item against keywords (Hebrew-final-letter-normalized).
+
+        1 keyword  → substring match
+        2 keywords → AND: both must appear
+        3+ keywords→ at least 2 must appear (tolerant AND)
+        """
+        if not keywords:
+            return False
+        norm_item = _norm(menu_item)
+        hits = sum(1 for kw in keywords if kw in norm_item)
+        if len(keywords) == 1:
+            return hits == 1
+        elif len(keywords) == 2:
+            return hits == 2
+        else:
+            return hits >= 2
     _export_date_items: dict[str, list[str]] = {}
     for _md in all_menu_days:
         _dk = _md.date.isoformat() if _md.date else ""
@@ -1325,25 +1366,30 @@ async def export_compliance_excel(
         if matched_items:
             items_text = ", ".join(matched_items)
         elif actual and actual > 0:
-            # Use distinctive keywords only — skip generic category words ("סלט", "מנת", etc.)
-            # so we don't match every salad when searching for one specific salad.
-            _specific_kws = [
-                w for w in dish_name.split()
-                if len(w) >= 4 and w not in _EXPORT_SKIP and w not in _GENERIC_WORDS
-            ]
-            # Fallback: if all words were generic, use any word >= 4 chars
-            _kws = _specific_kws or [
-                w for w in dish_name.split()
-                if len(w) >= 4 and w not in _EXPORT_SKIP
-            ]
+            _kws = _extract_keywords(dish_name)
             _dates_to_scan = found_days if found_days else sorted(_export_date_items.keys())
-            _kw_matched: list[str] = []
-            _kw_seen: set[str] = set()
-            for _ds in _dates_to_scan:
-                for _mi in _export_date_items.get(_ds, []):
-                    if _mi not in _kw_seen and _kws and any(_kw in _mi for _kw in _kws):
-                        _kw_matched.append(_mi)
-                        _kw_seen.add(_mi)
+
+            def _scan(kw_list: list) -> list:
+                _seen: set = set()
+                _out: list = []
+                for _ds in _dates_to_scan:
+                    for _mi in _export_date_items.get(_ds, []):
+                        if _mi not in _seen and _menu_item_matches(_mi, kw_list):
+                            _out.append(_mi)
+                            _seen.add(_mi)
+                return _out
+
+            # First try strict AND matching
+            _kw_matched = _scan(_kws)
+
+            # If nothing found, fall back to the single most distinctive keyword
+            # (handles menu spelling variants like "נורווגי" missing in menu)
+            if not _kw_matched and _kws:
+                for _fallback_kw in sorted(_kws, key=len, reverse=True):
+                    _kw_matched = _scan([_fallback_kw])
+                    if _kw_matched:
+                        break
+
             items_text = ", ".join(_kw_matched)
         else:
             items_text = ""
