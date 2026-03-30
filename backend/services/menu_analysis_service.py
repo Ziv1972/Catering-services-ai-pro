@@ -2052,19 +2052,50 @@ async def run_ai_compliance_check(
         max_tokens=16384,
     )
 
-    # Strip markdown code fences if present
+    # Extract the outermost JSON array from the response.
+    # Claude sometimes wraps the JSON in markdown fences or adds preamble text —
+    # this approach finds the array regardless of surrounding content.
     raw_response = raw_response.strip()
+    json_text = raw_response
+
+    # 1. Strip markdown code fences first
     if raw_response.startswith("```"):
-        raw_response = raw_response.split("\n", 1)[1] if "\n" in raw_response else raw_response[3:]
-    if raw_response.endswith("```"):
-        raw_response = raw_response[:-3]
-    raw_response = raw_response.strip()
+        first_newline = raw_response.find("\n")
+        if first_newline != -1:
+            json_text = raw_response[first_newline + 1:]
+        else:
+            json_text = raw_response[3:]
+        if json_text.rstrip().endswith("```"):
+            json_text = json_text.rstrip()[:-3].rstrip()
+
+    # 2. Find the outermost JSON array by bracket matching
+    #    (handles any preamble/postamble text Claude might add)
+    start = json_text.find("[")
+    if start != -1:
+        depth = 0
+        end = -1
+        for i, ch in enumerate(json_text[start:], start):
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end != -1:
+            json_text = json_text[start:end + 1]
 
     try:
-        ai_results = json.loads(raw_response)
+        ai_results = json.loads(json_text)
     except json.JSONDecodeError as e:
-        logger.error(f"AI compliance: JSON parse error: {e}\nRaw: {raw_response[:500]}")
-        ai_results = []
+        logger.error(
+            f"AI compliance: JSON parse error: {e}\n"
+            f"Raw response (first 800 chars): {raw_response[:800]}"
+        )
+        raise ValueError(
+            f"Claude returned invalid JSON: {str(e)}. "
+            f"Raw (first 200 chars): {raw_response[:200]}"
+        )
 
     if not isinstance(ai_results, list):
         ai_results = ai_results.get("results", []) if isinstance(ai_results, dict) else []
