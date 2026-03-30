@@ -2117,8 +2117,14 @@ async def run_ai_compliance_check(
                 _flat.extend(str(x).strip() for x in _cat_vals if str(x).strip())
         _date_items[_key] = _flat
 
-    # Hebrew stop-words / short particles to skip as keywords
+    # Stop-words and generic catering category words — excluded from keyword matching
     _SKIP = {"של", "עם", "על", "את", "בו", "לו", "כן", "לא", "יש"}
+    _GENERIC = {
+        "סלט", "סלטי", "מנת", "מנה", "מנות", "פילה", "קציצות",
+        "ביתי", "ביתית", "ביתיות", "מקומי", "מקומית", "ברוטב",
+        "מבושל", "מבושלת", "צלוי", "צלויה", "טרי", "טרייה",
+        "ממולא", "ממולאת", "בגריל", "בתנור", "מטוגן", "מטוגנת",
+    }
 
     for _item in ai_results:
         if _item.get("matched_items"):
@@ -2129,8 +2135,9 @@ async def run_ai_compliance_check(
         dish = _item.get("dish", "")
         found_dates = _item.get("found_dates", [])
 
-        # Keywords: words ≥3 chars, not in stop-list
-        keywords = [w for w in dish.split() if len(w) >= 3 and w not in _SKIP]
+        # Specific keywords only: >= 4 chars, not generic/stop-word
+        _specific = [w for w in dish.split() if len(w) >= 4 and w not in _SKIP and w not in _GENERIC]
+        keywords = _specific or [w for w in dish.split() if len(w) >= 4 and w not in _SKIP]
         if not keywords:
             continue
 

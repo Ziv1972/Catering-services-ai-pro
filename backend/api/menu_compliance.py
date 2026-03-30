@@ -1175,7 +1175,15 @@ async def export_compliance_excel(
     all_menu_days = menu_days_q.scalars().all()
 
     # Build date → flat item list for keyword lookup
+    # Generic catering category words that appear in many dish names — excluded
+    # from keyword matching so we don't match every salad when searching for one.
     _EXPORT_SKIP = {"של", "עם", "על", "את", "בו", "לו", "כן", "לא", "יש"}
+    _GENERIC_WORDS = {
+        "סלט", "סלטי", "מנת", "מנה", "מנות", "פילה", "קציצות",
+        "ביתי", "ביתית", "ביתיות", "מקומי", "מקומית", "ברוטב",
+        "מבושל", "מבושלת", "צלוי", "צלויה", "טרי", "טרייה",
+        "ממולא", "ממולאת", "בגריל", "בתנור", "מטוגן", "מטוגנת",
+    }
     _export_date_items: dict[str, list[str]] = {}
     for _md in all_menu_days:
         _dk = _md.date.isoformat() if _md.date else ""
@@ -1317,14 +1325,23 @@ async def export_compliance_excel(
         if matched_items:
             items_text = ", ".join(matched_items)
         elif actual and actual > 0:
-            # Extract meaningful keywords from the dish name
-            _kws = [w for w in dish_name.split() if len(w) >= 3 and w not in _EXPORT_SKIP]
+            # Use distinctive keywords only — skip generic category words ("סלט", "מנת", etc.)
+            # so we don't match every salad when searching for one specific salad.
+            _specific_kws = [
+                w for w in dish_name.split()
+                if len(w) >= 4 and w not in _EXPORT_SKIP and w not in _GENERIC_WORDS
+            ]
+            # Fallback: if all words were generic, use any word >= 4 chars
+            _kws = _specific_kws or [
+                w for w in dish_name.split()
+                if len(w) >= 4 and w not in _EXPORT_SKIP
+            ]
             _dates_to_scan = found_days if found_days else sorted(_export_date_items.keys())
             _kw_matched: list[str] = []
             _kw_seen: set[str] = set()
             for _ds in _dates_to_scan:
                 for _mi in _export_date_items.get(_ds, []):
-                    if _mi not in _kw_seen and any(_kw in _mi for _kw in _kws):
+                    if _mi not in _kw_seen and _kws and any(_kw in _mi for _kw in _kws):
                         _kw_matched.append(_mi)
                         _kw_seen.add(_mi)
             items_text = ", ".join(_kw_matched)
