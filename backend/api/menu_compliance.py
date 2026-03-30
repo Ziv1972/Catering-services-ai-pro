@@ -1167,6 +1167,26 @@ async def export_compliance_excel(
         if r.description and r.description != f"{(r.parameters or {}).get('frequency_text', '')} — {r.name}"
     }
 
+    # Load all MenuDay records — used both for weekly sheet reconstruction
+    # AND for column G keyword-fallback when matched_items is absent from DB
+    menu_days_q = await db.execute(
+        select(MenuDay).where(MenuDay.menu_check_id == check_id).order_by(MenuDay.date)
+    )
+    all_menu_days = menu_days_q.scalars().all()
+
+    # Build date → flat item list for keyword lookup
+    _EXPORT_SKIP = {"של", "עם", "על", "את", "בו", "לו", "כן", "לא", "יש"}
+    _export_date_items: dict[str, list[str]] = {}
+    for _md in all_menu_days:
+        _dk = _md.date.isoformat() if _md.date else ""
+        _fi: list[str] = []
+        for _cv in (_md.menu_items or {}).values():
+            if isinstance(_cv, list):
+                _fi.extend(str(x).strip() for x in _cv if str(x).strip())
+            elif isinstance(_cv, str) and _cv.strip():
+                _fi.append(_cv.strip())
+        _export_date_items[_dk] = _fi
+
     # Try to open original menu file, otherwise create new workbook
     wb = None
     if check.file_path and os.path.exists(check.file_path):
@@ -1292,8 +1312,24 @@ async def export_compliance_excel(
             def_cell.fill = green_fill
             def_cell.font = green_font
 
-        # Show matched menu items (exact text Claude found in the menu)
-        items_text = ", ".join(matched_items) if matched_items else ""
+        # Column G: matched menu items.
+        # Use Claude's list when available; otherwise scan MenuDay records by keyword.
+        if matched_items:
+            items_text = ", ".join(matched_items)
+        elif actual and actual > 0:
+            # Extract meaningful keywords from the dish name
+            _kws = [w for w in dish_name.split() if len(w) >= 3 and w not in _EXPORT_SKIP]
+            _dates_to_scan = found_days if found_days else sorted(_export_date_items.keys())
+            _kw_matched: list[str] = []
+            _kw_seen: set[str] = set()
+            for _ds in _dates_to_scan:
+                for _mi in _export_date_items.get(_ds, []):
+                    if _mi not in _kw_seen and any(_kw in _mi for _kw in _kws):
+                        _kw_matched.append(_mi)
+                        _kw_seen.add(_mi)
+            items_text = ", ".join(_kw_matched)
+        else:
+            items_text = ""
         items_cell = ws.cell(row=row_num, column=7, value=items_text)
         items_cell.border = thin_border
         items_cell.alignment = Alignment(wrap_text=True)
@@ -1322,10 +1358,7 @@ async def export_compliance_excel(
 
     # Reconstruct weekly menu sheets from MenuDay data stored in DB
     # (original file may be gone due to Railway ephemeral filesystem)
-    days_result = await db.execute(
-        select(MenuDay).where(MenuDay.menu_check_id == check_id).order_by(MenuDay.date)
-    )
-    menu_days = days_result.scalars().all()
+    menu_days = all_menu_days  # already loaded above
 
     if menu_days:
         from collections import defaultdict
