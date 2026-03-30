@@ -294,7 +294,21 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - **AI fallback**: If pdfplumber headers are unrecognizable even after reversal, skips to Claude AI text extraction
 - **Three-strategy pipeline**: 1) pdfplumber table + fix reversed Hebrew → 2) AI structured extraction from raw text → 3) error with guidance
 
-### Phase 6d: Project Improvements + AI Assistant Tool-Use (Latest — 2026-03-26b)
+### Phase 6e: Excel Compliance Export Overhaul (2026-03-30)
+- **9-column format**: חוסרים sheet matches manual check format exactly — A=קבוצה, B=סוג, C=תדירות, D=תקן, E=בפועל, F=חוסר, G=פריטים שנמצאו בתפריט, H=הערות, I=הערות נוספות
+- **Weekly menu sheet reconstruction**: When original uploaded file is gone (Railway ephemeral FS), rebuilds שבוע 1/2/3... sheets from MenuDay DB records. Row 1 = date headers, Col A = categories, cells = menu items per day
+- **AI check: direct generate_response**: Switched from generate_structured_response (which appended conflicting schema) to generate_response with robust JSON array extraction by bracket-matching — immune to Claude preamble text
+- **Column G keyword matching**: When Claude omits matched_items, export reconstructs from MenuDay data using Hebrew-aware keyword matching:
+  - **Hebrew final-letter normalization**: ף→פ, ם→מ, ן→נ, ך→כ, ץ→צ (fixes "חריף" not matching "חריפות")
+  - **ו-conjunction stripping**: "וירוקים"→"ירוקים", "ותפוח"→"תפוח"
+  - **Generic catering word exclusion**: סלט, מנת, מנה, פילה, ביתי, מקומי, ברוטב, טרי — not used as keywords
+  - **AND matching for 2+ keywords**: "קציצות פרגית" only matches items containing BOTH words — no cross-contamination between different פרגית dishes
+  - **Fallback to longest keyword**: When AND finds nothing (spelling variant in menu), tries each keyword alone from longest to shortest
+- **AI check current date**: System prompt now injects today's date so AI doesn't return wrong year
+- **Upload flow fix**: Panel stays open during AI check, navigates to check detail after completion
+- **Commit series**: 5595c16 → b5aeba1 → e47173b → f677fef → cd12128 → a35b3fb → f4949b5 → 00557be → c31fb27
+
+### Phase 6d: Project Improvements + AI Assistant Tool-Use (2026-03-26b)
 - **Overdue task highlight**: Tasks with past due dates + not done get light red background (`bg-red-50`), red due date text + ⚠ icon
 - **Task status change history**: `TaskStatusHistory` model logs every status change with from_status, to_status, changed_at, changed_by. Shown in expanded task view
 - **Gantt chart view**: List/Gantt toggle on project detail page. Custom component with horizontal task bars, month headers, today marker (red line), status-colored bars, legend
