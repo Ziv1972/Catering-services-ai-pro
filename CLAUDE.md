@@ -6,9 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI-native catering management system for HP Israel. Agent-driven operations across two sites (Nes Ziona, Kiryat Gat). Built around specialist AI agents that use Claude API for intelligence — not a traditional CRUD app.
 
-**Production URLs:**
-- Backend: `https://courteous-amazement-production-02e2.up.railway.app`
-- Frontend: `https://frontend-production-c346.up.railway.app`
+## Version & Deploy Policy
+
+**Current Production Version: V02** (commit `67682e3`, 2026-03-31)
+
+### CRITICAL: Deploy only with user approval
+- **NEVER push to main or deploy without explicit user approval**
+- Production is live and used daily — deploy carefully
+- Always ask before pushing: "Changes are ready. Approve push to main + deploy?"
+- After deploy, verify production health and increment version (V01 → V02, etc.)
 
 ## Commands
 
@@ -138,7 +144,7 @@ Multi-agent orchestration with intent analysis, parallel execution, and result s
 - Auto-converts URLs to async driver (`sqlite+aiosqlite`, `postgresql+asyncpg`)
 - Production data: 11,497 proforma items, 68 Hebrew compliance rules, 89 products
 
-### Key Models (20+)
+### Key Models (21+)
 
 Core: `User`, `Site`, `Supplier`, `Product`, `Proforma`, `ProformaItem`
 Budget: `SupplierBudget`, `SupplierProductBudget`, `MaintenanceBudget`, `MaintenanceExpense`
@@ -146,6 +152,7 @@ Compliance: `ComplianceRule`, `MenuCheck`, `CheckResult`, `FineRule`
 Operations: `Meeting`, `MeetingNote`, `Complaint`, `ComplaintPattern`, `Anomaly`
 Tasks: `Project`, `ProjectTask`, `ProjectDocument`, `TaskStatusHistory`, `TodoItem`
 Analytics: `ProductCategoryGroup`, `ProductCategoryMapping`, `WorkingDaysEntry`
+Kitchenette: `KitchenetteItem`
 Daily Ops: `DailyMealCount`, `HistoricalMealData`, `Attachment`
 
 ## Daily Meals Automation Pipeline
@@ -231,7 +238,7 @@ async def action(
 
 Compliance rules, meal types, product names, and some domain data are in Hebrew. The system manages catering for HP Israel — Hebrew text in database seeds and UI is expected.
 
-## What's Been Built (56 commits)
+## What's Been Built (57 commits)
 
 ### Phase 1: Foundation
 - FastAPI backend with async SQLAlchemy, JWT auth, 2-site support
@@ -327,6 +334,22 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - **Excel export**: `POST /api/chat/export` generates downloadable .xlsx files (spending items, budgets, meals)
 - **`generate_with_tools()`**: New method on `ClaudeService` for tool-use API calls
 
+### Phase 7a: Meal Data Source Fix + Kitchenette + Dashboard Redesign (2026-03-31)
+- **MealBreakdown costs**: Added 9 price columns + total_cost. Extraction reads col C (prices) + col E (totals) from ריכוז הכנסות
+- **`meals-monthly` rewrite**: Queries MealBreakdown instead of ProformaItem. Returns quantity + supplement + cost per month/site
+- **`meals-detail` rewrite**: 9 Hebrew meal type labels pivoted from MealBreakdown fields (was ProformaItem product names)
+- **`meals-budget` endpoint (NEW)**: YTD budget vs actual per site from SupplierBudget + MealBreakdown.total_cost
+- **KitchenetteItem model (NEW)**: Stores BTB products from ריכוז מטבחונים tab. 7 families auto-classified by Hebrew keywords
+- **`kitchenette-monthly` endpoint (NEW)**: Quantities + spending per family per month per site
+- **Kitchenette parser**: `_extract_kitchenette_data()` reads ריכוז מטבחונים tab during proforma upload
+- **Dashboard redesign (Budget vs Actual section only)**:
+  - Top level: 3 gradient KPI cards (Total Meals, Supplement, Total Cost) + grouped bar chart (NZ indigo, KG cyan)
+  - Budget Progress: compact progress bars (supplier name, actual/budget, %, colored bar)
+  - 3 drill-down tabs: Meal Categories (stacked bars), Budget vs Actual (side-by-side per site), Kitchenette (stacked area + family cards)
+  - Year + site filter connected to all panels
+- **10 auto-migration entries** in main.py for new MealBreakdown columns
+- **Commit**: `67682e3`
+
 ## Session Summary Rules
 
 **CRITICAL**: When asked to summarize a session, ALWAYS:
@@ -363,7 +386,17 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - [x] First real FoodHouse email test — IMAP poller configured and live (session 2026-03-25b)
 - [x] **PDF proforma upload RTL fix** — Hebrew reversal detection + AI fallback (session 2026-03-26)
 
-### Phase 7: Agent Intelligence Deepening
+### Phase 7a: Meal Data Source + Kitchenette + Dashboard (Complete — 2026-03-31)
+- [x] **Fix meal data source** — Dashboard reads from MealBreakdown (not ProformaItem). 9 Hebrew meal types
+- [x] **MealBreakdown costs** — Price columns + total_cost extracted from ריכוז הכנסות
+- [x] **Kitchenette/BTB tracking** — KitchenetteItem model, 7 families, auto-classified, ריכוז מטבחונים parser
+- [x] **Dashboard redesign** — KPI cards, gradient bars, budget progress bars, 3 drill-down tabs
+- [x] **meals-budget endpoint** — YTD budget vs actual per site
+- [x] **kitchenette-monthly endpoint** — Qty + spending per family per month
+- [x] **Per-site filtering** — Year + site dropdown on all panels
+- [ ] Cost per employee normalization (working_days × diners) — still TODO
+
+### Phase 7b: Agent Intelligence Deepening
 - [ ] **Agent Crew PM per project** — Appoint most capable agent as PM for each project (track progress, suggest takeovers, alert problems, meeting summaries with relevant professionals)
 - [ ] Dedicated agent implementations (data_analyst, supplier_manager, daily_ops_monitor currently share BudgetIntelligenceAgent)
 - [ ] Sequential task dependencies in crew (currently all parallel)
@@ -382,3 +415,100 @@ Compliance rules, meal types, product names, and some domain data are in Hebrew.
 - [ ] Multi-language UI support (English/Hebrew toggle)
 - [ ] Historical trend predictions using AI
 - [ ] Cloud file storage (S3/GCS) to survive Railway redeployments
+
+## FoodHouse Proforma Structure
+
+The FoodHouse XLSX proforma is the core data source for meals, costs, and kitchenette tracking. One file per site per month.
+
+### Proforma Tabs
+
+| Tab | Content | Dashboard Use |
+|-----|---------|---------------|
+| **חשבוניות** | 14 invoices with line items, prices, totals | Price reference only — NOT source for quantities |
+| **ריכוז ארוחות** | Daily meal counts + monthly totals + working days | **PRIMARY source** for meal quantities, costs, working days |
+| **ריכוז הכנסות** | Financial summary from all invoices | Summary only, not a data source |
+| **ריכוז מטבחונים** | Daily BTB product consumption | **Source** for kitchenette cost tracking |
+
+### Meal Data (from ריכוז ארוחות)
+
+**Dashboard top level** shows two numbers:
+- **Total meals** (e.g., 17,022) — all meals excluding תוספת מנה עיקרית
+- **Supplement** (e.g., 969) — תוספת מנה עיקרית shown separately
+- Total Cibus = 17,991 (meals + supplement, excludes coffee cart)
+
+**תוספת מנה עיקרית**: Meat dining room only — employees swipe Cibus card again for a second protein portion. All employees eligible (HP + contractors). Price ₪8.87 vs ₪39.57 for a regular meal.
+
+**Drill-down** by meal type:
+
+| Meal Type | Who Pays |
+|-----------|----------|
+| ארוחת צהריים בשרית (HP INDIGO) | HP |
+| ארוחת צהריים בשרית (HP סאייטקס) | Scitex |
+| ארוחות ערב (HP) | HP |
+| ארוחות ערב (קבלנים) | HP |
+| ארוחת צהריים חלבית (HP INDIGO) | HP |
+| ארוחת צהריים חלבית (HP סאייטקס) | Scitex |
+| תוספת מנה עיקרית (HP+קבלנים) | HP |
+| ארוחות צהריים בשרית (קבלנים) | Each contractor |
+| ארוחות צהריים חלבית (קבלנים) | Each contractor |
+
+**Excluded from dashboard**: עגלת קפה (future), ארוחות כלבי נחיה, נתניה (invoice 13)
+
+**Costs**: Sum סה"כ ₪ from ריכוז ארוחות, excluding coffee cart rows.
+
+**Working days (ימי עבודה)**: Found in ריכוז ארוחות — search dynamically for label.
+
+### Kitchenette / BTB Tracking (from ריכוז מטבחונים)
+
+**BTB** = HP pays product cost + 5.5% catering company commission.
+
+**Dashboard**: Trend graph per site, normalized by:
+- Variable 1: Working days (from ריכוז ארוחות)
+- Variable 2: Number of diners (from ריכוז ארוחות)
+
+**Drill-down by 7 product families** (manually classified):
+
+| Family | Hebrew | Examples | Invoice |
+|--------|--------|----------|---------|
+| Coffee & Tea | קפה ותה | Instant coffee, tea bags, sugar, mint, lemon | 4 |
+| Coffee & Machine Rental | קפה ושכירות מכונות | Café Kedem, black coffee 1kg, Eversys rental | 4 |
+| Dairy Products | מוצרי חלב | Milk, Yoplait, desserts, cream, Danone | 4 |
+| Dry Goods | יבשים | Granola, waffles, cookies, honey, silan | 4 |
+| Fruits | פירות | Fruits, premium fruits, vegetables | 5 |
+| Accompaniments | נילווים | Apples/carrots/beets for juice machine, concentrate | 2 |
+| Miscellaneous | שונות | Cups, water, soda, sandwiches, toothpicks | 4 |
+
+### Per-Site Requirement
+
+**CRITICAL**: All data must support 3 views:
+1. **NZ only** (Nes Ziona, site_id=1)
+2. **KG only** (Kiryat Gat, site_id=2)
+3. **Combined** (both sites)
+
+### Dashboard Cost Display
+
+The dashboard must show **both** views:
+1. **Total cost (סה"כ עלות)** — absolute cost of meals/category/product
+2. **Cost per employee (עלות לעובד)** — normalized cost
+
+Both are needed for review and approval. Total cost is the primary view; per-employee is supplementary.
+
+### Current Code vs Required
+
+| Aspect | Current | Required |
+|--------|---------|----------|
+| Meal quantities | From חשבוניות (proforma_items) | **ריכוז ארוחות** tab |
+| Meal costs | From חשבוניות | **ריכוז ארוחות** סה"כ ₪ (excl. coffee cart) |
+| Kitchenette tracking | Not implemented | **Trend + drill-down by 7 families** |
+| Working days | ריכוז הכנסות (partial) | **ריכוז ארוחות** |
+| BTB classification | Not implemented | **7 manual families** |
+| Normalization | Not implemented | **working_days × diners** |
+| Per-site filtering | Partial | **NZ / KG / Combined** |
+| Cost display | Total cost only | **Total cost + cost per employee** |
+
+### Proforma Files
+
+Location: `C:\Users\ReZi146\OneDrive - HP Inc\Documents\פרפורמות\`
+- `NZ 2025/` — 12 files (Jan-Dec), `NZ 2026/` — 2 files (Jan-Feb)
+- `KG 2025/` — 12 files (Jan-Dec), `KG 2026/` — 2 files (Jan-Feb)
+- `א.א.ע/` — 4 PDF files (מ.א אוטומטים, not FoodHouse)
