@@ -221,6 +221,17 @@ async def lifespan(app: FastAPI):
             ("violations", "employee_phone", "VARCHAR"),
             ("violations", "restaurant_type", "VARCHAR"),
             ("compliance_rules", "site_id", "INTEGER"),
+            # MealBreakdown: price + cost columns (Phase 1)
+            ("meal_breakdowns", "hp_meat_price", "FLOAT DEFAULT 0"),
+            ("meal_breakdowns", "scitex_meat_price", "FLOAT DEFAULT 0"),
+            ("meal_breakdowns", "evening_hp_price", "FLOAT DEFAULT 0"),
+            ("meal_breakdowns", "evening_contractors_price", "FLOAT DEFAULT 0"),
+            ("meal_breakdowns", "hp_dairy_price", "FLOAT DEFAULT 0"),
+            ("meal_breakdowns", "scitex_dairy_price", "FLOAT DEFAULT 0"),
+            ("meal_breakdowns", "supplement_price", "FLOAT DEFAULT 0"),
+            ("meal_breakdowns", "contractors_meat_price", "FLOAT DEFAULT 0"),
+            ("meal_breakdowns", "contractors_dairy_price", "FLOAT DEFAULT 0"),
+            ("meal_breakdowns", "total_cost", "FLOAT DEFAULT 0"),
         ]
         for table, column, col_type in migrations:
             try:

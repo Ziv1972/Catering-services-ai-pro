@@ -18,6 +18,7 @@ import { format } from 'date-fns';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, CartesianGrid, Legend, Cell,
+  AreaChart, Area,
 } from 'recharts';
 
 export default function Dashboard() {
@@ -71,6 +72,17 @@ export default function Dashboard() {
   // Meals drill-down (meal types breakdown)
   const [mealsDrill, setMealsDrill] = useState<any>(null);
   const [mealsDrillLoading, setMealsDrillLoading] = useState(false);
+
+  // Budget vs actual meals spending
+  const [mealsBudget, setMealsBudget] = useState<any>(null);
+  const [mealsBudgetLoading, setMealsBudgetLoading] = useState(false);
+
+  // Kitchenette/BTB data
+  const [kitchenette, setKitchenette] = useState<any>(null);
+  const [kitchenetteLoading, setKitchenetteLoading] = useState(false);
+
+  // Drill-down panel state for Budget vs Actual section
+  const [bvaPanel, setBvaPanel] = useState<'overview' | 'meals' | 'budget' | 'kitchenette'>('overview');
 
   // Daily meals (from email/CSV)
   const [dailyMeals, setDailyMeals] = useState<any>(null);
@@ -158,6 +170,30 @@ export default function Dashboard() {
     }
   };
 
+  const loadMealsBudget = async (year?: number, siteId?: number) => {
+    setMealsBudgetLoading(true);
+    try {
+      const result = await dashboardAPI.mealsBudget({ year: year ?? smYear, site_id: siteId });
+      setMealsBudget(result);
+    } catch {
+      setMealsBudget(null);
+    } finally {
+      setMealsBudgetLoading(false);
+    }
+  };
+
+  const loadKitchenette = async (year?: number, siteId?: number) => {
+    setKitchenetteLoading(true);
+    try {
+      const result = await dashboardAPI.kitchenetteMonthly({ year: year ?? smYear, site_id: siteId });
+      setKitchenette(result);
+    } catch {
+      setKitchenette(null);
+    } finally {
+      setKitchenetteLoading(false);
+    }
+  };
+
   const loadDailyMeals = async (days?: number, siteId?: number) => {
     setDailyMealsLoading(true);
     try {
@@ -203,14 +239,20 @@ export default function Dashboard() {
     });
   };
 
-  // Load supplier monthly + meals monthly + daily meals on mount
+  // Load supplier monthly + meals monthly + daily meals + budget + kitchenette on mount
   useEffect(() => {
     loadSupplierMonthly();
     loadMealsMonthly();
     loadDailyMeals();
+    loadMealsBudget();
+    loadKitchenette();
   }, []);
 
   const SUPPLIER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#78716c'];
+
+  // Gradient colors for meal types and kitchenette families
+  const MEAL_COLORS = ['#6366f1', '#3b82f6', '#0ea5e9', '#14b8a6', '#22c55e', '#eab308', '#f97316', '#ef4444', '#ec4899'];
+  const KITCHEN_COLORS = ['#8b5cf6', '#6366f1', '#3b82f6', '#0ea5e9', '#14b8a6', '#f59e0b', '#78716c'];
 
   const getChatErrorMessage = (error: unknown): string => {
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -1138,46 +1180,129 @@ export default function Dashboard() {
       )}
 
       {/* ═══════ BUDGET VS ACTUAL ═══════ */}
-      <Card className="overflow-hidden rounded-xl border bg-card shadow-sm">
-        <CardHeader className="pb-3">
-          <div className="flex justify-between items-center">
-            <div>
-              <CardTitle className="text-base font-semibold">Budget vs Actual</CardTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {displayYear} supplier spending &middot; click a row to drill down
-              </p>
+      <div className="space-y-4">
+        {/* Top Level: Trend + Progress */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Monthly Trend Chart — Meals Quantity + Spending */}
+          <div className="lg:col-span-2 rounded-2xl border bg-gradient-to-br from-white to-slate-50/80 shadow-sm overflow-hidden">
+            <div className="p-5 pb-3">
+              <div className="flex items-center justify-between mb-1">
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">Meals Trend</h3>
+                  <p className="text-xs text-gray-500">Monthly quantity &amp; spending &middot; {smYear}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* Year + Site filters */}
+                  <select
+                    value={smYear}
+                    onChange={(e) => { const y = Number(e.target.value); setSmYear(y); loadSupplierMonthly(y, smFromMonth, smToMonth, smSiteId); loadMealsMonthly(y, smFromMonth, smToMonth, smSiteId); loadMealsBudget(y, smSiteId); loadKitchenette(y, smSiteId); }}
+                    className="border rounded-lg px-2 py-1 bg-white text-xs"
+                  >
+                    {[new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2].map((y) => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                  {mealsMonthly?.sites?.length > 0 && (
+                    <select
+                      value={smSiteId ?? ''}
+                      onChange={(e) => { const v = e.target.value ? Number(e.target.value) : undefined; setSmSiteId(v); loadSupplierMonthly(smYear, smFromMonth, smToMonth, v); loadMealsMonthly(smYear, smFromMonth, smToMonth, v); loadMealsBudget(smYear, v); loadKitchenette(smYear, v); }}
+                      className="border rounded-lg px-2 py-1 bg-white text-xs"
+                    >
+                      <option value="">All Sites</option>
+                      {mealsMonthly.sites.map((s: any) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+
+              {/* KPI Summary Row */}
+              {mealsMonthly?.chart_data && (() => {
+                const totalMeals = mealsMonthly.chart_data.reduce((s: number, r: any) => s + (r.total || 0), 0);
+                const totalSupplement = mealsMonthly.chart_data.reduce((s: number, r: any) => s + (r.total_supplement || 0), 0);
+                const totalCost = mealsMonthly.chart_data.reduce((s: number, r: any) => s + (r.total_cost || 0), 0);
+                return (
+                  <div className="flex gap-4 mb-3">
+                    <div className="flex-1 rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 p-3">
+                      <p className="text-[10px] uppercase tracking-wider text-blue-600 font-medium">Total Meals</p>
+                      <p className="text-xl font-bold text-blue-900 tabular-nums">{totalMeals.toLocaleString()}</p>
+                    </div>
+                    <div className="flex-1 rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-100 p-3">
+                      <p className="text-[10px] uppercase tracking-wider text-amber-600 font-medium">Supplement</p>
+                      <p className="text-xl font-bold text-amber-900 tabular-nums">{totalSupplement.toLocaleString()}</p>
+                    </div>
+                    <div className="flex-1 rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 p-3">
+                      <p className="text-[10px] uppercase tracking-wider text-emerald-600 font-medium">Total Cost</p>
+                      <p className="text-xl font-bold text-emerald-900 tabular-nums">{formatCurrency(totalCost)}</p>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
-            <Button variant="outline" size="sm" onClick={() => router.push('/budget')} className="text-xs h-8">
-              View All <ArrowRight className="w-3.5 h-3.5 ml-1" />
-            </Button>
+
+            {/* Chart */}
+            <div className="px-5 pb-5">
+              {mealsMonthlyLoading ? (
+                <div className="h-56 flex items-center justify-center text-gray-400 text-sm">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading...
+                </div>
+              ) : mealsMonthly?.chart_data?.length > 0 ? (
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                    <BarChart data={mealsMonthly.chart_data} barGap={2}>
+                      <defs>
+                        <linearGradient id="gradNZ" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#6366f1" stopOpacity={0.9} />
+                          <stop offset="100%" stopColor="#6366f1" stopOpacity={0.5} />
+                        </linearGradient>
+                        <linearGradient id="gradKG" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#0ea5e9" stopOpacity={0.9} />
+                          <stop offset="100%" stopColor="#0ea5e9" stopOpacity={0.5} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                      <XAxis dataKey="month_name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                      <Tooltip
+                        contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}
+                        formatter={(val: any, name: any) => [Number(val).toLocaleString(), String(name)]}
+                      />
+                      {(mealsMonthly.site_keys || []).length > 1 ? (
+                        (mealsMonthly.site_keys || []).map((sk: string, i: number) => (
+                          <Bar key={sk} dataKey={sk} fill={i === 0 ? 'url(#gradNZ)' : 'url(#gradKG)'} name={sk} radius={[4, 4, 0, 0]} />
+                        ))
+                      ) : (
+                        <Bar dataKey="total" fill="url(#gradNZ)" name="Meals" radius={[4, 4, 0, 0]} />
+                      )}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="h-56 flex items-center justify-center text-gray-400 text-sm">No meal data for this period</div>
+              )}
+            </div>
           </div>
-        </CardHeader>
-        <CardContent>
-          {budgetSummary.length === 0 && proformaCosts.length === 0 ? (
-            <p className="text-gray-400 text-center py-6">
-              No budget data configured. <span className="underline cursor-pointer" onClick={() => router.push('/budget')}>Set up budgets</span>
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+          {/* Budget Progress Per Site */}
+          <div className="rounded-2xl border bg-gradient-to-br from-white to-slate-50/80 shadow-sm p-5">
+            <h3 className="text-base font-semibold text-gray-900 mb-1">Budget Progress</h3>
+            <p className="text-xs text-gray-500 mb-4">Actual vs budget per site</p>
+
+            {mealsBudgetLoading ? (
+              <div className="flex items-center justify-center py-12 text-gray-400 text-sm">
+                <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading...
+              </div>
+            ) : (budgetSummary.length > 0 || (mealsBudget?.sites?.length > 0)) ? (
               <div className="space-y-2">
                 {budgetSummary.map((b: any, i: number) => (
                   <div
                     key={i}
                     className="group flex items-center justify-between p-3.5 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer transition-all"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openBudgetDrillDown(b.supplier_id, b.site_id, `${b.supplier_name} (${b.site_name})`, data?.proforma_year);
-                    }}
+                    onClick={() => openBudgetDrillDown(b.supplier_id, b.site_id, `${b.supplier_name} (${b.site_name})`, data?.proforma_year)}
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="font-medium text-sm truncate">{b.supplier_name}</p>
-                        {b.shift && b.shift !== 'all' && (
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${b.shift === 'night' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'}`}>
-                            {b.shift === 'night' ? 'Night' : 'Day'}
-                          </span>
-                        )}
-                      </div>
+                      <p className="font-medium text-sm truncate">{b.supplier_name}</p>
                       <p className="text-xs text-muted-foreground">{b.site_name}</p>
                     </div>
                     <div className="text-right ml-4">
@@ -1204,11 +1329,11 @@ export default function Dashboard() {
 
                 {/* Unbudgeted Suppliers */}
                 {unbudgetedSuppliers.length > 0 && (
-                  <div className="mt-3 p-3 bg-amber-50/50 rounded-lg border border-amber-200/60">
-                    <p className="text-xs font-medium text-amber-700 mb-2 uppercase tracking-wider">Unbudgeted Vendors</p>
-                    {unbudgetedSuppliers.map((b: any, i: number) => (
+                  <div className="mt-2 p-3 bg-amber-50/50 rounded-lg border border-amber-200/60">
+                    <p className="text-[10px] font-medium text-amber-700 mb-2 uppercase tracking-wider">Unbudgeted</p>
+                    {unbudgetedSuppliers.map((b: any, idx: number) => (
                       <div
-                        key={i}
+                        key={idx}
                         className="flex items-center justify-between py-1.5 cursor-pointer hover:bg-amber-100/50 rounded px-2 -mx-2 transition-colors"
                         onClick={() => openBudgetDrillDown(b.supplier_id, b.site_id, `${b.supplier_name} (${b.site_name})`, data?.proforma_year)}
                       >
@@ -1221,238 +1346,186 @@ export default function Dashboard() {
                     ))}
                   </div>
                 )}
+              </div>
+            ) : (
+              <div className="flex items-center justify-center py-12 text-gray-400 text-sm">
+                No budget data. <button onClick={() => router.push('/budget')} className="ml-1 text-blue-500 underline">Set up</button>
+              </div>
+            )}
 
-                {/* Proforma actual costs fallback */}
-                {proformaCosts.length > 0 && budgetSummary.length === 0 && unbudgetedSuppliers.length === 0 && (
-                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
-                    <p className="text-sm font-medium text-amber-800 mb-2">Actual Costs ({proformaYear})</p>
-                    {proformaCosts.map((pc: any, i: number) => (
-                      <div key={i} className="flex justify-between text-sm">
-                        <span>Site {pc.site_id} ({pc.count} invoices)</span>
-                        <span className="font-mono font-medium">{formatCurrency(pc.total)}</span>
+          </div>
+        </div>
+
+        {/* Drill-Down Panel Tabs */}
+        <div className="rounded-2xl border bg-gradient-to-br from-white to-slate-50/80 shadow-sm overflow-hidden">
+          {/* Tab Navigation */}
+          <div className="flex items-center gap-1 p-2 bg-gray-50/80 border-b">
+            {([
+              { key: 'meals', label: 'Meal Categories', icon: UtensilsCrossed },
+              { key: 'budget', label: 'Budget vs Actual', icon: DollarSign },
+              { key: 'kitchenette', label: 'Kitchenette', icon: UtensilsCrossed },
+            ] as const).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setBvaPanel(key);
+                  if (key === 'meals' && !mealsDrill) loadMealsDetail();
+                  if (key === 'kitchenette' && !kitchenette) loadKitchenette();
+                }}
+                className={`px-4 py-2 rounded-xl text-xs font-medium transition-all ${
+                  bvaPanel === key
+                    ? 'bg-white shadow-sm text-gray-900 border'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-white/60'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="p-5">
+            {/* ── Meal Categories Panel ── */}
+            {bvaPanel === 'meals' && (
+              mealsDrillLoading ? (
+                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading meal types...
+                </div>
+              ) : mealsDrill?.chart_data?.length > 0 ? (
+                <div>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                      <BarChart data={mealsDrill.chart_data} barGap={1}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                        <XAxis dataKey="month_name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                        <Tooltip
+                          contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}
+                          formatter={(val: any, name: any) => [Number(val).toLocaleString(), String(name)]}
+                        />
+                        {(mealsDrill.product_keys || []).map((pk: string, i: number) => (
+                          <Bar key={pk} dataKey={pk} stackId="types" fill={MEAL_COLORS[i % MEAL_COLORS.length]} name={pk} radius={i === (mealsDrill.product_keys || []).length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  {/* Legend table */}
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {(mealsDrill.series || []).map((s: any, i: number) => (
+                      <div key={s.product_name} className="flex items-center gap-2 p-2 rounded-lg bg-gray-50/80 border text-xs">
+                        <div className="w-3 h-3 rounded flex-shrink-0" style={{ backgroundColor: MEAL_COLORS[i % MEAL_COLORS.length] }} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-gray-700 truncate font-medium">{s.product_name}</p>
+                          <p className="text-gray-500 tabular-nums">{s.total_qty.toLocaleString()} meals &middot; {formatCurrency(s.total_cost)}</p>
+                        </div>
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
-
-              {/* Supplier Spending Over Time */}
-              <div>
-                <div className="flex flex-wrap items-center gap-2 mb-3 p-2.5 bg-muted/50 rounded-lg text-xs border">
-                  <select
-                    value={smYear}
-                    onChange={(e) => { const y = Number(e.target.value); setSmYear(y); loadSupplierMonthly(y, smFromMonth, smToMonth, smSiteId); loadMealsMonthly(y, smFromMonth, smToMonth, smSiteId); }}
-                    className="border rounded px-2 py-1 bg-white"
-                  >
-                    {[new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2].map((y) => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={smFromMonth}
-                    onChange={(e) => { const m = Number(e.target.value); setSmFromMonth(m); loadSupplierMonthly(smYear, m, smToMonth, smSiteId); loadMealsMonthly(smYear, m, smToMonth, smSiteId); }}
-                    className="border rounded px-2 py-1 bg-white"
-                  >
-                    {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((n, i) => (
-                      <option key={i} value={i + 1}>{n}</option>
-                    ))}
-                  </select>
-                  <span className="text-gray-400">→</span>
-                  <select
-                    value={smToMonth}
-                    onChange={(e) => { const m = Number(e.target.value); setSmToMonth(m); loadSupplierMonthly(smYear, smFromMonth, m, smSiteId); loadMealsMonthly(smYear, smFromMonth, m, smSiteId); }}
-                    className="border rounded px-2 py-1 bg-white"
-                  >
-                    {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((n, i) => (
-                      <option key={i} value={i + 1}>{n}</option>
-                    ))}
-                  </select>
-                  {supplierMonthly?.sites?.length > 0 && (
-                    <select
-                      value={smSiteId ?? ''}
-                      onChange={(e) => { const v = e.target.value ? Number(e.target.value) : undefined; setSmSiteId(v); loadSupplierMonthly(smYear, smFromMonth, smToMonth, v); loadMealsMonthly(smYear, smFromMonth, smToMonth, v); }}
-                      className="border rounded px-2 py-1 bg-white"
-                    >
-                      <option value="">All Sites</option>
-                      {supplierMonthly.sites.map((s: any) => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
-                      ))}
-                    </select>
-                  )}
                 </div>
+              ) : (
+                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">No meal type data</div>
+              )
+            )}
 
-                {supplierMonthlyLoading ? (
-                  <div className="text-center py-8 text-gray-400 text-sm">Loading...</div>
-                ) : supplierMonthly?.chart_data?.length > 0 ? (
-                  <>
-                    {/* Supplier toggle chips */}
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {(supplierMonthly.series || []).map((s: any, i: number) => {
-                        const isHidden = hiddenSuppliers.has(s.label);
-                        const color = SUPPLIER_COLORS[i % SUPPLIER_COLORS.length];
-                        return (
-                          <button
-                            key={s.label}
-                            onClick={() => toggleSupplier(s.label)}
-                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-all border ${
-                              isHidden
-                                ? 'bg-gray-100 text-gray-400 border-gray-200'
-                                : 'border-transparent text-white'
-                            }`}
-                            style={isHidden ? {} : { backgroundColor: color }}
-                          >
-                            <div
-                              className="w-2 h-2 rounded-full"
-                              style={{ backgroundColor: isHidden ? '#d1d5db' : '#fff' }}
-                            />
-                            {s.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="h-52">
-                      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                        <LineChart data={supplierMonthly.chart_data}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="month_name" tick={{ fontSize: 11 }} />
-                          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
-                          <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
-                          {(supplierMonthly.series_keys || []).map((key: string, i: number) => (
-                            !hiddenSuppliers.has(key) && (
-                              <Line
-                                key={key}
-                                type="monotone"
-                                dataKey={key}
-                                stroke={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]}
-                                strokeWidth={2}
-                                dot={{ r: 3 }}
-                                name={key}
-                              />
-                            )
-                          ))}
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-
-                    {/* FoodHouse Meals Count */}
-                    <div className="mt-4 pt-3 border-t">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs font-medium text-gray-600">
-                          {mealsDrill ? (
-                            <span className="flex items-center gap-1">
-                              <button onClick={() => setMealsDrill(null)} className="text-blue-600 hover:text-blue-800">
-                                FoodHouse Meals
-                              </button>
-                              <ChevronRight className="w-3 h-3 text-gray-400" />
-                              <span>Meal Types Breakdown</span>
-                            </span>
-                          ) : (
-                            'FoodHouse Meals Count'
-                          )}
-                        </p>
-                        {!mealsDrill && (
-                          <button
-                            onClick={() => loadMealsDetail()}
-                            className="text-xs text-blue-600 hover:text-blue-800"
-                          >
-                            View by type →
-                          </button>
-                        )}
-                        {mealsDrill && (
-                          <button
-                            onClick={() => setMealsDrill(null)}
-                            className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
-                          >
-                            <ArrowLeft className="w-3 h-3" /> Back
-                          </button>
-                        )}
+            {/* ── Budget vs Actual Panel ── */}
+            {bvaPanel === 'budget' && (
+              mealsBudgetLoading ? (
+                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading budget data...
+                </div>
+              ) : mealsBudget?.sites?.length > 0 ? (
+                <div className="space-y-6">
+                  {mealsBudget.sites.map((site: any) => (
+                    <div key={site.site_id}>
+                      <p className="text-sm font-semibold text-gray-800 mb-2">{site.site_name}</p>
+                      <div className="h-48">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                          <BarChart data={site.monthly} barGap={4}>
+                            <defs>
+                              <linearGradient id={`gradBudget${site.site_id}`} x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#94a3b8" stopOpacity={0.6} />
+                                <stop offset="100%" stopColor="#94a3b8" stopOpacity={0.2} />
+                              </linearGradient>
+                              <linearGradient id={`gradActual${site.site_id}`} x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#6366f1" stopOpacity={0.9} />
+                                <stop offset="100%" stopColor="#6366f1" stopOpacity={0.5} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                            <XAxis dataKey="month_name" tick={{ fontSize: 10, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                            <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
+                            <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb' }} formatter={(val: any, name: any) => [formatCurrency(Number(val)), String(name)]} />
+                            <Bar dataKey="budget" fill={`url(#gradBudget${site.site_id})`} name="Budget" radius={[3, 3, 0, 0]} />
+                            <Bar dataKey="actual" fill={`url(#gradActual${site.site_id})`} name="Actual" radius={[3, 3, 0, 0]} />
+                            <Legend wrapperStyle={{ fontSize: '11px' }} />
+                          </BarChart>
+                        </ResponsiveContainer>
                       </div>
-
-                      {mealsDrill ? (
-                        /* Drill-down: meal types breakdown */
-                        mealsDrillLoading ? (
-                          <div className="text-center py-4 text-gray-400 text-xs">Loading meal types...</div>
-                        ) : mealsDrill?.chart_data?.length > 0 ? (
-                          <>
-                            <div className="h-44">
-                              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                                <BarChart data={mealsDrill.chart_data}>
-                                  <CartesianGrid strokeDasharray="3 3" />
-                                  <XAxis dataKey="month_name" tick={{ fontSize: 10 }} />
-                                  <YAxis tick={{ fontSize: 10 }} />
-                                  <Tooltip formatter={(val: any, name: any) => [Number(val).toLocaleString(), String(name)]} />
-                                  {(mealsDrill.product_keys || []).map((pk: string, i: number) => (
-                                    <Bar key={pk} dataKey={pk} stackId="types" fill={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]} name={pk} />
-                                  ))}
-                                </BarChart>
-                              </ResponsiveContainer>
-                            </div>
-                            {/* Meal type totals table */}
-                            <div className="mt-2 max-h-40 overflow-y-auto">
-                              <table className="w-full text-xs">
-                                <thead>
-                                  <tr className="border-b text-gray-500">
-                                    <th className="text-left py-1 font-medium">Meal Type</th>
-                                    <th className="text-right py-1 font-medium">Qty</th>
-                                    <th className="text-right py-1 font-medium">Cost</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {(mealsDrill.series || []).map((s: any, i: number) => (
-                                    <tr key={s.product_name} className="border-b last:border-0">
-                                      <td className="py-1.5">
-                                        <div className="flex items-center gap-1.5">
-                                          <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: SUPPLIER_COLORS[i % SUPPLIER_COLORS.length] }} />
-                                          <span className="text-gray-700 truncate">{s.product_name}</span>
-                                        </div>
-                                      </td>
-                                      <td className="text-right tabular-nums text-gray-900">{s.total_qty.toLocaleString()}</td>
-                                      <td className="text-right tabular-nums text-gray-900">{formatCurrency(s.total_cost)}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </>
-                        ) : (
-                          <p className="text-center py-4 text-gray-400 text-xs">No meal type data for this period</p>
-                        )
-                      ) : (
-                        /* Overview: total meals bar chart */
-                        mealsMonthlyLoading ? (
-                          <div className="text-center py-4 text-gray-400 text-xs">Loading meals...</div>
-                        ) : mealsMonthly?.chart_data?.length > 0 ? (
-                          <div className="h-36 cursor-pointer" onClick={() => loadMealsDetail()}>
-                            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                              <BarChart data={mealsMonthly.chart_data}>
-                                <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis dataKey="month_name" tick={{ fontSize: 10 }} />
-                                <YAxis tick={{ fontSize: 10 }} />
-                                <Tooltip formatter={(val: any) => [Number(val).toLocaleString(), 'Meals']} />
-                                {(mealsMonthly.site_keys || []).length > 1 ? (
-                                  (mealsMonthly.site_keys || []).map((sk: string, i: number) => (
-                                    <Bar key={sk} dataKey={sk} stackId="meals" fill={SUPPLIER_COLORS[i % SUPPLIER_COLORS.length]} name={sk} />
-                                  ))
-                                ) : (
-                                  <Bar dataKey="total" fill="#3b82f6" name="Meals" radius={[3, 3, 0, 0]} />
-                                )}
-                              </BarChart>
-                            </ResponsiveContainer>
-                          </div>
-                        ) : (
-                          <p className="text-center py-4 text-gray-400 text-xs">No meal data for this period</p>
-                        )
-                      )}
                     </div>
-                  </>
-                ) : (
-                  <p className="text-center py-8 text-gray-400 text-sm">No supplier data for this period</p>
-                )}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                  ))}
+                </div>
+              ) : (
+                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">No budget data available</div>
+              )
+            )}
+
+            {/* ── Kitchenette Panel ── */}
+            {bvaPanel === 'kitchenette' && (
+              kitchenetteLoading ? (
+                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading kitchenette data...
+                </div>
+              ) : kitchenette?.families?.length > 0 ? (
+                <div>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                      <AreaChart data={kitchenette.chart_data}>
+                        <defs>
+                          {(kitchenette.families || []).map((f: any, i: number) => (
+                            <linearGradient key={f.family_key} id={`gradKit${i}`} x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor={KITCHEN_COLORS[i % KITCHEN_COLORS.length]} stopOpacity={0.6} />
+                              <stop offset="100%" stopColor={KITCHEN_COLORS[i % KITCHEN_COLORS.length]} stopOpacity={0.05} />
+                            </linearGradient>
+                          ))}
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                        <XAxis dataKey="month_name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb' }} formatter={(val: any, name: any) => [formatCurrency(Number(val)), String(name)]} />
+                        {(kitchenette.families || []).map((f: any, i: number) => (
+                          <Area
+                            key={f.family_key}
+                            type="monotone"
+                            dataKey={`${f.family_name}_cost`}
+                            stackId="kit"
+                            stroke={KITCHEN_COLORS[i % KITCHEN_COLORS.length]}
+                            fill={`url(#gradKit${i})`}
+                            name={f.family_name}
+                          />
+                        ))}
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                  {/* Family summary cards */}
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {(kitchenette.families || []).map((f: any, i: number) => (
+                      <div key={f.family_key} className="rounded-xl bg-gray-50/80 border p-3">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <div className="w-2.5 h-2.5 rounded" style={{ backgroundColor: KITCHEN_COLORS[i % KITCHEN_COLORS.length] }} />
+                          <p className="text-xs font-medium text-gray-700 truncate">{f.family_name}</p>
+                        </div>
+                        <p className="text-sm font-bold tabular-nums text-gray-900">{formatCurrency(f.total_cost)}</p>
+                        <p className="text-[10px] text-gray-500 tabular-nums">{f.total_qty.toLocaleString()} units</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">No kitchenette data. Upload proformas with מטבחונים tab.</div>
+              )
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* ═══════ DAILY MEALS ═══════ */}
       <Card className="overflow-hidden rounded-xl border bg-card shadow-sm">

@@ -18,6 +18,7 @@ from backend.models.product_category import ProductCategoryGroup, ProductCategor
 from backend.models.attachment import Attachment
 from backend.models.dish_catalog import DishCatalog
 from backend.models.meal_breakdown import MealBreakdown
+from backend.models.kitchenette_item import KitchenetteItem
 
 __all__ = [
     "User",
@@ -54,4 +55,5 @@ __all__ = [
     "Attachment",
     "DishCatalog",
     "MealBreakdown",
+    "KitchenetteItem",
 ]

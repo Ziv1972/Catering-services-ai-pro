@@ -802,77 +802,79 @@ async def meals_monthly(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """FoodHouse meals count by month from proforma items in total_meals category."""
+    """FoodHouse meals per month from MealBreakdown (ריכוז הכנסות). Returns quantity + spending."""
     from backend.models.site import Site
-    from backend.models.supplier import Supplier
-    from backend.api.category_analysis import _load_category_mappings, _match_product_to_category
+    from backend.models.meal_breakdown import MealBreakdown
 
     target_year = year or datetime.now().year
     proforma_year = await _resolve_proforma_year(db, target_year)
 
-    # Load category mappings
-    mappings = await _load_category_mappings(db)
+    # Meal quantity fields (excluding supplement)
+    meal_fields = [
+        "hp_meat", "scitex_meat", "evening_hp", "evening_contractors",
+        "hp_dairy", "scitex_dairy", "contractors_meat", "contractors_dairy",
+    ]
 
-    # Get FoodHouse supplier
-    fh_result = await db.execute(
-        select(Supplier).where(Supplier.name.ilike("%foodhouse%"))
-    )
-    foodhouse = fh_result.scalar_one_or_none()
-    if not foodhouse:
-        return {"year": proforma_year, "chart_data": [], "sites": []}
-
-    # Get all proforma items for FoodHouse in the target year
-    month_expr = extract_month(Proforma.invoice_date)
-    items_q = (
-        select(
-            ProformaItem.product_name,
-            ProformaItem.quantity,
-            month_expr.label("month_num"),
-            Site.name.label("site_name"),
-            Proforma.site_id,
-        )
-        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
-        .join(Site, Proforma.site_id == Site.id)
-        .where(Proforma.supplier_id == foodhouse.id)
-        .where(year_equals(Proforma.invoice_date, proforma_year))
+    # Query MealBreakdown grouped by month + site
+    month_expr = extract_month(MealBreakdown.invoice_month)
+    q = (
+        select(MealBreakdown, Site.name.label("site_name"))
+        .join(Site, MealBreakdown.site_id == Site.id)
+        .where(year_equals(MealBreakdown.invoice_month, proforma_year))
     )
     if site_id:
-        items_q = items_q.where(Proforma.site_id == site_id)
+        q = q.where(MealBreakdown.site_id == site_id)
 
-    result = await db.execute(items_q)
-    items = list(result)
+    result = await db.execute(q)
+    rows = list(result)
 
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-    # Categorize items, count only total_meals
-    # meals_by_month: { month -> { site_name -> count } }
-    meals_by_month: dict[int, dict[str, float]] = {}
+    # Aggregate by month + site
+    # { month -> { site_name -> { meals, supplement, cost, working_days } } }
+    by_month: dict[int, dict[str, dict]] = {}
     site_set: set[str] = set()
 
-    for item in items:
-        group_name, _, _ = _match_product_to_category(item.product_name, mappings)
-        if group_name != "total_meals":
-            continue
-        m = int(item.month_num)
+    for mb, site_name in rows:
+        m = mb.invoice_month.month
         if m < from_month or m > to_month:
             continue
-        qty = item.quantity or 0
-        sname = item.site_name or "Unknown"
-        site_set.add(sname)
-        if m not in meals_by_month:
-            meals_by_month[m] = {}
-        meals_by_month[m][sname] = meals_by_month[m].get(sname, 0) + qty
+        site_set.add(site_name)
+        if m not in by_month:
+            by_month[m] = {}
+        total_meals = sum(getattr(mb, f, 0) or 0 for f in meal_fields)
+        supplement = mb.supplement or 0
+        cost = mb.total_cost or 0
+        wd = mb.working_days or 0
+        by_month[m][site_name] = {
+            "meals": total_meals,
+            "supplement": supplement,
+            "cost": cost,
+            "working_days": wd,
+        }
 
     # Build chart data
     chart_data = []
     site_keys = sorted(site_set)
     for m in range(from_month, to_month + 1):
         row: dict = {"month": m, "month_name": month_names[m - 1]}
-        month_data = meals_by_month.get(m, {})
+        month_data = by_month.get(m, {})
+        total_meals = 0
+        total_supplement = 0
+        total_cost = 0.0
         for sk in site_keys:
-            row[sk] = round(month_data.get(sk, 0))
-        row["total"] = sum(round(month_data.get(sk, 0)) for sk in site_keys)
+            sd = month_data.get(sk, {})
+            meals = round(sd.get("meals", 0))
+            row[sk] = meals
+            row[f"{sk}_supplement"] = round(sd.get("supplement", 0))
+            row[f"{sk}_cost"] = round(sd.get("cost", 0), 2)
+            total_meals += meals
+            total_supplement += round(sd.get("supplement", 0))
+            total_cost += sd.get("cost", 0)
+        row["total"] = total_meals
+        row["total_supplement"] = total_supplement
+        row["total_cost"] = round(total_cost, 2)
         chart_data.append(row)
 
     # Sites for filter
@@ -899,79 +901,69 @@ async def meals_detail(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Breakdown of meal types (product names in total_meals category) over time."""
-    from backend.models.site import Site
-    from backend.models.supplier import Supplier as SupplierModel
-    from backend.api.category_analysis import _load_category_mappings, _match_product_to_category
+    """Breakdown of 9 meal types from MealBreakdown (ריכוז הכנסות) over time."""
+    from backend.models.meal_breakdown import MealBreakdown
 
     target_year = year or datetime.now().year
     proforma_year = await _resolve_proforma_year(db, target_year)
-    mappings = await _load_category_mappings(db)
 
-    month_expr = extract_month(Proforma.invoice_date)
-    items_q = (
-        select(
-            ProformaItem.product_name,
-            ProformaItem.quantity,
-            ProformaItem.total_price,
-            month_expr.label("month_num"),
-            Site.name.label("site_name"),
-            Proforma.site_id,
-            Proforma.supplier_id,
-            SupplierModel.name.label("supplier_name"),
-        )
-        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
-        .join(Site, Proforma.site_id == Site.id)
-        .join(SupplierModel, Proforma.supplier_id == SupplierModel.id)
-        .where(year_equals(Proforma.invoice_date, proforma_year))
+    # 9 meal type fields → Hebrew labels
+    MEAL_TYPE_LABELS = {
+        "hp_meat": "ארוחת צהריים בשרית HP",
+        "scitex_meat": "ארוחת צהריים בשרית סאייטקס",
+        "evening_hp": "ארוחת ערב HP",
+        "evening_contractors": "ארוחת ערב קבלנים",
+        "hp_dairy": "ארוחת צהריים חלבית HP",
+        "scitex_dairy": "ארוחת צהריים חלבית סאייטקס",
+        "supplement": "תוספת מנה עיקרית",
+        "contractors_meat": "ארוחת צהריים בשרית קבלנים",
+        "contractors_dairy": "ארוחת צהריים חלבית קבלנים",
+    }
+
+    q = (
+        select(MealBreakdown)
+        .where(year_equals(MealBreakdown.invoice_month, proforma_year))
     )
     if site_id:
-        items_q = items_q.where(Proforma.site_id == site_id)
-    if supplier_id:
-        items_q = items_q.where(Proforma.supplier_id == supplier_id)
-    else:
-        # Default to FoodHouse-like supplier
-        fh = await db.execute(select(SupplierModel).where(SupplierModel.name.ilike("%foodhouse%")))
-        fh_row = fh.scalar_one_or_none()
-        if fh_row:
-            items_q = items_q.where(Proforma.supplier_id == fh_row.id)
+        q = q.where(MealBreakdown.site_id == site_id)
 
-    result = await db.execute(items_q)
-    items = list(result)
+    result = await db.execute(q)
+    breakdowns = list(result.scalars().all())
 
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-    # Group by product_name, only total_meals items
-    # product_data: { product_name -> { month -> { qty, cost } } }
+    # Pivot: { hebrew_label -> { month -> { qty, cost } } }
     product_data: dict[str, dict[int, dict]] = {}
     product_totals: dict[str, dict] = {}
 
-    for item in items:
-        group_name, _, _ = _match_product_to_category(item.product_name, mappings)
-        if group_name != "total_meals":
-            continue
-        m = int(item.month_num)
+    for label in MEAL_TYPE_LABELS.values():
+        product_data[label] = {}
+        product_totals[label] = {"qty": 0, "cost": 0}
+
+    for mb in breakdowns:
+        m = mb.invoice_month.month
         if m < from_month or m > to_month:
             continue
-        pname = item.product_name
-        qty = item.quantity or 0
-        cost = item.total_price or 0
+        for field, label in MEAL_TYPE_LABELS.items():
+            qty = getattr(mb, field, 0) or 0
+            price = getattr(mb, f"{field}_price", 0) or 0
+            cost = qty * price
+            if m not in product_data[label]:
+                product_data[label][m] = {"qty": 0, "cost": 0}
+            product_data[label][m]["qty"] += qty
+            product_data[label][m]["cost"] += cost
+            product_totals[label]["qty"] += qty
+            product_totals[label]["cost"] += cost
 
-        if pname not in product_data:
-            product_data[pname] = {}
-            product_totals[pname] = {"qty": 0, "cost": 0}
-        if m not in product_data[pname]:
-            product_data[pname][m] = {"qty": 0, "cost": 0}
-        product_data[pname][m]["qty"] += qty
-        product_data[pname][m]["cost"] += cost
-        product_totals[pname]["qty"] += qty
-        product_totals[pname]["cost"] += cost
+    # Sort by total qty descending, filter out zero-quantity types
+    sorted_products = sorted(
+        [k for k in product_totals if product_totals[k]["qty"] > 0],
+        key=lambda p: product_totals[p]["qty"],
+        reverse=True,
+    )
 
-    # Sort products by total qty descending
-    sorted_products = sorted(product_totals.keys(), key=lambda p: product_totals[p]["qty"], reverse=True)
-
-    # Build chart data: one row per month, columns per product
+    # Build chart data
     chart_data = []
     for m in range(from_month, to_month + 1):
         row: dict = {"month": m, "month_name": month_names[m - 1]}
@@ -979,7 +971,6 @@ async def meals_detail(
             row[pname] = round(product_data[pname].get(m, {}).get("qty", 0))
         chart_data.append(row)
 
-    # Build series summary
     series = [
         {
             "product_name": pname,
@@ -996,6 +987,203 @@ async def meals_detail(
         "chart_data": chart_data,
         "product_keys": sorted_products,
         "series": series,
+    }
+
+
+@router.get("/meals-budget")
+async def meals_budget(
+    year: Optional[int] = None,
+    site_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Monthly budget vs actual meal spending per site from MealBreakdown + SupplierBudget."""
+    from backend.models.site import Site
+    from backend.models.supplier import Supplier
+    from backend.models.meal_breakdown import MealBreakdown
+
+    target_year = year or datetime.now().year
+
+    # Get FoodHouse supplier for budget lookup
+    fh_result = await db.execute(
+        select(Supplier).where(Supplier.name.ilike("%foodhouse%"))
+    )
+    foodhouse = fh_result.scalar_one_or_none()
+
+    # Get all sites
+    sites_result = await db.execute(select(Site).order_by(Site.name))
+    all_sites = list(sites_result.scalars().all())
+
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    month_cols = ["jan", "feb", "mar", "apr", "may", "jun",
+                  "jul", "aug", "sep", "oct", "nov", "dec"]
+
+    # Get budgets per site
+    budget_by_site: dict[int, list[float]] = {}
+    if foodhouse:
+        budget_q = select(SupplierBudget).where(
+            SupplierBudget.supplier_id == foodhouse.id,
+            SupplierBudget.year == target_year,
+        )
+        if site_id:
+            budget_q = budget_q.where(SupplierBudget.site_id == site_id)
+        budgets = await db.execute(budget_q)
+        for b in budgets.scalars().all():
+            monthly = [getattr(b, mc, 0) or 0 for mc in month_cols]
+            budget_by_site[b.site_id] = monthly
+
+    # Get actual spending from MealBreakdown — use same year as budget
+    mb_q = (
+        select(MealBreakdown)
+        .where(year_equals(MealBreakdown.invoice_month, target_year))
+    )
+    if site_id:
+        mb_q = mb_q.where(MealBreakdown.site_id == site_id)
+
+    mb_result = await db.execute(mb_q)
+    breakdowns = list(mb_result.scalars().all())
+
+    # Aggregate actual cost by site + month
+    # Use total_cost which is the full proforma cost (all meal types)
+    # This matches what the budget covers: the total FoodHouse invoice
+    actual_by_site_month: dict[int, dict[int, float]] = {}
+    for mb in breakdowns:
+        m = mb.invoice_month.month
+        sid = mb.site_id
+        if sid not in actual_by_site_month:
+            actual_by_site_month[sid] = {}
+        actual_by_site_month[sid][m] = (actual_by_site_month[sid].get(m, 0)
+                                         + (mb.total_cost or 0))
+
+    # Build per-site response
+    site_data = []
+    for s in all_sites:
+        if site_id and s.id != site_id:
+            continue
+        budget_months = budget_by_site.get(s.id, [0] * 12)
+        actual_months = actual_by_site_month.get(s.id, {})
+
+        monthly_data = []
+        # Track cumulative YTD (year-to-date) up to the latest month with actual data
+        latest_month = max(actual_months.keys()) if actual_months else 0
+        ytd_budget = 0.0
+        ytd_actual = 0.0
+
+        for m in range(1, 13):
+            b = budget_months[m - 1]
+            a = actual_months.get(m, 0)
+            if m <= latest_month:
+                ytd_budget += b
+                ytd_actual += a
+            monthly_data.append({
+                "month": m,
+                "month_name": month_names[m - 1],
+                "budget": round(b, 2),
+                "actual": round(a, 2),
+                "diff": round(b - a, 2),
+                "pct": round((a / b * 100) if b > 0 else 0, 1),
+            })
+
+        yearly_budget = sum(budget_months)
+        yearly_actual = sum(actual_months.values())
+
+        site_data.append({
+            "site_id": s.id,
+            "site_name": s.name,
+            "yearly_budget": round(yearly_budget, 2),
+            "yearly_actual": round(yearly_actual, 2),
+            "yearly_pct": round((yearly_actual / yearly_budget * 100) if yearly_budget > 0 else 0, 1),
+            # YTD: cumulative budget vs actual up to the latest month with data
+            "ytd_budget": round(ytd_budget, 2),
+            "ytd_actual": round(ytd_actual, 2),
+            "ytd_pct": round((ytd_actual / ytd_budget * 100) if ytd_budget > 0 else 0, 1),
+            "latest_month": latest_month,
+            "monthly": monthly_data,
+        })
+
+    return {
+        "year": target_year,
+        "sites": site_data,
+    }
+
+
+@router.get("/kitchenette-monthly")
+async def kitchenette_monthly(
+    year: Optional[int] = None,
+    site_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Kitchenette/BTB spending per family per month per site. Returns quantities + spending."""
+    from backend.models.kitchenette_item import KitchenetteItem, KITCHENETTE_FAMILIES
+    from backend.models.site import Site
+
+    target_year = year or datetime.now().year
+    proforma_year = await _resolve_proforma_year(db, target_year)
+
+    q = (
+        select(KitchenetteItem, Site.name.label("site_name"))
+        .join(Site, KitchenetteItem.site_id == Site.id)
+        .where(year_equals(KitchenetteItem.invoice_month, proforma_year))
+    )
+    if site_id:
+        q = q.where(KitchenetteItem.site_id == site_id)
+
+    result = await db.execute(q)
+    rows = list(result)
+
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    # Aggregate by family + month
+    # { family_key -> { month -> { qty, cost } } }
+    family_data: dict[str, dict[int, dict]] = {}
+    family_totals: dict[str, dict] = {}
+
+    for family_key in KITCHENETTE_FAMILIES:
+        family_data[family_key] = {}
+        family_totals[family_key] = {"qty": 0, "cost": 0}
+
+    for item, site_name in rows:
+        m = item.invoice_month.month
+        fk = item.family or "misc"
+        if fk not in family_data:
+            fk = "misc"
+        if m not in family_data[fk]:
+            family_data[fk][m] = {"qty": 0, "cost": 0}
+        family_data[fk][m]["qty"] += item.quantity or 0
+        family_data[fk][m]["cost"] += item.total_cost or 0
+        family_totals[fk]["qty"] += item.quantity or 0
+        family_totals[fk]["cost"] += item.total_cost or 0
+
+    # Build chart data — one row per month, columns per family (Hebrew label)
+    family_labels = {k: v for k, v in KITCHENETTE_FAMILIES.items() if family_totals[k]["qty"] > 0}
+    sorted_families = sorted(family_labels.keys(), key=lambda f: family_totals[f]["cost"], reverse=True)
+
+    chart_data = []
+    for m in range(1, 13):
+        row: dict = {"month": m, "month_name": month_names[m - 1]}
+        for fk in sorted_families:
+            label = KITCHENETTE_FAMILIES[fk]
+            row[f"{label}_qty"] = round(family_data[fk].get(m, {}).get("qty", 0))
+            row[f"{label}_cost"] = round(family_data[fk].get(m, {}).get("cost", 0), 2)
+        chart_data.append(row)
+
+    series = [
+        {
+            "family_key": fk,
+            "family_name": KITCHENETTE_FAMILIES[fk],
+            "total_qty": round(family_totals[fk]["qty"]),
+            "total_cost": round(family_totals[fk]["cost"], 2),
+        }
+        for fk in sorted_families
+    ]
+
+    return {
+        "year": proforma_year,
+        "chart_data": chart_data,
+        "families": series,
     }
 
 

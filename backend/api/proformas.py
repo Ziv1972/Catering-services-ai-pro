@@ -463,6 +463,16 @@ async def _extract_and_save_meal_breakdown(
         v = ws.cell(row, 4).value
         return float(v) if isinstance(v, (int, float)) else 0.0
 
+    def get_price(row: int) -> float:
+        """Read per-unit price from column C (מחיר) in ריכוז הכנסות."""
+        v = ws.cell(row, 3).value
+        return float(v) if isinstance(v, (int, float)) else 0.0
+
+    def get_total(row: int) -> float:
+        """Read total NIS from column E (סה"כ) in ריכוז הכנסות."""
+        v = ws.cell(row, 5).value
+        return float(v) if isinstance(v, (int, float)) else 0.0
+
     # Find working days — search for "ימי עבודה" label, value is in the cell to the right or below
     working_days = 0
     for r in range(1, ws.max_row + 1):
@@ -492,13 +502,18 @@ async def _extract_and_save_meal_breakdown(
     if old:
         await db.delete(old)
 
-    vals = {
-        "hp_meat": get_qty(5), "scitex_meat": get_qty(6),
-        "evening_hp": get_qty(7), "evening_contractors": get_qty(8),
-        "hp_dairy": get_qty(9), "scitex_dairy": get_qty(10),
-        "supplement": get_qty(11),
-        "contractors_meat": get_qty(14), "contractors_dairy": get_qty(15),
+    meal_rows = {
+        "hp_meat": 5, "scitex_meat": 6,
+        "evening_hp": 7, "evening_contractors": 8,
+        "hp_dairy": 9, "scitex_dairy": 10,
+        "supplement": 11,
+        "contractors_meat": 14, "contractors_dairy": 15,
     }
+    vals = {field: get_qty(row) for field, row in meal_rows.items()}
+    price_vals = {f"{field}_price": get_price(row) for field, row in meal_rows.items()}
+    total_cost = sum(get_total(row) for row in meal_rows.values())
+    vals.update(price_vals)
+    vals["total_cost"] = total_cost
     # Log row labels for debugging
     for r in [5, 6, 7, 8, 9, 10, 11, 14, 15]:
         label = ws.cell(r, 2).value or ws.cell(r, 1).value or ""
@@ -516,6 +531,110 @@ async def _extract_and_save_meal_breakdown(
     await db.commit()
     logger.info("Saved meal breakdown for proforma %d (site %d, month %s): %s", proforma_id, site_id, month_start, vals)
     return True
+
+
+async def _extract_kitchenette_data(
+    raw: bytes, proforma_id: int, site_id: int, invoice_date: date, db: AsyncSession,
+) -> bool:
+    """Extract kitchenette/BTB product data from ריכוז מטבחונים tab and save to KitchenetteItem."""
+    import openpyxl
+    from backend.models.kitchenette_item import KitchenetteItem, classify_product
+
+    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
+
+    # Find the kitchenette sheet
+    ws = None
+    for sheet_name in wb.sheetnames:
+        if "מטבחונים" in sheet_name:
+            ws = wb[sheet_name]
+            break
+    if ws is None:
+        return False
+
+    # Find header row with "פרטים" to determine column layout
+    header_row = None
+    qty_col = None
+    cost_col = None
+    for r in range(1, min(ws.max_row + 1, 10)):
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(r, c).value
+            if v and isinstance(v, str) and "פרטים" in v:
+                header_row = r
+                break
+        if header_row:
+            break
+
+    if header_row is None:
+        return False
+
+    # Find סה"כ כמות and סה"כ ₪ columns in the header row
+    for c in range(1, ws.max_column + 1):
+        v = ws.cell(header_row, c).value
+        if v and isinstance(v, str):
+            if "סה\"כ כמות" in v or "סה\"כ כמות" in v:
+                qty_col = c
+            elif "סה\"כ ₪" in v or "סה\"כ" in v and "₪" in v:
+                cost_col = c
+
+    # Column B = product name (col 2), C = price (col 3), D = price with commission (col 4)
+    name_col = 2
+    price_col = 3
+    commission_col = 4
+
+    month_start = date(invoice_date.year, invoice_date.month, 1)
+
+    # Delete old kitchenette data for this proforma
+    from sqlalchemy import delete
+    await db.execute(
+        delete(KitchenetteItem).where(KitchenetteItem.proforma_id == proforma_id)
+    )
+
+    items_saved = 0
+    for r in range(header_row + 1, ws.max_row + 1):
+        product_name = ws.cell(r, name_col).value
+        if not product_name or not isinstance(product_name, str):
+            continue
+        product_name = product_name.strip()
+        if not product_name or product_name.startswith("סה\"כ") or product_name.startswith("סה''כ"):
+            continue
+        # Skip section headers (no price data)
+        price_val = ws.cell(r, price_col).value
+        if not isinstance(price_val, (int, float)):
+            continue
+
+        quantity = 0.0
+        if qty_col:
+            v = ws.cell(r, qty_col).value
+            quantity = float(v) if isinstance(v, (int, float)) else 0.0
+
+        total_cost = 0.0
+        if cost_col:
+            v = ws.cell(r, cost_col).value
+            total_cost = float(v) if isinstance(v, (int, float)) else 0.0
+
+        commission_val = ws.cell(r, commission_col).value
+        price_with_comm = float(commission_val) if isinstance(commission_val, (int, float)) else 0.0
+
+        family = classify_product(product_name)
+
+        item = KitchenetteItem(
+            proforma_id=proforma_id,
+            site_id=site_id,
+            invoice_month=month_start,
+            product_name=product_name,
+            family=family,
+            quantity=quantity,
+            price=float(price_val),
+            price_with_commission=price_with_comm,
+            total_cost=total_cost,
+        )
+        db.add(item)
+        items_saved += 1
+
+    await db.commit()
+    logger.info("Saved %d kitchenette items for proforma %d (site %d, month %s)",
+                items_saved, proforma_id, site_id, month_start)
+    return items_saved > 0
 
 
 @router.post("/upload")
@@ -649,6 +768,7 @@ async def upload_proforma(
 
     # Auto-extract meal breakdown from FoodHouse proformas (ריכוז הכנסות sheet)
     meal_extracted = False
+    kitchenette_extracted = False
     if ext in ("xlsx", "xls"):
         try:
             meal_extracted = await _extract_and_save_meal_breakdown(
@@ -656,6 +776,12 @@ async def upload_proforma(
             )
         except Exception as e:
             logger.warning("Meal breakdown extraction skipped: %s", e)
+        try:
+            kitchenette_extracted = await _extract_kitchenette_data(
+                raw, proforma.id, proforma.site_id or 1, inv_date, db
+            )
+        except Exception as e:
+            logger.warning("Kitchenette extraction skipped: %s", e)
 
     return {
         "id": proforma.id,
