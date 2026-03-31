@@ -1434,10 +1434,12 @@ async def delete_proforma(
     if not proforma:
         raise HTTPException(status_code=404, detail="Proforma not found")
 
-    # Delete meal breakdowns, items, then the proforma itself
+    # Delete meal breakdowns, kitchenette items, proforma items, then the proforma itself
     from sqlalchemy import delete as sql_delete
     from backend.models.meal_breakdown import MealBreakdown
+    from backend.models.kitchenette_item import KitchenetteItem
     await db.execute(sql_delete(MealBreakdown).where(MealBreakdown.proforma_id == proforma_id))
+    await db.execute(sql_delete(KitchenetteItem).where(KitchenetteItem.proforma_id == proforma_id))
     await db.execute(sql_delete(ProformaItem).where(ProformaItem.proforma_id == proforma_id))
     await db.execute(sql_delete(Proforma).where(Proforma.id == proforma_id))
     await db.commit()
@@ -1458,6 +1460,7 @@ async def bulk_delete_proformas(
     """Delete multiple proformas at once (for cleaning up duplicates)."""
     from sqlalchemy import delete as sql_delete
     from backend.models.meal_breakdown import MealBreakdown
+    from backend.models.kitchenette_item import KitchenetteItem
 
     deleted = []
     not_found = []
@@ -1467,6 +1470,7 @@ async def bulk_delete_proformas(
             not_found.append(pid)
             continue
         await db.execute(sql_delete(MealBreakdown).where(MealBreakdown.proforma_id == pid))
+        await db.execute(sql_delete(KitchenetteItem).where(KitchenetteItem.proforma_id == pid))
         await db.execute(sql_delete(ProformaItem).where(ProformaItem.proforma_id == pid))
         await db.execute(sql_delete(Proforma).where(Proforma.id == pid))
         deleted.append(pid)
