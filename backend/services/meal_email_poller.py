@@ -608,11 +608,9 @@ async def poll_meal_emails(
     if not settings.IMAP_HOST or not settings.IMAP_EMAIL or not settings.IMAP_PASSWORD:
         return {"status": "skipped", "reason": "IMAP not configured"}
 
-    # Run IMAP fetch in thread (it's blocking IO)
-    import functools
-    loop = asyncio.get_event_loop()
-    fetch_fn = functools.partial(
-        _fetch_meal_emails,
+    # Run IMAP fetch directly (blocking but reliable — thread executor
+    # was causing Gmail IMAP to return empty results)
+    emails = _fetch_meal_emails(
         imap_host=settings.IMAP_HOST,
         imap_email=settings.IMAP_EMAIL,
         imap_password=settings.IMAP_PASSWORD,
@@ -621,7 +619,6 @@ async def poll_meal_emails(
         reprocess=reprocess,
         since_date=since_date,
     )
-    emails = await loop.run_in_executor(None, fetch_fn)
 
     if not emails:
         # Return diagnostic info when no emails found
