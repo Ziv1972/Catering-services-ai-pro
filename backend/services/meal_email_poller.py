@@ -136,7 +136,9 @@ def _parse_excel_bytes(data: bytes, filename: str = "") -> list[dict]:
         return []
 
     rows: list[dict] = []
-    for sheet_name in wb.sheetnames:
+    sheet_names = list(wb.sheetnames)
+    logger.info(f"Excel {filename}: sheets={sheet_names}")
+    for sheet_name in sheet_names:
         ws = wb[sheet_name]
         if not hasattr(ws, "iter_rows"):
             continue
@@ -163,6 +165,7 @@ def _parse_excel_bytes(data: bytes, filename: str = "") -> list[dict]:
                         qty_col = i
                 if name_col is not None and qty_col is not None:
                     header_row = row_idx
+                    logger.info(f"Excel sheet '{sheet_name}': header at row {row_idx}, name_col={name_col}, qty_col={qty_col}, headers={str_cells[:5]}")
                     continue
 
                 # Fallback: if first row has text + number pattern
@@ -181,7 +184,7 @@ def _parse_excel_bytes(data: bytes, filename: str = "") -> list[dict]:
                         try:
                             name_val = str(row[name_col]).strip()
                             qty_val = float(row[qty_col])
-                            if name_val and qty_val > 0:
+                            if name_val and qty_val >= 0:
                                 rows.append({"name": name_val, "quantity": qty_val})
                         except (ValueError, TypeError, IndexError):
                             pass
@@ -200,13 +203,18 @@ def _parse_excel_bytes(data: bytes, filename: str = "") -> list[dict]:
                         continue
 
                     qty_val = float(str(qty_raw).replace(",", "")) if qty_raw else 0
-                    if qty_val > 0:
+                    # Include 0-quantity rows (represent closed sites — show as zero)
+                    if qty_val >= 0:
                         rows.append({"name": name_val, "quantity": qty_val})
                 except (ValueError, TypeError, IndexError):
                     continue
 
     wb.close()
-    logger.info(f"Excel parsed {len(rows)} rows from {filename}")
+    # Log detailed parsing results
+    if rows:
+        logger.info(f"Excel parsed {len(rows)} rows from {filename}: {[r['name'][:40] + '=' + str(r['quantity']) for r in rows]}")
+    else:
+        logger.warning(f"Excel parsed 0 rows from {filename} (sheets: {sheet_names})")
     return rows
 
 
@@ -342,7 +350,7 @@ def _extract_html_tables(msg: email_lib.message.Message) -> list[dict]:
                     continue
                 try:
                     qty_val = float(data_row[qty_col].replace(",", ""))
-                    if qty_val > 0:
+                    if qty_val >= 0:
                         rows.append({"name": name_val, "quantity": qty_val})
                 except (ValueError, TypeError, IndexError):
                     continue
@@ -418,11 +426,17 @@ def _fetch_meal_emails(
     imap_password: str,
     sender_filter: str = "",
     subject_filter: str = "",
+    reprocess: bool = False,
+    since_date: Optional[date] = None,
 ) -> list[dict]:
     """
-    Connect to IMAP, find unread meal report emails, extract CSV data.
+    Connect to IMAP, find meal report emails, extract CSV/Excel data.
     Returns list of {date, rows, message_uid} dicts.
-    Marks processed emails as read.
+
+    Args:
+        reprocess: If True, search ALL emails (not just UNSEEN) since since_date.
+                   Does NOT mark emails as read when reprocessing.
+        since_date: Only used when reprocess=True. Defaults to 30 days ago.
     """
     results: list[dict] = []
 
@@ -432,21 +446,36 @@ def _fetch_meal_emails(
         mail.select("INBOX")
 
         # Build IMAP search criteria
-        # For forwarded emails, the From might be the forwarder, not the original sender.
-        # We search by subject first (more reliable), and optionally also by From.
-        criteria_parts = ["UNSEEN"]
+        criteria_parts = []
+        if not reprocess:
+            criteria_parts.append("UNSEEN")
+        else:
+            # When reprocessing, search all emails since a date
+            effective_since = since_date or (date.today() - timedelta(days=30))
+            imap_date_str = effective_since.strftime("%d-%b-%Y")
+            criteria_parts.append(f'SINCE {imap_date_str}')
+
         if subject_filter:
             criteria_parts.append(f'SUBJECT "{subject_filter}"')
         if sender_filter:
             criteria_parts.append(f'FROM "{sender_filter}"')
 
         search_criteria = "(" + " ".join(criteria_parts) + ")"
+        logger.info(f"IMAP search: {search_criteria} (reprocess={reprocess})")
         status, data = mail.uid("search", None, search_criteria)
 
         # If no results with both filters, try subject-only (handles forwarded emails)
         if (status != "OK" or not data[0]) and sender_filter and subject_filter:
             logger.info("No results with sender+subject filter, trying subject-only")
-            fallback_criteria = f'(UNSEEN SUBJECT "{subject_filter}")'
+            fallback_parts = []
+            if not reprocess:
+                fallback_parts.append("UNSEEN")
+            elif since_date or reprocess:
+                effective_since = since_date or (date.today() - timedelta(days=30))
+                imap_date_str = effective_since.strftime("%d-%b-%Y")
+                fallback_parts.append(f'SINCE {imap_date_str}')
+            fallback_parts.append(f'SUBJECT "{subject_filter}"')
+            fallback_criteria = "(" + " ".join(fallback_parts) + ")"
             status, data = mail.uid("search", None, fallback_criteria)
 
         if status != "OK" or not data[0]:
@@ -454,7 +483,7 @@ def _fetch_meal_emails(
             return results
 
         uids = data[0].split()
-        logger.info(f"Found {len(uids)} unread meal email(s)")
+        logger.info(f"Found {len(uids)} meal email(s) (reprocess={reprocess})")
 
         for uid in uids:
             try:
@@ -527,8 +556,9 @@ def _fetch_meal_emails(
                     "subject": subject,
                 })
 
-                # Only mark as read after successful parse
-                mail.uid("store", uid, "+FLAGS", "\\Seen")
+                # Only mark as read after successful parse (skip when reprocessing)
+                if not reprocess:
+                    mail.uid("store", uid, "+FLAGS", "\\Seen")
 
             except Exception as e:
                 logger.error(f"Error processing email uid={uid}: {e}")
@@ -548,10 +578,16 @@ def _fetch_meal_emails(
 #  Async poll function (called by scheduler)
 # ──────────────────────────────────────────────────────
 
-async def poll_meal_emails() -> dict:
+async def poll_meal_emails(
+    reprocess: bool = False,
+    since_date: Optional[date] = None,
+) -> dict:
     """
     Check for new meal report emails and process them.
-    Returns summary of what was processed.
+
+    Args:
+        reprocess: If True, re-scan ALL emails (including already-read) since since_date.
+        since_date: Start date for reprocessing (default: 30 days ago).
     """
     settings = get_settings()
 
@@ -559,16 +595,19 @@ async def poll_meal_emails() -> dict:
         return {"status": "skipped", "reason": "IMAP not configured"}
 
     # Run IMAP fetch in thread (it's blocking IO)
+    import functools
     loop = asyncio.get_event_loop()
-    emails = await loop.run_in_executor(
-        None,
+    fetch_fn = functools.partial(
         _fetch_meal_emails,
-        settings.IMAP_HOST,
-        settings.IMAP_EMAIL,
-        settings.IMAP_PASSWORD,
-        settings.MEAL_EMAIL_SENDER,
-        settings.MEAL_EMAIL_SUBJECT,
+        imap_host=settings.IMAP_HOST,
+        imap_email=settings.IMAP_EMAIL,
+        imap_password=settings.IMAP_PASSWORD,
+        sender_filter=settings.MEAL_EMAIL_SENDER,
+        subject_filter=settings.MEAL_EMAIL_SUBJECT,
+        reprocess=reprocess,
+        since_date=since_date,
     )
+    emails = await loop.run_in_executor(None, fetch_fn)
 
     if not emails:
         return {"status": "ok", "emails_found": 0}

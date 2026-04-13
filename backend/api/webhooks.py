@@ -96,9 +96,11 @@ async def _upsert_daily_meals(
     created = 0
     updated = 0
 
+    logger.info(f"Upserting {len(rows)} rows for date={meal_date}, source={source}")
     for row in rows:
         parsed = _parse_restaurant_line(row["name"])
         qty = row["quantity"]
+        logger.info(f"  Row: '{row['name'][:50]}' qty={qty} → site={parsed['site_code']} type={parsed['meal_type_en']}")
 
         # Resolve site_id
         site_id = None
@@ -111,6 +113,7 @@ async def _upsert_daily_meals(
                 site_id = site.id
 
         if not site_id:
+            logger.warning(f"Skipping row — no site found: name='{row['name']}' parsed_site_code='{parsed['site_code']}'")
             continue
 
         # Check for existing record (upsert)
@@ -764,18 +767,29 @@ async def get_daily_meals(
 
 @router.post("/daily-meals/poll-now")
 async def trigger_meal_email_poll(
+    reprocess: bool = Query(default=False, description="Re-scan ALL emails (including already-read)"),
+    since_date: Optional[str] = Query(default=None, description="Start date for reprocessing (YYYY-MM-DD)"),
     current_user: User = Depends(get_current_user),
 ):
     """
     Manually trigger the IMAP email poller to check for new meal reports.
-    Useful for testing or forcing an immediate check.
+
+    - Default: checks only UNSEEN (unread) emails
+    - reprocess=true: re-scans ALL emails (including read) since since_date
+    - since_date: defaults to 30 days ago when reprocessing
     """
     from backend.services.meal_email_poller import poll_meal_emails
     try:
-        result = await poll_meal_emails()
+        parsed_since = None
+        if since_date:
+            parsed_since = date.fromisoformat(since_date)
+        result = await poll_meal_emails(
+            reprocess=reprocess,
+            since_date=parsed_since,
+        )
         return result
     except Exception as e:
         logger.error(f"Manual meal poll failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to poll meal emails")
+        raise HTTPException(status_code=500, detail=f"Failed to poll meal emails: {e}")
 
 
