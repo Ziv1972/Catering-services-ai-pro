@@ -800,12 +800,11 @@ async def scan_meal_inbox(
 ):
     """
     Diagnostic: list ALL emails in the monitored inbox since a date.
-    Shows subject, date, flags (read/unread), and attachment info.
+    Runs multiple IMAP searches to diagnose why emails aren't being found.
     Does NOT process or modify anything.
     """
     import imaplib
     import email as email_lib
-    from email.header import decode_header
     from backend.config import get_settings
     from backend.services.meal_email_poller import _decode_header_value
 
@@ -815,60 +814,84 @@ async def scan_meal_inbox(
 
     effective_since = date.fromisoformat(since_date) if since_date else (date.today() - timedelta(days=30))
     imap_date_str = effective_since.strftime("%d-%b-%Y")
+    subject_filter = settings.MEAL_EMAIL_SUBJECT or "HP_FC_REPORT"
 
     try:
         mail = imaplib.IMAP4_SSL(settings.IMAP_HOST)
         mail.login(settings.IMAP_EMAIL, settings.IMAP_PASSWORD)
         mail.select("INBOX")
 
+        # Run all the search variations to diagnose
+        searches = {}
+
         # 1. ALL emails since date
-        status, data = mail.uid("search", None, f"(SINCE {imap_date_str})")
-        all_uids = data[0].split() if data[0] else []
+        s1, d1 = mail.uid("search", None, f"(SINCE {imap_date_str})")
+        searches["all_since"] = len(d1[0].split()) if d1[0] else 0
+        all_uids = d1[0].split() if d1[0] else []
 
-        # 2. HP_FC_REPORT emails since date
-        status2, data2 = mail.uid("search", None, f'(SINCE {imap_date_str} SUBJECT "HP_FC_REPORT")')
-        report_uids = set(u.decode() for u in (data2[0].split() if data2[0] else []))
+        # 2. SUBJECT filter only
+        s2, d2 = mail.uid("search", None, f'(SUBJECT "{subject_filter}")')
+        searches["subject_only"] = len(d2[0].split()) if d2[0] else 0
 
+        # 3. UNSEEN only
+        s3, d3 = mail.uid("search", None, "(UNSEEN)")
+        searches["unseen_only"] = len(d3[0].split()) if d3[0] else 0
+
+        # 4. UNSEEN + SUBJECT (what the poller uses)
+        s4, d4 = mail.uid("search", None, f'(UNSEEN SUBJECT "{subject_filter}")')
+        searches["unseen_subject"] = len(d4[0].split()) if d4[0] else 0
+
+        # 5. SINCE + SUBJECT (what reprocess uses)
+        s5, d5 = mail.uid("search", None, f'(SINCE {imap_date_str} SUBJECT "{subject_filter}")')
+        searches["since_subject"] = len(d5[0].split()) if d5[0] else 0
+        report_uids = set(u.decode() for u in (d5[0].split() if d5[0] else []))
+
+        # 6. X-GM-RAW Gmail-specific search (more reliable)
+        try:
+            s6, d6 = mail.uid("search", None, f'X-GM-RAW "subject:{subject_filter} after:{effective_since.strftime("%Y/%m/%d")}"')
+            searches["gmail_raw"] = len(d6[0].split()) if d6[0] else 0
+        except Exception:
+            searches["gmail_raw"] = "error"
+
+        # Fetch details for ALL emails since date
         emails_info = []
         for uid in all_uids:
             uid_str = uid.decode()
-            # Fetch headers + flags
-            status, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE FROM)] FLAGS)")
-            if status != "OK" or not msg_data:
+            st, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE FROM)] FLAGS)")
+            if st != "OK" or not msg_data:
                 continue
 
-            # Parse flags
             flags_str = ""
+            msg = None
             for part in msg_data:
                 if isinstance(part, tuple):
-                    raw = part[1]
-                    msg = email_lib.message_from_bytes(raw)
+                    msg = email_lib.message_from_bytes(part[1])
                 elif isinstance(part, bytes):
                     flags_match = re.search(rb"FLAGS \(([^)]*)\)", part)
                     if flags_match:
                         flags_str = flags_match.group(1).decode()
 
-            subject = _decode_header_value(msg.get("Subject", ""))
-            date_str = msg.get("Date", "")[:30]
-            from_addr = msg.get("From", "")
+            if not msg:
+                continue
 
-            info = {
+            subject = _decode_header_value(msg.get("Subject", ""))
+            date_str = msg.get("Date", "")[:35]
+
+            emails_info.append({
                 "uid": uid_str,
                 "date": date_str,
-                "subject": subject[:80],
-                "from": from_addr[:50],
+                "subject": subject[:100],
                 "flags": flags_str,
                 "matches_filter": uid_str in report_uids,
-            }
-            emails_info.append(info)
+            })
 
         mail.logout()
 
         return {
             "inbox": settings.IMAP_EMAIL,
             "since": effective_since.isoformat(),
-            "total_emails": len(all_uids),
-            "matching_HP_FC_REPORT": len(report_uids),
+            "subject_filter": subject_filter,
+            "search_results": searches,
             "emails": emails_info,
         }
     except Exception as e:
