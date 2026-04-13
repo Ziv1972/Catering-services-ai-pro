@@ -769,6 +769,7 @@ async def get_daily_meals(
 async def trigger_meal_email_poll(
     reprocess: bool = Query(default=False, description="Re-scan ALL emails (including already-read)"),
     since_date: Optional[str] = Query(default=None, description="Start date for reprocessing (YYYY-MM-DD)"),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -778,48 +779,69 @@ async def trigger_meal_email_poll(
     - reprocess=true: re-scans ALL emails (including read) since since_date
     - since_date: defaults to 30 days ago when reprocessing
     """
-    from backend.services.meal_email_poller import (
-        poll_meal_emails, _fetch_meal_emails, _decode_header_value
-    )
+    from backend.services.meal_email_poller import poll_meal_emails, _fetch_meal_emails
     from backend.config import get_settings
-    import imaplib
 
     settings = get_settings()
 
-    # First, run a quick diagnostic IMAP search in the main thread
-    diag = {}
-    try:
-        mail = imaplib.IMAP4_SSL(settings.IMAP_HOST)
-        mail.login(settings.IMAP_EMAIL, settings.IMAP_PASSWORD)
-        mail.select("INBOX")
-        sf = settings.MEAL_EMAIL_SUBJECT
-
-        # Test the exact searches the poller would use
-        s1, d1 = mail.uid("search", None, f'(UNSEEN SUBJECT "{sf}")')
-        diag["unseen_subject"] = len(d1[0].split()) if d1 and d1[0] else 0
-        diag["unseen_subject_uids"] = d1[0].decode()[:200] if d1 and d1[0] else ""
-
-        if reprocess and since_date:
-            sd = date.fromisoformat(since_date)
-            ds = sd.strftime("%d-%b-%Y")
-            s2, d2 = mail.uid("search", None, f'(SINCE {ds} SUBJECT "{sf}")')
-            diag["since_subject"] = len(d2[0].split()) if d2 and d2[0] else 0
-
-        mail.logout()
-    except Exception as e:
-        diag["error"] = str(e)
-
-    # Now run the actual poller
+    # Run the fetch function DIRECTLY (bypass poll_meal_emails wrapper)
+    # to eliminate any wrapping/executor issues
     try:
         parsed_since = None
         if since_date:
             parsed_since = date.fromisoformat(since_date)
-        result = await poll_meal_emails(
+
+        emails = _fetch_meal_emails(
+            imap_host=settings.IMAP_HOST,
+            imap_email=settings.IMAP_EMAIL,
+            imap_password=settings.IMAP_PASSWORD,
+            sender_filter=settings.MEAL_EMAIL_SENDER,
+            subject_filter=settings.MEAL_EMAIL_SUBJECT,
             reprocess=reprocess,
             since_date=parsed_since,
         )
-        result["imap_diagnostic"] = diag
-        return result
+
+        if not emails:
+            return {
+                "status": "ok",
+                "emails_found": 0,
+                "debug": "direct _fetch_meal_emails returned 0 emails",
+                "settings": {
+                    "imap_host": settings.IMAP_HOST,
+                    "imap_email": settings.IMAP_EMAIL,
+                    "subject_filter": settings.MEAL_EMAIL_SUBJECT,
+                    "sender_filter": settings.MEAL_EMAIL_SENDER,
+                    "reprocess": reprocess,
+                },
+            }
+
+        # Process the emails (upsert into DB)
+        total_created = 0
+        total_updated = 0
+        processed = []
+        for em in emails:
+            try:
+                result = await _upsert_daily_meals(
+                    db, em["date"], em["rows"], source="email_imap",
+                )
+                total_created += result["created"]
+                total_updated += result["updated"]
+                processed.append({
+                    "subject": em["subject"],
+                    "date": em["date"].isoformat(),
+                    "rows": len(em["rows"]),
+                    **result,
+                })
+            except Exception as e:
+                processed.append({"subject": em.get("subject", "?"), "error": str(e)})
+
+        return {
+            "status": "ok",
+            "emails_found": len(emails),
+            "total_created": total_created,
+            "total_updated": total_updated,
+            "processed": processed,
+        }
     except Exception as e:
         logger.error(f"Manual meal poll failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to poll meal emails: {e}")
