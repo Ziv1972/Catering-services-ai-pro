@@ -778,7 +778,38 @@ async def trigger_meal_email_poll(
     - reprocess=true: re-scans ALL emails (including read) since since_date
     - since_date: defaults to 30 days ago when reprocessing
     """
-    from backend.services.meal_email_poller import poll_meal_emails
+    from backend.services.meal_email_poller import (
+        poll_meal_emails, _fetch_meal_emails, _decode_header_value
+    )
+    from backend.config import get_settings
+    import imaplib
+
+    settings = get_settings()
+
+    # First, run a quick diagnostic IMAP search in the main thread
+    diag = {}
+    try:
+        mail = imaplib.IMAP4_SSL(settings.IMAP_HOST)
+        mail.login(settings.IMAP_EMAIL, settings.IMAP_PASSWORD)
+        mail.select("INBOX")
+        sf = settings.MEAL_EMAIL_SUBJECT
+
+        # Test the exact searches the poller would use
+        s1, d1 = mail.uid("search", None, f'(UNSEEN SUBJECT "{sf}")')
+        diag["unseen_subject"] = len(d1[0].split()) if d1 and d1[0] else 0
+        diag["unseen_subject_uids"] = d1[0].decode()[:200] if d1 and d1[0] else ""
+
+        if reprocess and since_date:
+            sd = date.fromisoformat(since_date)
+            ds = sd.strftime("%d-%b-%Y")
+            s2, d2 = mail.uid("search", None, f'(SINCE {ds} SUBJECT "{sf}")')
+            diag["since_subject"] = len(d2[0].split()) if d2 and d2[0] else 0
+
+        mail.logout()
+    except Exception as e:
+        diag["error"] = str(e)
+
+    # Now run the actual poller
     try:
         parsed_since = None
         if since_date:
@@ -787,6 +818,7 @@ async def trigger_meal_email_poll(
             reprocess=reprocess,
             since_date=parsed_since,
         )
+        result["imap_diagnostic"] = diag
         return result
     except Exception as e:
         logger.error(f"Manual meal poll failed: {e}")
