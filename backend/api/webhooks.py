@@ -779,65 +779,120 @@ async def trigger_meal_email_poll(
     - reprocess=true: re-scans ALL emails (including read) since since_date
     - since_date: defaults to 30 days ago when reprocessing
     """
-    from backend.services.meal_email_poller import poll_meal_emails, _fetch_meal_emails
+    from backend.services.meal_email_poller import (
+        _decode_header_value, _extract_excel_from_attachment,
+        _extract_html_tables, _extract_csv_from_attachment,
+        _parse_csv_text, _extract_csv_from_body, _extract_date_from_email,
+    )
     from backend.config import get_settings
+    import imaplib
+    import email as email_lib
 
     settings = get_settings()
 
-    # Run the fetch function DIRECTLY (bypass poll_meal_emails wrapper)
-    # to eliminate any wrapping/executor issues
+    if not settings.IMAP_HOST or not settings.IMAP_EMAIL or not settings.IMAP_PASSWORD:
+        return {"status": "skipped", "reason": "IMAP not configured"}
+
+    parsed_since = date.fromisoformat(since_date) if since_date else None
+
     try:
-        parsed_since = None
-        if since_date:
-            parsed_since = date.fromisoformat(since_date)
+        # Connect to IMAP directly in this endpoint
+        mail = imaplib.IMAP4_SSL(settings.IMAP_HOST)
+        mail.login(settings.IMAP_EMAIL, settings.IMAP_PASSWORD)
+        mail.select("INBOX")
 
-        emails = _fetch_meal_emails(
-            imap_host=settings.IMAP_HOST,
-            imap_email=settings.IMAP_EMAIL,
-            imap_password=settings.IMAP_PASSWORD,
-            sender_filter=settings.MEAL_EMAIL_SENDER,
-            subject_filter=settings.MEAL_EMAIL_SUBJECT,
-            reprocess=reprocess,
-            since_date=parsed_since,
-        )
+        sf = settings.MEAL_EMAIL_SUBJECT or "HP_FC_REPORT"
 
-        if not emails:
+        # Build search criteria
+        criteria_parts = []
+        if not reprocess:
+            criteria_parts.append("UNSEEN")
+        else:
+            eff = parsed_since or (date.today() - timedelta(days=30))
+            criteria_parts.append(f'SINCE {eff.strftime("%d-%b-%Y")}')
+        criteria_parts.append(f'SUBJECT "{sf}"')
+        search_criteria = "(" + " ".join(criteria_parts) + ")"
+
+        status, data = mail.uid("search", None, search_criteria)
+        uid_count = len(data[0].split()) if data and data[0] else 0
+        uids = data[0].split() if data and data[0] else []
+
+        if not uids:
+            mail.logout()
             return {
                 "status": "ok",
                 "emails_found": 0,
-                "debug": "direct _fetch_meal_emails returned 0 emails",
-                "settings": {
-                    "imap_host": settings.IMAP_HOST,
-                    "imap_email": settings.IMAP_EMAIL,
-                    "subject_filter": settings.MEAL_EMAIL_SUBJECT,
-                    "sender_filter": settings.MEAL_EMAIL_SENDER,
-                    "reprocess": reprocess,
-                },
+                "search_criteria": search_criteria,
+                "search_status": status,
             }
 
-        # Process the emails (upsert into DB)
+        # Process each email
         total_created = 0
         total_updated = 0
         processed = []
-        for em in emails:
+
+        for uid in uids:
             try:
-                result = await _upsert_daily_meals(
-                    db, em["date"], em["rows"], source="email_imap",
-                )
+                st, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[])")
+                if st != "OK" or not msg_data[0]:
+                    continue
+
+                raw = msg_data[0][1]
+                msg = email_lib.message_from_bytes(raw)
+                subject = _decode_header_value(msg.get("Subject", ""))
+
+                # Parse data from email
+                rows = None
+                excel_rows = _extract_excel_from_attachment(msg)
+                if excel_rows:
+                    rows = excel_rows
+
+                if not rows:
+                    csv_text = _extract_csv_from_attachment(msg)
+                    if csv_text:
+                        rows = _parse_csv_text(csv_text)
+
+                if not rows:
+                    html_rows = _extract_html_tables(msg)
+                    if html_rows:
+                        rows = html_rows
+
+                if not rows:
+                    csv_text = _extract_csv_from_body(msg)
+                    if csv_text:
+                        rows = _parse_csv_text(csv_text)
+
+                if not rows:
+                    processed.append({"subject": subject, "error": "no parseable data"})
+                    continue
+
+                meal_date = _extract_date_from_email(msg)
+
+                # Upsert into DB
+                result = await _upsert_daily_meals(db, meal_date, rows, source="email_imap")
                 total_created += result["created"]
                 total_updated += result["updated"]
                 processed.append({
-                    "subject": em["subject"],
-                    "date": em["date"].isoformat(),
-                    "rows": len(em["rows"]),
+                    "subject": subject,
+                    "date": meal_date.isoformat(),
+                    "rows": len(rows),
                     **result,
                 })
+
+                # Mark as read (skip when reprocessing)
+                if not reprocess:
+                    mail.uid("store", uid, "+FLAGS", "\\Seen")
+
             except Exception as e:
-                processed.append({"subject": em.get("subject", "?"), "error": str(e)})
+                logger.error(f"Error processing email uid={uid}: {e}")
+                processed.append({"uid": uid.decode(), "error": str(e)})
+
+        mail.logout()
 
         return {
             "status": "ok",
-            "emails_found": len(emails),
+            "search_criteria": search_criteria,
+            "emails_found": len(uids),
             "total_created": total_created,
             "total_updated": total_updated,
             "processed": processed,
