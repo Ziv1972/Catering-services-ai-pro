@@ -557,8 +557,11 @@ def _fetch_meal_emails(
                             logger.info(f"Parsed {len(rows)} rows from body CSV")
 
                 if not rows:
-                    logger.warning(f"No parseable data found in email: {subject}")
-                    # Don't mark as read — will retry on next poll
+                    # Empty Excel = weekend/holiday report with no data — skip gracefully
+                    logger.info(f"No data rows in email (weekend/holiday?): {subject}")
+                    # Mark as read so we don't retry endlessly
+                    if not reprocess:
+                        mail.uid("store", uid, "+FLAGS", "\\Seen")
                     continue
 
                 meal_date = _extract_date_from_email(msg)
@@ -608,9 +611,11 @@ async def poll_meal_emails(
     if not settings.IMAP_HOST or not settings.IMAP_EMAIL or not settings.IMAP_PASSWORD:
         return {"status": "skipped", "reason": "IMAP not configured"}
 
-    # Run IMAP fetch directly (blocking but reliable — thread executor
-    # was causing Gmail IMAP to return empty results)
-    emails = _fetch_meal_emails(
+    # Run IMAP fetch in thread executor (blocking IO)
+    import functools
+    loop = asyncio.get_event_loop()
+    fetch_fn = functools.partial(
+        _fetch_meal_emails,
         imap_host=settings.IMAP_HOST,
         imap_email=settings.IMAP_EMAIL,
         imap_password=settings.IMAP_PASSWORD,
@@ -619,6 +624,7 @@ async def poll_meal_emails(
         reprocess=reprocess,
         since_date=since_date,
     )
+    emails = await loop.run_in_executor(None, fetch_fn)
 
     if not emails:
         # Return diagnostic info when no emails found

@@ -769,7 +769,6 @@ async def get_daily_meals(
 async def trigger_meal_email_poll(
     reprocess: bool = Query(default=False, description="Re-scan ALL emails (including already-read)"),
     since_date: Optional[str] = Query(default=None, description="Start date for reprocessing (YYYY-MM-DD)"),
-    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -779,162 +778,14 @@ async def trigger_meal_email_poll(
     - reprocess=true: re-scans ALL emails (including read) since since_date
     - since_date: defaults to 30 days ago when reprocessing
     """
-    from backend.services.meal_email_poller import (
-        _decode_header_value, _extract_excel_from_attachment,
-        _extract_html_tables, _extract_csv_from_attachment,
-        _parse_csv_text, _extract_csv_from_body, _extract_date_from_email,
-    )
-    from backend.config import get_settings
-    import imaplib
-    import email as email_lib
-
-    settings = get_settings()
-
-    if not settings.IMAP_HOST or not settings.IMAP_EMAIL or not settings.IMAP_PASSWORD:
-        return {"status": "skipped", "reason": "IMAP not configured"}
-
-    parsed_since = date.fromisoformat(since_date) if since_date else None
-
+    from backend.services.meal_email_poller import poll_meal_emails
     try:
-        # Connect to IMAP directly in this endpoint
-        mail = imaplib.IMAP4_SSL(settings.IMAP_HOST)
-        mail.login(settings.IMAP_EMAIL, settings.IMAP_PASSWORD)
-        mail.select("INBOX")
-
-        sf = settings.MEAL_EMAIL_SUBJECT or "HP_FC_REPORT"
-
-        # Build search criteria
-        criteria_parts = []
-        if not reprocess:
-            criteria_parts.append("UNSEEN")
-        else:
-            eff = parsed_since or (date.today() - timedelta(days=30))
-            criteria_parts.append(f'SINCE {eff.strftime("%d-%b-%Y")}')
-        criteria_parts.append(f'SUBJECT "{sf}"')
-        search_criteria = "(" + " ".join(criteria_parts) + ")"
-
-        status, data = mail.uid("search", None, search_criteria)
-        uid_count = len(data[0].split()) if data and data[0] else 0
-        uids = data[0].split() if data and data[0] else []
-
-        if not uids:
-            mail.logout()
-            return {
-                "status": "ok",
-                "emails_found": 0,
-                "search_criteria": search_criteria,
-                "search_status": status,
-            }
-
-        # Process each email
-        total_created = 0
-        total_updated = 0
-        processed = []
-
-        for uid in uids:
-            try:
-                st, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[])")
-                if st != "OK" or not msg_data[0]:
-                    continue
-
-                raw = msg_data[0][1]
-                msg = email_lib.message_from_bytes(raw)
-                subject = _decode_header_value(msg.get("Subject", ""))
-
-                # Parse data from email
-                rows = None
-                excel_rows = _extract_excel_from_attachment(msg)
-                if excel_rows:
-                    rows = excel_rows
-
-                if not rows:
-                    csv_text = _extract_csv_from_attachment(msg)
-                    if csv_text:
-                        rows = _parse_csv_text(csv_text)
-
-                if not rows:
-                    html_rows = _extract_html_tables(msg)
-                    if html_rows:
-                        rows = html_rows
-
-                if not rows:
-                    csv_text = _extract_csv_from_body(msg)
-                    if csv_text:
-                        rows = _parse_csv_text(csv_text)
-
-                if not rows:
-                    # Collect attachment info for debugging + try to parse Excel manually
-                    parts_info = []
-                    excel_debug = None
-                    for part in msg.walk():
-                        ct = part.get_content_type()
-                        fn = part.get_filename()
-                        if fn:
-                            fn = _decode_header_value(fn)
-                        payload = part.get_payload(decode=True) or b""
-                        size = len(payload)
-                        parts_info.append(f"{ct}|fn={fn}|size={size}")
-
-                        # If Excel, try to debug the contents
-                        if fn and fn.lower().endswith(".xlsx") and payload:
-                            try:
-                                import openpyxl
-                                import io as _io
-                                wb = openpyxl.load_workbook(
-                                    _io.BytesIO(payload), read_only=True, data_only=True
-                                )
-                                excel_debug = {"sheets": list(wb.sheetnames), "data": {}}
-                                for sn in wb.sheetnames:
-                                    ws = wb[sn]
-                                    if hasattr(ws, "iter_rows"):
-                                        sheet_rows = []
-                                        for ri, row in enumerate(ws.iter_rows(values_only=True)):
-                                            if ri < 10:  # First 10 rows
-                                                sheet_rows.append([str(c)[:50] if c else "" for c in row])
-                                        excel_debug["data"][sn] = sheet_rows
-                                wb.close()
-                            except Exception as ex:
-                                excel_debug = {"error": str(ex)}
-
-                    processed.append({
-                        "subject": subject,
-                        "error": "no parseable data",
-                        "parts": parts_info,
-                        "excel_debug": excel_debug,
-                    })
-                    continue
-
-                meal_date = _extract_date_from_email(msg)
-
-                # Upsert into DB
-                result = await _upsert_daily_meals(db, meal_date, rows, source="email_imap")
-                total_created += result["created"]
-                total_updated += result["updated"]
-                processed.append({
-                    "subject": subject,
-                    "date": meal_date.isoformat(),
-                    "rows": len(rows),
-                    **result,
-                })
-
-                # Mark as read (skip when reprocessing)
-                if not reprocess:
-                    mail.uid("store", uid, "+FLAGS", "\\Seen")
-
-            except Exception as e:
-                logger.error(f"Error processing email uid={uid}: {e}")
-                processed.append({"uid": uid.decode(), "error": str(e)})
-
-        mail.logout()
-
-        return {
-            "status": "ok",
-            "search_criteria": search_criteria,
-            "emails_found": len(uids),
-            "total_created": total_created,
-            "total_updated": total_updated,
-            "processed": processed,
-        }
+        parsed_since = date.fromisoformat(since_date) if since_date else None
+        result = await poll_meal_emails(
+            reprocess=reprocess,
+            since_date=parsed_since,
+        )
+        return result
     except Exception as e:
         logger.error(f"Manual meal poll failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to poll meal emails: {e}")
