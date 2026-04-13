@@ -863,7 +863,21 @@ async def trigger_meal_email_poll(
                         rows = _parse_csv_text(csv_text)
 
                 if not rows:
-                    processed.append({"subject": subject, "error": "no parseable data"})
+                    # Collect attachment info for debugging
+                    parts_info = []
+                    for part in msg.walk():
+                        ct = part.get_content_type()
+                        fn = part.get_filename()
+                        if fn:
+                            fn = _decode_header_value(fn)
+                        disp = str(part.get("Content-Disposition") or "")
+                        size = len(part.get_payload(decode=True) or b"")
+                        parts_info.append(f"{ct}|fn={fn}|size={size}")
+                    processed.append({
+                        "subject": subject,
+                        "error": "no parseable data",
+                        "parts": parts_info,
+                    })
                     continue
 
                 meal_date = _extract_date_from_email(msg)
