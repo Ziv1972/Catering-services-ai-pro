@@ -463,6 +463,18 @@ def _fetch_meal_emails(
         search_criteria = "(" + " ".join(criteria_parts) + ")"
         logger.info(f"IMAP search: {search_criteria} (reprocess={reprocess})")
         status, data = mail.uid("search", None, search_criteria)
+        logger.info(f"IMAP primary search: status={status}, count={len(data[0].split()) if data and data[0] else 0}")
+
+        # Also run a diagnostic ALL search to compare
+        try:
+            diag_status, diag_data = mail.uid("search", None, f'(SUBJECT "{subject_filter}")')
+            diag_count = len(diag_data[0].split()) if diag_data and diag_data[0] else 0
+            logger.info(f"IMAP diag (SUBJECT only): {diag_count} emails total with subject '{subject_filter}'")
+            diag_status2, diag_data2 = mail.uid("search", None, "(UNSEEN)")
+            diag_count2 = len(diag_data2[0].split()) if diag_data2 and diag_data2[0] else 0
+            logger.info(f"IMAP diag (UNSEEN only): {diag_count2} unread emails total")
+        except Exception as de:
+            logger.warning(f"Diagnostic search failed: {de}")
 
         # If no results with both filters, try subject-only (handles forwarded emails)
         if (status != "OK" or not data[0]) and sender_filter and subject_filter:
@@ -477,8 +489,10 @@ def _fetch_meal_emails(
             fallback_parts.append(f'SUBJECT "{subject_filter}"')
             fallback_criteria = "(" + " ".join(fallback_parts) + ")"
             status, data = mail.uid("search", None, fallback_criteria)
+            logger.info(f"IMAP fallback search: status={status}, count={len(data[0].split()) if data and data[0] else 0}")
 
         if status != "OK" or not data[0]:
+            logger.warning(f"No emails found. status={status}, data={data}")
             mail.logout()
             return results
 
@@ -610,7 +624,19 @@ async def poll_meal_emails(
     emails = await loop.run_in_executor(None, fetch_fn)
 
     if not emails:
-        return {"status": "ok", "emails_found": 0}
+        # Return diagnostic info when no emails found
+        return {
+            "status": "ok",
+            "emails_found": 0,
+            "debug": {
+                "imap_host": settings.IMAP_HOST,
+                "imap_email": settings.IMAP_EMAIL,
+                "subject_filter": settings.MEAL_EMAIL_SUBJECT,
+                "sender_filter": settings.MEAL_EMAIL_SENDER,
+                "reprocess": reprocess,
+                "since_date": since_date.isoformat() if since_date else None,
+            },
+        }
 
     total_created = 0
     total_updated = 0
