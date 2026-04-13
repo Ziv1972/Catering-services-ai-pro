@@ -137,7 +137,7 @@ def _parse_excel_bytes(data: bytes, filename: str = "") -> list[dict]:
 
     rows: list[dict] = []
     sheet_names = list(wb.sheetnames)
-    logger.info(f"Excel {filename}: sheets={sheet_names}")
+    logger.info(f"Excel {filename}: sheets={sheet_names}, size={len(data)} bytes")
     for sheet_name in sheet_names:
         ws = wb[sheet_name]
         if not hasattr(ws, "iter_rows"):

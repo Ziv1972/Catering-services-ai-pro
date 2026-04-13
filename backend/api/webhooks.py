@@ -863,20 +863,44 @@ async def trigger_meal_email_poll(
                         rows = _parse_csv_text(csv_text)
 
                 if not rows:
-                    # Collect attachment info for debugging
+                    # Collect attachment info for debugging + try to parse Excel manually
                     parts_info = []
+                    excel_debug = None
                     for part in msg.walk():
                         ct = part.get_content_type()
                         fn = part.get_filename()
                         if fn:
                             fn = _decode_header_value(fn)
-                        disp = str(part.get("Content-Disposition") or "")
-                        size = len(part.get_payload(decode=True) or b"")
+                        payload = part.get_payload(decode=True) or b""
+                        size = len(payload)
                         parts_info.append(f"{ct}|fn={fn}|size={size}")
+
+                        # If Excel, try to debug the contents
+                        if fn and fn.lower().endswith(".xlsx") and payload:
+                            try:
+                                import openpyxl
+                                import io as _io
+                                wb = openpyxl.load_workbook(
+                                    _io.BytesIO(payload), read_only=True, data_only=True
+                                )
+                                excel_debug = {"sheets": list(wb.sheetnames), "data": {}}
+                                for sn in wb.sheetnames:
+                                    ws = wb[sn]
+                                    if hasattr(ws, "iter_rows"):
+                                        sheet_rows = []
+                                        for ri, row in enumerate(ws.iter_rows(values_only=True)):
+                                            if ri < 10:  # First 10 rows
+                                                sheet_rows.append([str(c)[:50] if c else "" for c in row])
+                                        excel_debug["data"][sn] = sheet_rows
+                                wb.close()
+                            except Exception as ex:
+                                excel_debug = {"error": str(ex)}
+
                     processed.append({
                         "subject": subject,
                         "error": "no parseable data",
                         "parts": parts_info,
+                        "excel_debug": excel_debug,
                     })
                     continue
 
