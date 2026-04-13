@@ -17,7 +17,7 @@ import base64 as base64_module
 import os
 import uuid as uuid_module
 
-from backend.database import get_db
+from backend.database import get_db, AsyncSessionLocal
 from backend.models.violation import (
     Violation, ViolationSource, ViolationStatus,
     ViolationCategory, ViolationSeverity, RestaurantType,
@@ -778,14 +778,114 @@ async def trigger_meal_email_poll(
     - reprocess=true: re-scans ALL emails (including read) since since_date
     - since_date: defaults to 30 days ago when reprocessing
     """
-    from backend.services.meal_email_poller import poll_meal_emails
+    from backend.services.meal_email_poller import (
+        _decode_header_value, _extract_excel_from_attachment,
+        _extract_html_tables, _extract_csv_from_attachment,
+        _parse_csv_text, _extract_csv_from_body, _extract_date_from_email,
+    )
+    from backend.config import get_settings
+    import imaplib
+    import email as email_lib
+
+    settings = get_settings()
+    if not settings.IMAP_HOST or not settings.IMAP_EMAIL or not settings.IMAP_PASSWORD:
+        return {"status": "skipped", "reason": "IMAP not configured"}
+
+    parsed_since = date.fromisoformat(since_date) if since_date else None
+    sf = settings.MEAL_EMAIL_SUBJECT or "HP_FC_REPORT"
+
     try:
-        parsed_since = date.fromisoformat(since_date) if since_date else None
-        result = await poll_meal_emails(
-            reprocess=reprocess,
-            since_date=parsed_since,
-        )
-        return result
+        mail = imaplib.IMAP4_SSL(settings.IMAP_HOST)
+        mail.login(settings.IMAP_EMAIL, settings.IMAP_PASSWORD)
+        mail.select("INBOX")
+
+        # Build search
+        criteria_parts = []
+        if not reprocess:
+            criteria_parts.append("UNSEEN")
+        else:
+            eff = parsed_since or (date.today() - timedelta(days=30))
+            criteria_parts.append(f'SINCE {eff.strftime("%d-%b-%Y")}')
+        criteria_parts.append(f'SUBJECT "{sf}"')
+        search_criteria = "(" + " ".join(criteria_parts) + ")"
+
+        status, data = mail.uid("search", None, search_criteria)
+        uids = data[0].split() if data and data[0] else []
+
+        if not uids:
+            mail.logout()
+            return {"status": "ok", "emails_found": 0, "search": search_criteria}
+
+        total_created = 0
+        total_updated = 0
+        processed = []
+        skipped_empty = 0
+
+        for uid in uids:
+            try:
+                st, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[])")
+                if st != "OK" or not msg_data[0]:
+                    continue
+
+                msg = email_lib.message_from_bytes(msg_data[0][1])
+                subject = _decode_header_value(msg.get("Subject", ""))
+
+                rows = None
+                excel_rows = _extract_excel_from_attachment(msg)
+                if excel_rows:
+                    rows = excel_rows
+                if not rows:
+                    csv_text = _extract_csv_from_attachment(msg)
+                    if csv_text:
+                        rows = _parse_csv_text(csv_text)
+                if not rows:
+                    html_rows = _extract_html_tables(msg)
+                    if html_rows:
+                        rows = html_rows
+                if not rows:
+                    csv_text = _extract_csv_from_body(msg)
+                    if csv_text:
+                        rows = _parse_csv_text(csv_text)
+
+                if not rows:
+                    # Empty Excel = weekend/holiday — skip gracefully
+                    skipped_empty += 1
+                    if not reprocess:
+                        mail.uid("store", uid, "+FLAGS", "\\Seen")
+                    continue
+
+                meal_date = _extract_date_from_email(msg)
+
+                async with AsyncSessionLocal() as db_session:
+                    result = await _upsert_daily_meals(
+                        db_session, meal_date, rows, source="email_imap"
+                    )
+                total_created += result["created"]
+                total_updated += result["updated"]
+                processed.append({
+                    "subject": subject,
+                    "date": meal_date.isoformat(),
+                    "rows": len(rows),
+                    **result,
+                })
+
+                if not reprocess:
+                    mail.uid("store", uid, "+FLAGS", "\\Seen")
+
+            except Exception as e:
+                logger.error(f"Error processing email uid={uid}: {e}")
+                processed.append({"uid": uid.decode(), "error": str(e)})
+
+        mail.logout()
+
+        return {
+            "status": "ok",
+            "emails_found": len(uids),
+            "skipped_empty": skipped_empty,
+            "total_created": total_created,
+            "total_updated": total_updated,
+            "processed": processed,
+        }
     except Exception as e:
         logger.error(f"Manual meal poll failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to poll meal emails: {e}")
