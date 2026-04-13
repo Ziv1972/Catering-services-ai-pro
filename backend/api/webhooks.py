@@ -4,7 +4,7 @@ Webhook endpoints for Power Automate integration
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
@@ -792,4 +792,86 @@ async def trigger_meal_email_poll(
         logger.error(f"Manual meal poll failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to poll meal emails: {e}")
 
+
+@router.get("/daily-meals/inbox-scan")
+async def scan_meal_inbox(
+    since_date: str = Query(default=None, description="YYYY-MM-DD, default 30 days ago"),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Diagnostic: list ALL emails in the monitored inbox since a date.
+    Shows subject, date, flags (read/unread), and attachment info.
+    Does NOT process or modify anything.
+    """
+    import imaplib
+    import email as email_lib
+    from email.header import decode_header
+    from backend.config import get_settings
+    from backend.services.meal_email_poller import _decode_header_value
+
+    settings = get_settings()
+    if not settings.IMAP_HOST:
+        return {"error": "IMAP not configured"}
+
+    effective_since = date.fromisoformat(since_date) if since_date else (date.today() - timedelta(days=30))
+    imap_date_str = effective_since.strftime("%d-%b-%Y")
+
+    try:
+        mail = imaplib.IMAP4_SSL(settings.IMAP_HOST)
+        mail.login(settings.IMAP_EMAIL, settings.IMAP_PASSWORD)
+        mail.select("INBOX")
+
+        # 1. ALL emails since date
+        status, data = mail.uid("search", None, f"(SINCE {imap_date_str})")
+        all_uids = data[0].split() if data[0] else []
+
+        # 2. HP_FC_REPORT emails since date
+        status2, data2 = mail.uid("search", None, f'(SINCE {imap_date_str} SUBJECT "HP_FC_REPORT")')
+        report_uids = set(u.decode() for u in (data2[0].split() if data2[0] else []))
+
+        emails_info = []
+        for uid in all_uids:
+            uid_str = uid.decode()
+            # Fetch headers + flags
+            status, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE FROM)] FLAGS)")
+            if status != "OK" or not msg_data:
+                continue
+
+            # Parse flags
+            flags_str = ""
+            for part in msg_data:
+                if isinstance(part, tuple):
+                    raw = part[1]
+                    msg = email_lib.message_from_bytes(raw)
+                elif isinstance(part, bytes):
+                    flags_match = re.search(rb"FLAGS \(([^)]*)\)", part)
+                    if flags_match:
+                        flags_str = flags_match.group(1).decode()
+
+            subject = _decode_header_value(msg.get("Subject", ""))
+            date_str = msg.get("Date", "")[:30]
+            from_addr = msg.get("From", "")
+
+            info = {
+                "uid": uid_str,
+                "date": date_str,
+                "subject": subject[:80],
+                "from": from_addr[:50],
+                "flags": flags_str,
+                "matches_filter": uid_str in report_uids,
+            }
+            emails_info.append(info)
+
+        mail.logout()
+
+        return {
+            "inbox": settings.IMAP_EMAIL,
+            "since": effective_since.isoformat(),
+            "total_emails": len(all_uids),
+            "matching_HP_FC_REPORT": len(report_uids),
+            "emails": emails_info,
+        }
+    except Exception as e:
+        logger.error(f"Inbox scan failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Inbox scan failed: {e}")
 
