@@ -1454,7 +1454,24 @@ function VendingSection() {
               <CardTitle className="text-xl">מ.א אוטומטים — Vending Machines</CardTitle>
               <p className="text-sm text-muted-foreground mt-1">Monthly consumption, top products, per-machine usage</p>
             </div>
-            <Button onClick={() => setShowUpload(true)} size="sm">Upload invoice + consumption</Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  const params = new URLSearchParams({ year: String(year) });
+                  if (siteId) params.set('site_id', String(siteId));
+                  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/reprice?${params}`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  alert(`Repriced ${data.updated || 0} of ${data.scanned || 0} transactions.`);
+                  load();
+                }}
+              >Reprice</Button>
+              <Button onClick={() => setShowUpload(true)} size="sm">Upload invoice + consumption</Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1662,9 +1679,18 @@ function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUp
             <input type="file" accept=".pdf" onChange={(e) => setPdf(e.target.files?.[0] || null)} className="w-full text-sm" />
           </label>
           <label className="text-sm block">
-            <span className="block text-gray-600 mb-1">Consumption Excel (DataSheet — dates, products, qty, optional machine #)</span>
+            <span className="block text-gray-600 mb-1">Consumption Excel (DataSheet — date + product + qty)</span>
             <input type="file" accept=".xlsx,.xls" onChange={(e) => setXlsx(e.target.files?.[0] || null)} className="w-full text-sm" />
           </label>
+          <div className="text-xs text-gray-500 bg-gray-50 border rounded-lg p-2.5 leading-relaxed">
+            <p className="font-semibold mb-1">Upload guide</p>
+            <ul className="space-y-0.5 pl-4 list-disc">
+              <li><b>NZ:</b> one upload — PDF + Excel, shift = All</li>
+              <li><b>KG day:</b> upload KG day PDF + Excel together, shift = Day</li>
+              <li><b>KG evening:</b> upload evening PDF alone, shift = Evening</li>
+              <li>If you upload Excel alone, existing invoices for the same month are used for pricing</li>
+            </ul>
+          </div>
           {error && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-2">{error}</p>}
           {result && (
             <div className="text-sm bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-1">

@@ -320,27 +320,41 @@ async def upload_vending(
             logger.exception("Failed to parse vending Excel")
             raise HTTPException(500, f"Failed to parse Excel: {e}")
 
-        # If we have a proforma from PDF, wipe its old transactions
-        if proforma:
-            await db.execute(
-                delete(VendingTransaction).where(VendingTransaction.proforma_id == proforma.id)
-            )
-        else:
-            # No proforma — delete by site+shift+month as best effort
-            if txs:
-                months = {(t["tx_date"].year, t["tx_date"].month) for t in txs}
-                for y, m in months:
-                    await db.execute(
-                        delete(VendingTransaction).where(
-                            VendingTransaction.site_id == site_id,
-                            VendingTransaction.shift == shift,
-                            year_equals(VendingTransaction.tx_date, y),
-                            month_equals(VendingTransaction.tx_date, m),
-                        )
+        # Delete old transactions for affected months (site+shift scope)
+        if txs:
+            months = {(t["tx_date"].year, t["tx_date"].month) for t in txs}
+            for y, m in months:
+                await db.execute(
+                    delete(VendingTransaction).where(
+                        VendingTransaction.site_id == site_id,
+                        VendingTransaction.shift == shift,
+                        year_equals(VendingTransaction.tx_date, y),
+                        month_equals(VendingTransaction.tx_date, m),
                     )
+                )
+
+        # Price lookup: if no PDF in this upload, pull ProformaItems from any
+        # proforma for same site/month so transactions get priced from existing invoices
+        # (e.g., KG Excel uploaded alone, using existing KG day + KG evening invoices).
+        price_items = list(pdf_items)
+        if not price_items and txs:
+            months = {(t["tx_date"].year, t["tx_date"].month) for t in txs}
+            for y, m in months:
+                existing_items = (await db.execute(
+                    select(ProformaItem.product_name, ProformaItem.unit_price)
+                    .join(Proforma, Proforma.id == ProformaItem.proforma_id)
+                    .where(
+                        Proforma.supplier_id == supplier.id,
+                        Proforma.site_id == site_id,
+                        year_equals(Proforma.invoice_date, y),
+                        month_equals(Proforma.invoice_date, m),
+                    )
+                )).all()
+                for pname, uprice in existing_items:
+                    price_items.append({"category": pname, "unit_price": float(uprice or 0), "quantity": 0, "total_price": 0})
 
         for t in txs:
-            category, unit_price = _classify_transaction(t["product_name"], pdf_items)
+            category, unit_price = _classify_transaction(t["product_name"], price_items)
             total_price = (unit_price * t["quantity"]) if unit_price else None
             if unit_price is not None:
                 tx_priced += 1
@@ -369,6 +383,55 @@ async def upload_vending(
         "transactions_priced": tx_priced,
         "total_amount": proforma.total_amount if proforma else None,
     }
+
+
+@router.post("/reprice")
+async def reprice_transactions(
+    year: Optional[int] = None,
+    site_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Back-fill unit_price/total_price on VendingTransactions by matching them
+    against ProformaItems from the same site+month. Use after uploading PDFs
+    that came in after the Excel."""
+    supplier = await _get_vending_supplier(db)
+    target_year = year or datetime.now().year
+
+    tx_q = select(VendingTransaction).where(year_equals(VendingTransaction.tx_date, target_year))
+    if site_id:
+        tx_q = tx_q.where(VendingTransaction.site_id == site_id)
+    txs = (await db.execute(tx_q)).scalars().all()
+
+    # Group by (site, year, month)
+    by_month: dict[tuple, list[ProformaItem]] = {}
+    updated = 0
+    for t in txs:
+        if not t.tx_date:
+            continue
+        key = (t.site_id, t.tx_date.year, t.tx_date.month)
+        if key not in by_month:
+            rows = (await db.execute(
+                select(ProformaItem.product_name, ProformaItem.unit_price)
+                .join(Proforma, Proforma.id == ProformaItem.proforma_id)
+                .where(
+                    Proforma.supplier_id == supplier.id,
+                    Proforma.site_id == key[0],
+                    year_equals(Proforma.invoice_date, key[1]),
+                    month_equals(Proforma.invoice_date, key[2]),
+                )
+            )).all()
+            by_month[key] = [{"category": r[0], "unit_price": float(r[1] or 0)} for r in rows]
+
+        category, unit_price = _classify_transaction(t.product_name, by_month[key])
+        if unit_price is not None:
+            t.category = category
+            t.unit_price = unit_price
+            t.total_price = float(unit_price) * float(t.quantity or 0)
+            updated += 1
+
+    await db.commit()
+    return {"updated": updated, "scanned": len(txs), "year": target_year, "site_id": site_id}
 
 
 @router.get("/analytics")
