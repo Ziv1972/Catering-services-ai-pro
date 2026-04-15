@@ -1115,57 +1115,100 @@ async def kitchenette_monthly(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Kitchenette/BTB spending per family per month per site. Returns quantities + spending."""
-    from backend.models.kitchenette_item import KitchenetteItem, KITCHENETTE_FAMILIES
-    from backend.models.site import Site
+    """Kitchenette/BTB spending per family per month per site.
+
+    Sources data from ProformaItem joined with ProductCategoryGroup (same source as
+    the Budget vs Actual drill-down). This guarantees the Kitchenette panel and the
+    drill-down stay in sync. Includes BTB-related category groups: kitchenette_*,
+    coffee_tea, coffee_beans, cut_veg, extras_lunch.
+    """
+    from backend.models.proforma import Proforma, ProformaItem
+    from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping
+    import re
 
     target_year = year or datetime.now().year
     proforma_year = await _resolve_proforma_year(db, target_year)
 
-    q = (
-        select(KitchenetteItem, Site.name.label("site_name"))
-        .join(Site, KitchenetteItem.site_id == Site.id)
-        .where(year_equals(KitchenetteItem.invoice_month, proforma_year))
+    # Load all category mappings (pattern → group)
+    mapping_q = (
+        select(
+            ProductCategoryMapping.product_name_pattern,
+            ProductCategoryGroup.name,
+            ProductCategoryGroup.display_name_he,
+        )
+        .join(ProductCategoryGroup)
+        .where(ProductCategoryGroup.is_active == True)
+        .order_by(ProductCategoryGroup.sort_order, ProductCategoryMapping.id)
+    )
+    mappings = list((await db.execute(mapping_q)).all())
+
+    # Family keys we treat as "kitchenette" (BTB) — everything except total_meals + working_days
+    EXCLUDED_GROUPS = {"total_meals", "working_days"}
+    family_labels: dict[str, str] = {}
+    for _, group_name, display_he in mappings:
+        if group_name in EXCLUDED_GROUPS:
+            continue
+        family_labels.setdefault(group_name, display_he)
+    family_labels.setdefault("uncategorized", "לא מסווג")
+
+    def classify(name: str) -> str:
+        nl = name.lower()
+        for pattern, group_name, _ in mappings:
+            if group_name in EXCLUDED_GROUPS:
+                continue
+            regex = pattern.replace("%", ".*").lower()
+            try:
+                if re.search(regex, nl):
+                    return group_name
+            except re.error:
+                continue
+        return "uncategorized"
+
+    # Pull all proforma line items for the year (+ optional site)
+    items_q = (
+        select(
+            ProformaItem.product_name,
+            ProformaItem.quantity,
+            ProformaItem.total_price,
+            Proforma.invoice_date,
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .where(year_equals(Proforma.invoice_date, proforma_year))
     )
     if site_id:
-        q = q.where(KitchenetteItem.site_id == site_id)
+        items_q = items_q.where(Proforma.site_id == site_id)
 
-    result = await db.execute(q)
-    rows = list(result)
+    rows = list((await db.execute(items_q)).all())
 
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-    # Aggregate by family + month
-    # { family_key -> { month -> { qty, cost } } }
-    family_data: dict[str, dict[int, dict]] = {}
-    family_totals: dict[str, dict] = {}
+    family_data: dict[str, dict[int, dict]] = {fk: {} for fk in family_labels}
+    family_totals: dict[str, dict] = {fk: {"qty": 0, "cost": 0} for fk in family_labels}
 
-    for family_key in KITCHENETTE_FAMILIES:
-        family_data[family_key] = {}
-        family_totals[family_key] = {"qty": 0, "cost": 0}
-
-    for item, site_name in rows:
-        m = item.invoice_month.month
-        fk = item.family or "misc"
-        if fk not in family_data:
-            fk = "misc"
+    for product_name, qty, total_price, invoice_date in rows:
+        if not invoice_date:
+            continue
+        fk = classify(product_name or "")
+        if fk not in family_labels:
+            fk = "uncategorized"
+        m = invoice_date.month
         if m not in family_data[fk]:
             family_data[fk][m] = {"qty": 0, "cost": 0}
-        family_data[fk][m]["qty"] += item.quantity or 0
-        family_data[fk][m]["cost"] += item.total_cost or 0
-        family_totals[fk]["qty"] += item.quantity or 0
-        family_totals[fk]["cost"] += item.total_cost or 0
+        family_data[fk][m]["qty"] += float(qty or 0)
+        family_data[fk][m]["cost"] += float(total_price or 0)
+        family_totals[fk]["qty"] += float(qty or 0)
+        family_totals[fk]["cost"] += float(total_price or 0)
 
-    # Build chart data — one row per month, columns per family (Hebrew label)
-    family_labels = {k: v for k, v in KITCHENETTE_FAMILIES.items() if family_totals[k]["qty"] > 0}
-    sorted_families = sorted(family_labels.keys(), key=lambda f: family_totals[f]["cost"], reverse=True)
+    # Only include families that have non-zero cost
+    visible = {k: v for k, v in family_labels.items() if family_totals[k]["cost"] > 0}
+    sorted_families = sorted(visible.keys(), key=lambda f: family_totals[f]["cost"], reverse=True)
 
     chart_data = []
     for m in range(1, 13):
         row: dict = {"month": m, "month_name": month_names[m - 1]}
         for fk in sorted_families:
-            label = KITCHENETTE_FAMILIES[fk]
+            label = family_labels[fk]
             row[f"{label}_qty"] = round(family_data[fk].get(m, {}).get("qty", 0))
             row[f"{label}_cost"] = round(family_data[fk].get(m, {}).get("cost", 0), 2)
         chart_data.append(row)
@@ -1173,7 +1216,7 @@ async def kitchenette_monthly(
     series = [
         {
             "family_key": fk,
-            "family_name": KITCHENETTE_FAMILIES[fk],
+            "family_name": family_labels[fk],
             "total_qty": round(family_totals[fk]["qty"]),
             "total_cost": round(family_totals[fk]["cost"], 2),
         }

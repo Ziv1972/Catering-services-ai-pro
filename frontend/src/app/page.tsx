@@ -1520,7 +1520,30 @@ export default function Dashboard() {
                   </div>
                 </div>
               ) : (
-                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">No kitchenette data. Upload proformas with מטבחונים tab.</div>
+                <div className="h-64 flex flex-col items-center justify-center text-gray-400 text-sm gap-3">
+                  <span>No kitchenette data for this year.</span>
+                  <button
+                    onClick={async () => {
+                      setKitchenetteLoading(true);
+                      try {
+                        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/proformas/reextract-kitchenette?year=${smYear}`, {
+                          method: 'POST',
+                          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+                        });
+                        const data = await res.json();
+                        alert(`Re-extracted ${data.total_items_saved || 0} kitchenette items from ${data.processed || 0} proformas.${data.message ? `\n\n${data.message}` : ''}`);
+                        await loadKitchenette();
+                      } catch (e) {
+                        alert('Re-extract failed: ' + (e as Error).message);
+                        setKitchenetteLoading(false);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                  >
+                    Re-extract from stored proformas
+                  </button>
+                  <span className="text-xs">Or upload proformas with a מטבחונים tab.</span>
+                </div>
               )
             )}
           </div>

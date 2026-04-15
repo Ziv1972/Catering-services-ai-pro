@@ -1,7 +1,7 @@
 """
 Proforma (invoice) models
 """
-from sqlalchemy import Column, Integer, String, Text, Date, Float, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Text, Date, Float, ForeignKey, Boolean, LargeBinary
 from sqlalchemy.orm import relationship
 from backend.database import Base
 
@@ -28,6 +28,7 @@ class Proforma(Base):
 
     # File
     file_path = Column(String, nullable=True)
+    file_blob = Column(LargeBinary, nullable=True)  # raw XLSX bytes for re-extraction (kitchenette, meals)
 
     # Notes
     notes = Column(Text, nullable=True)

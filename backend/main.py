@@ -232,6 +232,8 @@ async def lifespan(app: FastAPI):
             ("meal_breakdowns", "contractors_meat_price", "FLOAT DEFAULT 0"),
             ("meal_breakdowns", "contractors_dairy_price", "FLOAT DEFAULT 0"),
             ("meal_breakdowns", "total_cost", "FLOAT DEFAULT 0"),
+            # Proforma: persist raw XLSX bytes so kitchenette/meals can be re-extracted
+            ("proformas", "file_blob", "BLOB" if is_sqlite else "BYTEA"),
         ]
         for table, column, col_type in migrations:
             try:

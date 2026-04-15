@@ -535,8 +535,11 @@ async def _extract_and_save_meal_breakdown(
 
 async def _extract_kitchenette_data(
     raw: bytes, proforma_id: int, site_id: int, invoice_date: date, db: AsyncSession,
-) -> bool:
-    """Extract kitchenette/BTB product data from ריכוז מטבחונים tab and save to KitchenetteItem."""
+) -> int:
+    """Extract kitchenette/BTB product data from ריכוז מטבחונים tab and save to KitchenetteItem.
+
+    Returns count of items saved (0 if sheet missing or no rows extracted).
+    """
     import openpyxl
     from backend.models.kitchenette_item import KitchenetteItem, classify_product
 
@@ -549,37 +552,59 @@ async def _extract_kitchenette_data(
             ws = wb[sheet_name]
             break
     if ws is None:
-        return False
+        return 0
 
-    # Find header row with "פרטים" to determine column layout
+    # Find header row by scanning first 15 rows for ANY of these markers
     header_row = None
+    name_col = None
+    price_col = None
+    commission_col = None
     qty_col = None
     cost_col = None
-    for r in range(1, min(ws.max_row + 1, 10)):
+
+    def _norm(s):
+        return str(s).replace('"', '').replace("'", "").replace(" ", "").lower() if s else ""
+
+    for r in range(1, min(ws.max_row + 1, 16)):
+        row_cols: dict[int, str] = {}
         for c in range(1, ws.max_column + 1):
             v = ws.cell(r, c).value
-            if v and isinstance(v, str) and "פרטים" in v:
-                header_row = r
-                break
-        if header_row:
-            break
-
-    if header_row is None:
-        return False
-
-    # Find סה"כ כמות and סה"כ ₪ columns in the header row
-    for c in range(1, ws.max_column + 1):
-        v = ws.cell(header_row, c).value
-        if v and isinstance(v, str):
-            if "סה\"כ כמות" in v or "סה\"כ כמות" in v:
+            if v and isinstance(v, str):
+                row_cols[c] = v.strip()
+        if not row_cols:
+            continue
+        norm_vals = {c: _norm(v) for c, v in row_cols.items()}
+        # Look for product/name marker
+        name_match = next((c for c, n in norm_vals.items()
+                           if "פרטים" in row_cols[c] or "מוצר" in row_cols[c]
+                           or "תאור" in row_cols[c] or "תיאור" in row_cols[c]), None)
+        if not name_match:
+            continue
+        header_row = r
+        name_col = name_match
+        # Detect other columns in same header row
+        for c, raw in row_cols.items():
+            n = norm_vals[c]
+            if "סהככמות" in n or "כמותסהכ" in n:
                 qty_col = c
-            elif "סה\"כ ₪" in v or "סה\"כ" in v and "₪" in v:
+            elif ("סהכ" in n and "₪" in raw) or "סהכש" in n or "סהכב" in n:
                 cost_col = c
+            elif ("מחיר" in raw and ("עמלה" in raw or "כולל" in raw)) or "מחירכולל" in n:
+                commission_col = c
+            elif raw.startswith("מחיר") or n == "מחיר":
+                if price_col is None:
+                    price_col = c
+        break
 
-    # Column B = product name (col 2), C = price (col 3), D = price with commission (col 4)
-    name_col = 2
-    price_col = 3
-    commission_col = 4
+    if header_row is None or name_col is None:
+        logger.warning("Kitchenette parser: no header row found in proforma %d", proforma_id)
+        return 0
+
+    # Fallback to legacy column positions if header didn't reveal them (col B/C/D layout)
+    if price_col is None:
+        price_col = name_col + 1
+    if commission_col is None:
+        commission_col = price_col + 1
 
     month_start = date(invoice_date.year, invoice_date.month, 1)
 
@@ -597,20 +622,20 @@ async def _extract_kitchenette_data(
         product_name = product_name.strip()
         if not product_name or product_name.startswith("סה\"כ") or product_name.startswith("סה''כ"):
             continue
-        # Skip section headers (no price data)
+        # Skip section headers (no price data) — but accept if qty/cost present
         price_val = ws.cell(r, price_col).value
-        if not isinstance(price_val, (int, float)):
+        quantity_v = ws.cell(r, qty_col).value if qty_col else None
+        cost_v = ws.cell(r, cost_col).value if cost_col else None
+        has_price = isinstance(price_val, (int, float))
+        has_qty = isinstance(quantity_v, (int, float))
+        has_cost = isinstance(cost_v, (int, float))
+        if not (has_price or has_qty or has_cost):
             continue
 
-        quantity = 0.0
-        if qty_col:
-            v = ws.cell(r, qty_col).value
-            quantity = float(v) if isinstance(v, (int, float)) else 0.0
-
-        total_cost = 0.0
-        if cost_col:
-            v = ws.cell(r, cost_col).value
-            total_cost = float(v) if isinstance(v, (int, float)) else 0.0
+        quantity = float(quantity_v) if has_qty else 0.0
+        total_cost = float(cost_v) if has_cost else 0.0
+        if not has_price:
+            price_val = 0.0
 
         commission_val = ws.cell(r, commission_col).value
         price_with_comm = float(commission_val) if isinstance(commission_val, (int, float)) else 0.0
@@ -634,7 +659,7 @@ async def _extract_kitchenette_data(
     await db.commit()
     logger.info("Saved %d kitchenette items for proforma %d (site %d, month %s)",
                 items_saved, proforma_id, site_id, month_start)
-    return items_saved > 0
+    return items_saved
 
 
 @router.post("/upload")
@@ -763,12 +788,18 @@ async def upload_proforma(
         items_created += 1
 
     proforma.total_amount = total_amount
+    # Persist raw bytes so we can re-extract kitchenette/meals later without re-upload
+    if ext in ("xlsx", "xls"):
+        try:
+            proforma.file_blob = raw
+        except Exception as e:
+            logger.warning("Could not persist file_blob: %s", e)
     await db.commit()
     await db.refresh(proforma)
 
     # Auto-extract meal breakdown from FoodHouse proformas (ריכוז הכנסות sheet)
     meal_extracted = False
-    kitchenette_extracted = False
+    kitchenette_count = 0
     if ext in ("xlsx", "xls"):
         try:
             meal_extracted = await _extract_and_save_meal_breakdown(
@@ -777,7 +808,7 @@ async def upload_proforma(
         except Exception as e:
             logger.warning("Meal breakdown extraction skipped: %s", e)
         try:
-            kitchenette_extracted = await _extract_kitchenette_data(
+            kitchenette_count = await _extract_kitchenette_data(
                 raw, proforma.id, proforma.site_id or 1, inv_date, db
             )
         except Exception as e:
@@ -794,6 +825,7 @@ async def upload_proforma(
         "status": "pending",
         "message": f"Created proforma with {items_created} items from {file.filename}",
         "meal_breakdown_extracted": meal_extracted,
+        "kitchenette_items_extracted": kitchenette_count,
     }
 
 
@@ -1445,6 +1477,67 @@ async def delete_proforma(
     await db.commit()
 
     return {"message": f"Proforma #{proforma_id} deleted", "id": proforma_id}
+
+
+@router.post("/reextract-kitchenette")
+async def reextract_kitchenette(
+    proforma_id: Optional[int] = None,
+    year: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-extract kitchenette/BTB items from stored proforma blobs.
+
+    Backfills the kitchenette_items table without requiring re-upload.
+    Filters: proforma_id (single proforma) or year (all proformas in that year).
+    Returns per-proforma counts and totals.
+    """
+    q = select(Proforma).where(Proforma.file_blob.isnot(None))
+    if proforma_id:
+        q = q.where(Proforma.id == proforma_id)
+    if year:
+        q = q.where(year_equals(Proforma.invoice_date, year))
+    result = await db.execute(q)
+    proformas = result.scalars().all()
+
+    if not proformas:
+        return {
+            "processed": 0,
+            "total_items_saved": 0,
+            "results": [],
+            "message": "No proformas with stored file_blob found. Re-upload proformas to populate.",
+        }
+
+    results = []
+    total = 0
+    for p in proformas:
+        try:
+            count = await _extract_kitchenette_data(
+                p.file_blob, p.id, p.site_id or 1, p.invoice_date, db
+            )
+        except Exception as e:
+            logger.exception("Reextract failed for proforma %d", p.id)
+            results.append({"proforma_id": p.id, "error": str(e), "items_saved": 0})
+            continue
+        total += count
+        results.append({
+            "proforma_id": p.id,
+            "site_id": p.site_id,
+            "invoice_date": p.invoice_date.isoformat(),
+            "items_saved": count,
+        })
+
+    return {
+        "processed": len(proformas),
+        "total_items_saved": total,
+        "results": results,
+    }
+
+
+def year_equals(col, y: int):
+    """Cross-DB year filter (mirrors the helper in dashboard.py)."""
+    from sqlalchemy import extract
+    return extract("year", col) == y
 
 
 class BulkDeleteRequest(BaseModel):
