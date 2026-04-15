@@ -542,6 +542,10 @@ export const dashboardAPI = {
     const response = await api.get('/api/dashboard/kitchenette-monthly', { params });
     return response.data;
   },
+  kitchenetteDrilldown: async (params: { family_key: string; year?: number; site_id?: number; month?: number }) => {
+    const response = await api.get('/api/dashboard/kitchenette-drilldown', { params });
+    return response.data;
+  },
 };
 
 // Supplier Budgets

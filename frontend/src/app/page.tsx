@@ -81,6 +81,13 @@ export default function Dashboard() {
   const [kitchenette, setKitchenette] = useState<any>(null);
   const [kitchenetteLoading, setKitchenetteLoading] = useState(false);
 
+  // Kitchenette drill-down modal state
+  const [kitDrillFamily, setKitDrillFamily] = useState<{ family_key: string; family_name: string } | null>(null);
+  const [kitDrillData, setKitDrillData] = useState<any>(null);
+  const [kitDrillLoading, setKitDrillLoading] = useState(false);
+  const [kitDrillSite, setKitDrillSite] = useState<number | undefined>(undefined);
+  const [kitDrillMonth, setKitDrillMonth] = useState<number | undefined>(undefined);
+
   // Drill-down panel state for Budget vs Actual section
   const [bvaPanel, setBvaPanel] = useState<'overview' | 'meals' | 'budget' | 'kitchenette'>('overview');
 
@@ -182,16 +189,47 @@ export default function Dashboard() {
     }
   };
 
-  const loadKitchenette = async (year?: number, siteId?: number) => {
+  const loadKitchenette = async (year?: number, _siteId?: number) => {
+    // Top kitchenette view always shows combined sites — site filter only applies in drill-down.
     setKitchenetteLoading(true);
     try {
-      const result = await dashboardAPI.kitchenetteMonthly({ year: year ?? smYear, site_id: siteId });
+      const result = await dashboardAPI.kitchenetteMonthly({ year: year ?? smYear });
       setKitchenette(result);
     } catch {
       setKitchenette(null);
     } finally {
       setKitchenetteLoading(false);
     }
+  };
+
+  const loadKitchenetteDrill = async (
+    family_key: string,
+    family_name: string,
+    siteId?: number,
+    month?: number,
+  ) => {
+    setKitDrillFamily({ family_key, family_name });
+    setKitDrillLoading(true);
+    try {
+      const result = await dashboardAPI.kitchenetteDrilldown({
+        family_key,
+        year: smYear,
+        site_id: siteId,
+        month,
+      });
+      setKitDrillData(result);
+    } catch {
+      setKitDrillData(null);
+    } finally {
+      setKitDrillLoading(false);
+    }
+  };
+
+  const closeKitDrill = () => {
+    setKitDrillFamily(null);
+    setKitDrillData(null);
+    setKitDrillSite(undefined);
+    setKitDrillMonth(undefined);
   };
 
   const loadDailyMeals = async (days?: number, siteId?: number) => {
@@ -1476,46 +1514,42 @@ export default function Dashboard() {
                 </div>
               ) : kitchenette?.families?.length > 0 ? (
                 <div>
+                  <p className="text-xs text-gray-500 mb-2">Combined view (NZ + KG). Click a category for site/period drill-down.</p>
                   <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                      <AreaChart data={kitchenette.chart_data}>
-                        <defs>
-                          {(kitchenette.families || []).map((f: any, i: number) => (
-                            <linearGradient key={f.family_key} id={`gradKit${i}`} x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor={KITCHEN_COLORS[i % KITCHEN_COLORS.length]} stopOpacity={0.6} />
-                              <stop offset="100%" stopColor={KITCHEN_COLORS[i % KITCHEN_COLORS.length]} stopOpacity={0.05} />
-                            </linearGradient>
-                          ))}
-                        </defs>
+                      <BarChart data={kitchenette.chart_data} barGap={1}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                         <XAxis dataKey="month_name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
                         <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb' }} formatter={(val: any, name: any) => [formatCurrency(Number(val)), String(name)]} />
                         {(kitchenette.families || []).map((f: any, i: number) => (
-                          <Area
+                          <Bar
                             key={f.family_key}
-                            type="monotone"
                             dataKey={`${f.family_name}_cost`}
                             stackId="kit"
-                            stroke={KITCHEN_COLORS[i % KITCHEN_COLORS.length]}
-                            fill={`url(#gradKit${i})`}
+                            fill={KITCHEN_COLORS[i % KITCHEN_COLORS.length]}
                             name={f.family_name}
+                            radius={i === (kitchenette.families || []).length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
                           />
                         ))}
-                      </AreaChart>
+                      </BarChart>
                     </ResponsiveContainer>
                   </div>
-                  {/* Family summary cards */}
+                  {/* Clickable family summary cards → drill-down */}
                   <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2">
                     {(kitchenette.families || []).map((f: any, i: number) => (
-                      <div key={f.family_key} className="rounded-xl bg-gray-50/80 border p-3">
+                      <button
+                        key={f.family_key}
+                        onClick={() => loadKitchenetteDrill(f.family_key, f.family_name)}
+                        className="text-left rounded-xl bg-gray-50/80 border p-3 hover:bg-indigo-50 hover:border-indigo-300 hover:shadow-sm transition cursor-pointer"
+                      >
                         <div className="flex items-center gap-1.5 mb-1">
                           <div className="w-2.5 h-2.5 rounded" style={{ backgroundColor: KITCHEN_COLORS[i % KITCHEN_COLORS.length] }} />
                           <p className="text-xs font-medium text-gray-700 truncate">{f.family_name}</p>
                         </div>
                         <p className="text-sm font-bold tabular-nums text-gray-900">{formatCurrency(f.total_cost)}</p>
                         <p className="text-[10px] text-gray-500 tabular-nums">{f.total_qty.toLocaleString()} units</p>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -2104,6 +2138,133 @@ export default function Dashboard() {
           </div>
         </CardContent>
       </Card>
+
+      {/* ── Kitchenette Drill-down Modal ── */}
+      {kitDrillFamily && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={closeKitDrill}>
+          <div className="w-full max-w-3xl max-h-[85vh] overflow-auto bg-white rounded-2xl shadow-2xl ring-1 ring-black/5" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 bg-white z-10 border-b px-5 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {kitDrillMonth && (
+                  <button
+                    onClick={() => { setKitDrillMonth(undefined); loadKitchenetteDrill(kitDrillFamily.family_key, kitDrillFamily.family_name, kitDrillSite, undefined); }}
+                    className="text-sm text-indigo-600 hover:underline"
+                  >← Back</button>
+                )}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    {kitDrillFamily.family_name}
+                    {kitDrillMonth && kitDrillData?.month_name && <span className="text-gray-500 font-normal"> · {kitDrillData.month_name} {kitDrillData.year}</span>}
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    {kitDrillMonth ? 'Product breakdown' : 'Monthly trend — click a month to see products'}
+                  </p>
+                </div>
+              </div>
+              <button onClick={closeKitDrill} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
+            </div>
+
+            {/* Filters */}
+            <div className="px-5 py-3 border-b flex items-center gap-3 flex-wrap">
+              <label className="text-xs text-gray-600">Site:</label>
+              <select
+                value={kitDrillSite ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value ? parseInt(e.target.value) : undefined;
+                  setKitDrillSite(v);
+                  loadKitchenetteDrill(kitDrillFamily.family_key, kitDrillFamily.family_name, v, kitDrillMonth);
+                }}
+                className="text-sm border rounded-lg px-2 py-1"
+              >
+                <option value="">All Sites</option>
+                <option value="1">Nes Ziona</option>
+                <option value="2">Kiryat Gat</option>
+              </select>
+              {!kitDrillMonth && (
+                <span className="text-xs text-gray-500 ml-auto">Total: <span className="font-bold text-gray-900">{formatCurrency(kitDrillData?.total_cost || 0)}</span></span>
+              )}
+              {kitDrillMonth && (
+                <span className="text-xs text-gray-500 ml-auto">Month total: <span className="font-bold text-gray-900">{formatCurrency(kitDrillData?.total_cost || 0)}</span></span>
+              )}
+            </div>
+
+            <div className="p-5">
+              {kitDrillLoading ? (
+                <div className="h-64 flex items-center justify-center text-gray-400">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading…
+                </div>
+              ) : !kitDrillData ? (
+                <div className="h-32 flex items-center justify-center text-gray-400 text-sm">No data</div>
+              ) : kitDrillData.level === 'monthly' ? (
+                <>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={kitDrillData.chart_data}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                        <XAxis dataKey="month_name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb' }} formatter={(val: any, name: any) => [formatCurrency(Number(val)), String(name)]} />
+                        {(kitDrillData.sites || []).map((s: any, i: number) => (
+                          <Bar
+                            key={s.name}
+                            dataKey={s.name}
+                            stackId="kd"
+                            fill={KITCHEN_COLORS[i % KITCHEN_COLORS.length]}
+                            name={s.name}
+                            radius={i === (kitDrillData.sites || []).length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
+                            onClick={(data: any) => {
+                              if (data?.payload?.month) {
+                                setKitDrillMonth(data.payload.month);
+                                loadKitchenetteDrill(kitDrillFamily.family_key, kitDrillFamily.family_name, kitDrillSite, data.payload.month);
+                              }
+                            }}
+                            cursor="pointer"
+                          />
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {(kitDrillData.chart_data || []).filter((m: any) => m.total > 0).map((m: any) => (
+                      <button
+                        key={m.month}
+                        onClick={() => { setKitDrillMonth(m.month); loadKitchenetteDrill(kitDrillFamily.family_key, kitDrillFamily.family_name, kitDrillSite, m.month); }}
+                        className="text-left p-3 rounded-xl border bg-gray-50/80 hover:bg-indigo-50 hover:border-indigo-300 transition"
+                      >
+                        <p className="text-xs text-gray-600">{m.month_name}</p>
+                        <p className="text-sm font-bold tabular-nums text-gray-900">{formatCurrency(m.total)}</p>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : kitDrillData.level === 'products' ? (
+                <div className="space-y-1">
+                  {(kitDrillData.products || []).length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-8">No products in this period</p>
+                  ) : (
+                    (kitDrillData.products || []).map((p: any) => (
+                      <div key={p.product_name} className="flex items-center justify-between p-3 rounded-lg border bg-gray-50/50 hover:bg-gray-100 transition">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-gray-900 truncate">{p.product_name}</p>
+                          <p className="text-xs text-gray-500 tabular-nums">
+                            {p.qty.toLocaleString()} {p.unit}
+                            {Object.keys(p.by_site || {}).length > 0 && (
+                              <span className="ml-2 text-gray-400">
+                                · {Object.entries(p.by_site).map(([s, v]: any) => `${s}: ${formatCurrency(Number(v))}`).join(' · ')}
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                        <p className="text-sm font-bold tabular-nums text-gray-900 ml-3">{formatCurrency(p.cost)}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

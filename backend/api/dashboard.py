@@ -1165,6 +1165,8 @@ async def kitchenette_monthly(
         return "uncategorized"
 
     # Pull all proforma line items for the year (+ optional site)
+    # Top kitchenette view always combines both sites (HP Indigo top-level overview).
+    # Site filtering happens inside the drill-down (kitchenette-drilldown endpoint).
     items_q = (
         select(
             ProformaItem.product_name,
@@ -1175,8 +1177,6 @@ async def kitchenette_monthly(
         .join(Proforma, ProformaItem.proforma_id == Proforma.id)
         .where(year_equals(Proforma.invoice_date, proforma_year))
     )
-    if site_id:
-        items_q = items_q.where(Proforma.site_id == site_id)
 
     rows = list((await db.execute(items_q)).all())
 
@@ -1227,6 +1227,151 @@ async def kitchenette_monthly(
         "year": proforma_year,
         "chart_data": chart_data,
         "families": series,
+    }
+
+
+@router.get("/kitchenette-drilldown")
+async def kitchenette_drilldown(
+    family_key: str,
+    year: Optional[int] = None,
+    site_id: Optional[int] = None,
+    month: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Drill-down for one kitchenette family.
+
+    - Without month: returns monthly time series + per-site split (Level 1)
+    - With month: returns product-level breakdown for that family/site/month (Level 2)
+    """
+    from backend.models.proforma import Proforma, ProformaItem
+    from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping
+    from backend.models.site import Site
+    import re
+
+    target_year = year or datetime.now().year
+    proforma_year = await _resolve_proforma_year(db, target_year)
+
+    # Patterns that classify products into THIS family
+    pat_q = (
+        select(ProductCategoryMapping.product_name_pattern)
+        .join(ProductCategoryGroup)
+        .where(ProductCategoryGroup.name == family_key)
+        .where(ProductCategoryGroup.is_active == True)
+    )
+    patterns = [r[0] for r in (await db.execute(pat_q)).all()]
+
+    # Family display name
+    name_q = select(ProductCategoryGroup.display_name_he, ProductCategoryGroup.display_name_en).where(
+        ProductCategoryGroup.name == family_key
+    )
+    name_row = (await db.execute(name_q)).first()
+    family_he = name_row[0] if name_row else family_key
+    family_en = name_row[1] if name_row else family_key
+
+    # Pull all candidate items for the year (filter by site if given)
+    items_q = (
+        select(
+            ProformaItem.product_name,
+            ProformaItem.quantity,
+            ProformaItem.total_price,
+            ProformaItem.unit,
+            Proforma.invoice_date,
+            Proforma.site_id,
+            Site.name.label("site_name"),
+        )
+        .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+        .join(Site, Proforma.site_id == Site.id, isouter=True)
+        .where(year_equals(Proforma.invoice_date, proforma_year))
+    )
+    if site_id:
+        items_q = items_q.where(Proforma.site_id == site_id)
+
+    rows = list((await db.execute(items_q)).all())
+
+    # Filter to ones matching family patterns
+    def matches(name: str) -> bool:
+        nl = (name or "").lower()
+        for p in patterns:
+            try:
+                if re.search(p.replace("%", ".*").lower(), nl):
+                    return True
+            except re.error:
+                continue
+        return False
+
+    matched = [r for r in rows if matches(r[0])]
+
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    # Level 2: product breakdown for given month
+    if month:
+        products: dict[str, dict] = {}
+        for product_name, qty, total_price, unit, inv_date, sid, sname in matched:
+            if not inv_date or inv_date.month != month:
+                continue
+            key = product_name
+            if key not in products:
+                products[key] = {
+                    "product_name": product_name,
+                    "unit": unit or "unit",
+                    "qty": 0.0,
+                    "cost": 0.0,
+                    "by_site": {},
+                }
+            products[key]["qty"] += float(qty or 0)
+            products[key]["cost"] += float(total_price or 0)
+            sk = sname or f"site_{sid}"
+            products[key]["by_site"][sk] = products[key]["by_site"].get(sk, 0) + float(total_price or 0)
+        product_list = sorted(
+            [{"product_name": p["product_name"], "unit": p["unit"],
+              "qty": round(p["qty"], 2), "cost": round(p["cost"], 2),
+              "by_site": {k: round(v, 2) for k, v in p["by_site"].items()}}
+             for p in products.values()],
+            key=lambda x: x["cost"], reverse=True,
+        )
+        return {
+            "year": proforma_year,
+            "month": month,
+            "month_name": month_names[month - 1],
+            "family_key": family_key,
+            "family_he": family_he,
+            "family_en": family_en,
+            "level": "products",
+            "products": product_list,
+            "total_cost": round(sum(p["cost"] for p in product_list), 2),
+            "total_qty": round(sum(p["qty"] for p in product_list), 2),
+        }
+
+    # Level 1: monthly time series (split per site)
+    monthly: dict[int, dict] = {m: {"month": m, "month_name": month_names[m - 1], "total": 0.0} for m in range(1, 13)}
+    site_totals: dict[str, float] = {}
+    for product_name, qty, total_price, unit, inv_date, sid, sname in matched:
+        if not inv_date:
+            continue
+        m = inv_date.month
+        sk = sname or f"site_{sid}"
+        monthly[m][sk] = monthly[m].get(sk, 0) + float(total_price or 0)
+        monthly[m]["total"] += float(total_price or 0)
+        site_totals[sk] = site_totals.get(sk, 0) + float(total_price or 0)
+
+    chart = []
+    for m in range(1, 13):
+        row = {"month": m, "month_name": month_names[m - 1], "total": round(monthly[m]["total"], 2)}
+        for sk in site_totals:
+            row[sk] = round(monthly[m].get(sk, 0), 2)
+        chart.append(row)
+
+    return {
+        "year": proforma_year,
+        "family_key": family_key,
+        "family_he": family_he,
+        "family_en": family_en,
+        "level": "monthly",
+        "chart_data": chart,
+        "sites": [{"name": k, "total": round(v, 2)} for k, v in sorted(site_totals.items(), key=lambda x: -x[1])],
+        "total_cost": round(sum(site_totals.values()), 2),
     }
 
 
