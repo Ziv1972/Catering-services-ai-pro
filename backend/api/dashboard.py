@@ -1142,16 +1142,17 @@ async def kitchenette_monthly(
     )
     mappings = list((await db.execute(mapping_q)).all())
 
-    # Family keys we treat as "kitchenette" (BTB) — everything except total_meals + working_days
-    EXCLUDED_GROUPS = {"total_meals", "working_days"}
+    # Family keys we treat as "kitchenette" (BTB) — exclude meals-related + uncategorized.
+    # Uncategorized products are hidden from this panel (they're surfaced in the main
+    # Budget vs Actual drill-down instead).
+    EXCLUDED_GROUPS = {"total_meals", "working_days", "uncategorized"}
     family_labels: dict[str, str] = {}
     for _, group_name, display_he in mappings:
         if group_name in EXCLUDED_GROUPS:
             continue
         family_labels.setdefault(group_name, display_he)
-    family_labels.setdefault("uncategorized", "לא מסווג")
 
-    def classify(name: str) -> str:
+    def classify(name: str) -> str | None:
         nl = name.lower()
         for pattern, group_name, _ in mappings:
             if group_name in EXCLUDED_GROUPS:
@@ -1162,7 +1163,7 @@ async def kitchenette_monthly(
                     return group_name
             except re.error:
                 continue
-        return "uncategorized"
+        return None
 
     # Pull all proforma line items for the year (+ optional site)
     # Top kitchenette view always combines both sites (HP Indigo top-level overview).
@@ -1190,8 +1191,8 @@ async def kitchenette_monthly(
         if not invoice_date:
             continue
         fk = classify(product_name or "")
-        if fk not in family_labels:
-            fk = "uncategorized"
+        if fk is None or fk not in family_labels:
+            continue  # skip uncategorized — not a kitchenette product
         m = invoice_date.month
         if m not in family_data[fk]:
             family_data[fk][m] = {"qty": 0, "cost": 0}
