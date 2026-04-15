@@ -1390,7 +1390,299 @@ export default function AnalyticsPage() {
             </div>
           </div>
         )}
+
+        {/* ── Vending Machines (מ.א אוטומטים) Section ── */}
+        <VendingSection />
       </main>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Vending Machines analytics panel (מ.א אוטומטים)
+// ═══════════════════════════════════════════════════════════════════════
+
+function VendingSection() {
+  const [year, setYear] = useState<number>(new Date().getFullYear());
+  const [month, setMonth] = useState<number | ''>('');
+  const [siteId, setSiteId] = useState<number | ''>('');
+  const [shift, setShift] = useState<string>('all');
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [productDetail, setProductDetail] = useState<any>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('year', String(year));
+      if (month) params.set('month', String(month));
+      if (siteId) params.set('site_id', String(siteId));
+      if (shift && shift !== 'all') params.set('shift', shift);
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/analytics?${params}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      });
+      setData(res.ok ? await res.json() : null);
+    } catch {
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [year, month, siteId, shift]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const loadProductTrend = async (productName: string) => {
+    const params = new URLSearchParams();
+    params.set('product_name', productName);
+    params.set('year', String(year));
+    if (siteId) params.set('site_id', String(siteId));
+    if (shift && shift !== 'all') params.set('shift', shift);
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/product-trend?${params}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+    });
+    setProductDetail(res.ok ? await res.json() : null);
+  };
+
+  return (
+    <div className="mt-8">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <CardTitle className="text-xl">מ.א אוטומטים — Vending Machines</CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">Monthly consumption, top products, per-machine usage</p>
+            </div>
+            <Button onClick={() => setShowUpload(true)} size="sm">Upload invoice + consumption</Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <label>Year:
+              <select value={year} onChange={(e) => setYear(parseInt(e.target.value))} className="ml-1 border rounded px-2 py-1">
+                {[2024, 2025, 2026, 2027].map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </label>
+            <label>Month:
+              <select value={month} onChange={(e) => setMonth(e.target.value ? parseInt(e.target.value) : '')} className="ml-1 border rounded px-2 py-1">
+                <option value="">All</option>
+                {[1,2,3,4,5,6,7,8,9,10,11,12].map((m) => <option key={m} value={m}>{MONTH_NAMES_SHORT[m]}</option>)}
+              </select>
+            </label>
+            <label>Site:
+              <select value={siteId} onChange={(e) => setSiteId(e.target.value ? parseInt(e.target.value) : '')} className="ml-1 border rounded px-2 py-1">
+                <option value="">All</option>
+                <option value="1">Nes Ziona</option>
+                <option value="2">Kiryat Gat</option>
+              </select>
+            </label>
+            <label>Shift:
+              <select value={shift} onChange={(e) => setShift(e.target.value)} className="ml-1 border rounded px-2 py-1">
+                <option value="all">All</option>
+                <option value="day">Day</option>
+                <option value="evening">Evening</option>
+              </select>
+            </label>
+          </div>
+
+          {loading ? (
+            <p className="text-center text-gray-400 py-8 text-sm">Loading…</p>
+          ) : !data || (data.total_qty === 0 && data.top_products.length === 0) ? (
+            <div className="text-center text-gray-500 py-10 space-y-2">
+              <p>No vending data yet for this period.</p>
+              <p className="text-xs">Upload an invoice PDF + consumption Excel to populate this section.</p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="rounded-xl border p-4 bg-gradient-to-br from-indigo-50 to-white">
+                  <p className="text-xs text-indigo-700 font-semibold">TOTAL QTY</p>
+                  <p className="text-2xl font-bold tabular-nums mt-1">{fmtQty(data.total_qty)}</p>
+                </div>
+                <div className="rounded-xl border p-4 bg-gradient-to-br from-emerald-50 to-white">
+                  <p className="text-xs text-emerald-700 font-semibold">TOTAL COST</p>
+                  <p className="text-2xl font-bold tabular-nums mt-1">{fmt(data.total_cost)}</p>
+                </div>
+                <div className="rounded-xl border p-4 bg-gradient-to-br from-amber-50 to-white">
+                  <p className="text-xs text-amber-700 font-semibold">PRODUCTS</p>
+                  <p className="text-2xl font-bold tabular-nums mt-1">{(data.top_products || []).length}</p>
+                </div>
+              </div>
+
+              {/* Monthly trend */}
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Monthly trend</h4>
+                <div className="h-60">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={data.monthly}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                      <XAxis dataKey="month_name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+                      <Tooltip formatter={(v: any, n: any) => n === 'cost' ? fmt(Number(v)) : fmtQty(Number(v))} />
+                      <Bar dataKey="qty" fill="#6366f1" name="Qty" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Top products */}
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Top products (click for trend)</h4>
+                <div className="space-y-1 max-h-80 overflow-auto">
+                  {(data.top_products || []).map((p: any) => (
+                    <button
+                      key={p.product_name}
+                      onClick={() => loadProductTrend(p.product_name)}
+                      className="w-full text-left flex items-center justify-between p-2.5 rounded-lg border bg-gray-50/50 hover:bg-indigo-50 hover:border-indigo-300 transition"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate">{p.product_name}</p>
+                        {p.category && <p className="text-xs text-gray-500 truncate">Category: {p.category}</p>}
+                      </div>
+                      <div className="text-right ml-3 flex-shrink-0">
+                        <p className="text-sm font-bold tabular-nums">{fmtQty(p.qty)}</p>
+                        <p className="text-xs text-gray-500 tabular-nums">{fmt(p.cost)}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Machines (only if data) */}
+              {(data.machines || []).length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Per-machine usage</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {data.machines.map((m: any) => (
+                      <div key={m.machine_id} className="rounded-lg border p-2.5 bg-gray-50/50">
+                        <p className="text-xs text-gray-600">Machine {m.machine_id}</p>
+                        <p className="text-sm font-bold tabular-nums">{fmtQty(m.qty)} units</p>
+                        <p className="text-xs text-gray-500 tabular-nums">{fmt(m.cost)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {showUpload && <VendingUploadModal onClose={() => setShowUpload(false)} onUploaded={() => { setShowUpload(false); load(); }} />}
+      {productDetail && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setProductDetail(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="border-b px-5 py-3 flex items-center justify-between sticky top-0 bg-white">
+              <h3 className="font-semibold">{productDetail.product_name}</h3>
+              <button onClick={() => setProductDetail(null)} className="text-gray-400 hover:text-gray-700 text-xl">×</button>
+            </div>
+            <div className="p-5">
+              <div className="h-60">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={productDetail.monthly}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                    <XAxis dataKey="month_name" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip formatter={(v: any) => fmtQty(Number(v))} />
+                    <Bar dataKey="qty" fill="#6366f1" name="Qty" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => void }) {
+  const [siteId, setSiteId] = useState<number>(1);
+  const [shift, setShift] = useState<string>('all');
+  const [pdf, setPdf] = useState<File | null>(null);
+  const [xlsx, setXlsx] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const upload = async () => {
+    setUploading(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.set('site_id', String(siteId));
+      fd.set('shift', shift);
+      if (pdf) fd.set('invoice_pdf', pdf);
+      if (xlsx) fd.set('consumption_xlsx', xlsx);
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+        body: fd,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      setResult(await res.json());
+    } catch (e: any) {
+      setError(e.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="border-b px-5 py-3 flex items-center justify-between sticky top-0 bg-white">
+          <h3 className="font-semibold">Upload Vending Invoice + Consumption</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl">×</button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-sm">
+              <span className="block text-gray-600 mb-1">Site</span>
+              <select value={siteId} onChange={(e) => setSiteId(parseInt(e.target.value))} className="w-full border rounded-lg px-3 py-2">
+                <option value={1}>Nes Ziona</option>
+                <option value={2}>Kiryat Gat</option>
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="block text-gray-600 mb-1">Shift</span>
+              <select value={shift} onChange={(e) => setShift(e.target.value)} className="w-full border rounded-lg px-3 py-2">
+                <option value="all">All (no split)</option>
+                <option value="day">Day</option>
+                <option value="evening">Evening</option>
+              </select>
+            </label>
+          </div>
+          <label className="text-sm block">
+            <span className="block text-gray-600 mb-1">Invoice PDF (prices + totals)</span>
+            <input type="file" accept=".pdf" onChange={(e) => setPdf(e.target.files?.[0] || null)} className="w-full text-sm" />
+          </label>
+          <label className="text-sm block">
+            <span className="block text-gray-600 mb-1">Consumption Excel (DataSheet — dates, products, qty, optional machine #)</span>
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setXlsx(e.target.files?.[0] || null)} className="w-full text-sm" />
+          </label>
+          {error && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-2">{error}</p>}
+          {result && (
+            <div className="text-sm bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-1">
+              <p className="font-medium text-emerald-900">Upload successful</p>
+              <p>Invoice items: <b>{result.invoice_items}</b></p>
+              <p>Transactions saved: <b>{result.transactions_saved}</b> (priced: <b>{result.transactions_priced}</b>)</p>
+              <p>Total amount: <b>{fmt(result.total_amount)}</b></p>
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <Button variant="outline" onClick={onClose}>Close</Button>
+            <Button onClick={upload} disabled={uploading || (!pdf && !xlsx)}>
+              {uploading ? 'Uploading…' : 'Upload'}
+            </Button>
+            {result && <Button onClick={onUploaded}>Done</Button>}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1341,7 +1341,14 @@ export default function Dashboard() {
                   >
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm truncate">{b.supplier_name}</p>
-                      <p className="text-xs text-muted-foreground">{b.site_name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {b.site_name}
+                        {b.shift && b.shift !== 'all' && (
+                          <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium">
+                            {b.shift === 'evening' ? 'Evening' : b.shift === 'day' ? 'Day' : b.shift}
+                          </span>
+                        )}
+                      </p>
                     </div>
                     <div className="text-right ml-4">
                       <p className="text-sm tabular-nums">

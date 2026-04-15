@@ -25,7 +25,7 @@ from backend.api.auth import get_password_hash
 from backend.api import auth, meetings, chat, dashboard, violations
 from backend.api import menu_compliance, proformas, historical, anomalies, webhooks, suppliers
 from backend.api import supplier_budgets, projects, maintenance, todos, price_lists, fine_rules
-from backend.api import category_analysis, attachments, dish_catalog, agent_crew
+from backend.api import category_analysis, attachments, dish_catalog, agent_crew, vending
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -234,6 +234,8 @@ async def lifespan(app: FastAPI):
             ("meal_breakdowns", "total_cost", "FLOAT DEFAULT 0"),
             # Proforma: persist raw XLSX bytes so kitchenette/meals can be re-extracted
             ("proformas", "file_blob", "BLOB" if is_sqlite else "BYTEA"),
+            # Proforma: shift column for vending day/evening split
+            ("proformas", "shift", "VARCHAR NOT NULL DEFAULT 'all'"),
         ]
         for table, column, col_type in migrations:
             try:
@@ -362,6 +364,50 @@ async def lifespan(app: FastAPI):
                     ))
         await session.commit()
         logger.info("FoodHouse supplier and budgets seeded")
+
+    # Seed מ.א אוטומטים (vending machines) supplier + 3 budget rows
+    async with AsyncSessionLocal() as session:
+        VENDING_NAME = "מ.א אוטומטים"
+        result = await session.execute(
+            select(Supplier).where(Supplier.name == VENDING_NAME)
+        )
+        vending = result.scalar_one_or_none()
+        if not vending:
+            vending = Supplier(
+                name=VENDING_NAME,
+                contact_name="M.A Vending",
+                is_active=True,
+                notes="Vending machine supplier (NZ + KG day + KG evening)",
+            )
+            session.add(vending)
+            await session.flush()
+            logger.info(f"Created {VENDING_NAME} supplier (id={vending.id})")
+
+        # Only seed the KG Evening row at ₪0 (user edits amount via /budget page).
+        # Existing NZ + KG budgets are left alone — user decides if KG should be
+        # split (day/evening) or kept aggregated ('all') via the Budget page.
+        for yr in [2025, 2026]:
+            existing = await session.execute(
+                select(SupplierBudget).where(
+                    SupplierBudget.supplier_id == vending.id,
+                    SupplierBudget.site_id == 2,
+                    SupplierBudget.year == yr,
+                    SupplierBudget.shift == "evening",
+                )
+            )
+            if not existing.scalar_one_or_none():
+                session.add(SupplierBudget(
+                    supplier_id=vending.id,
+                    site_id=2,
+                    year=yr,
+                    shift="evening",
+                    yearly_amount=0,
+                    jan=0, feb=0, mar=0, apr=0, may=0, jun=0,
+                    jul=0, aug=0, sep=0, oct=0, nov=0, dec=0,
+                    is_active=True,
+                ))
+        await session.commit()
+        logger.info("מ.א אוטומטים supplier + 3 budget rows seeded")
 
     # Seed default fine rules if none exist
     async with AsyncSessionLocal() as session:
@@ -778,6 +824,7 @@ app.include_router(category_analysis.router, prefix="/api/category-analysis", ta
 app.include_router(attachments.router, prefix="/api/attachments", tags=["Attachments"])
 app.include_router(dish_catalog.router, tags=["Dish Catalog"])
 app.include_router(agent_crew.router, tags=["Agent Crew"])
+app.include_router(vending.router, tags=["Vending"])
 
 
 @app.get("/")

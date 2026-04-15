@@ -26,6 +26,10 @@ class Proforma(Base):
     # Status
     status = Column(String, nullable=False)  # pending, validated, approved, rejected, paid
 
+    # Shift — for suppliers that split day vs evening (e.g. vending machines KG evening)
+    # Matches SupplierBudget.shift. 'all' = no split, 'day' | 'evening' = shift-specific
+    shift = Column(String, nullable=False, default="all")
+
     # File
     file_path = Column(String, nullable=True)
     file_blob = Column(LargeBinary, nullable=True)  # raw XLSX bytes for re-extraction (kitchenette, meals)
