@@ -1459,25 +1459,35 @@ function VendingSection() {
                 variant="outline"
                 size="sm"
                 onClick={async () => {
-                  if (!siteId || !month) {
-                    alert('Pick a specific Site and Month first so cleanup knows what to keep.');
+                  // Flexible clear: uses active filters (site/year/month/shift)
+                  if (!siteId) {
+                    alert('Pick a Site first — this deletes transactions for that site.');
                     return;
                   }
-                  if (!confirm(`Delete vending transactions for this site that fall OUTSIDE ${year}-${String(month).padStart(2, '0')}? Use after a bad import.`)) return;
-                  const params = new URLSearchParams({
-                    site_id: String(siteId),
-                    year: String(year),
-                    month: String(month),
-                  });
-                  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/cleanup?${params}`, {
-                    method: 'POST',
+                  const monthLabel = month ? `${year}-${String(month).padStart(2, '0')}` : `all of ${year}`;
+                  const shiftLabel = shift === 'all' ? 'all shifts' : shift;
+                  const includeInvoices = confirm(
+                    `Delete vending transactions for Site ${siteId} · ${monthLabel} · ${shiftLabel}?\n\n` +
+                    `OK = also delete the matching PDF invoices (Proformas)\nCancel = keep invoices, delete only transactions`
+                  );
+                  // Second confirm because this is destructive
+                  if (!confirm(`Final confirm — delete transactions${includeInvoices ? ' + invoices' : ''} for Site ${siteId}, ${monthLabel}, ${shiftLabel}?`)) return;
+
+                  const params = new URLSearchParams({ site_id: String(siteId) });
+                  if (year) params.set('year', String(year));
+                  if (month) params.set('month', String(month));
+                  if (shift && shift !== 'all') params.set('shift', shift);
+                  if (includeInvoices) params.set('include_invoices', 'true');
+
+                  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/clear?${params}`, {
+                    method: 'DELETE',
                     headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
                   });
                   const data = await res.json().catch(() => ({}));
-                  alert(`Deleted ${data.deleted || 0} out-of-month transactions. Now re-upload the Excel with correct invoice month.`);
+                  alert(`Deleted ${data.transactions_deleted || 0} transactions${includeInvoices ? ` + ${data.invoices_deleted || 0} invoices` : ''}.`);
                   load();
                 }}
-              >Cleanup bad dates</Button>
+              >Clear data</Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -1637,6 +1647,26 @@ function VendingSection() {
   );
 }
 
+// Try to detect an invoice month from a filename like "...1.26.pdf" or "... 02.2026.xlsx"
+function detectInvoiceMonth(filename: string): string | null {
+  const m1 = filename.match(/(\d{1,2})\.(\d{2,4})\.(?:pdf|xlsx|xls)$/i);
+  if (m1) {
+    const month = parseInt(m1[1]);
+    let year = parseInt(m1[2]);
+    if (year < 100) year += 2000;
+    if (month >= 1 && month <= 12 && year >= 2020 && year <= 2030) {
+      return `${year}-${String(month).padStart(2, '0')}`;
+    }
+  }
+  const m2 = filename.match(/(\d{4})[-_ ](\d{2})/);
+  if (m2) {
+    const year = parseInt(m2[1]);
+    const month = parseInt(m2[2]);
+    if (month >= 1 && month <= 12) return `${year}-${String(month).padStart(2, '0')}`;
+  }
+  return null;
+}
+
 function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => void }) {
   const [siteId, setSiteId] = useState<number>(1);
   const [shift, setShift] = useState<string>('all');
@@ -1645,6 +1675,15 @@ function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUp
   const [invoiceMonth, setInvoiceMonth] = useState<string>(defaultMonth);
   const [pdf, setPdf] = useState<File | null>(null);
   const [xlsx, setXlsx] = useState<File | null>(null);
+
+  const onFilePick = (setter: (f: File | null) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0] || null;
+    setter(f);
+    if (f) {
+      const detected = detectInvoiceMonth(f.name);
+      if (detected) setInvoiceMonth(detected);
+    }
+  };
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1707,12 +1746,15 @@ function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUp
           </div>
           <label className="text-sm block">
             <span className="block text-gray-600 mb-1">Invoice PDF (prices + totals)</span>
-            <input type="file" accept=".pdf" onChange={(e) => setPdf(e.target.files?.[0] || null)} className="w-full text-sm" />
+            <input type="file" accept=".pdf" onChange={onFilePick(setPdf)} className="w-full text-sm" />
           </label>
           <label className="text-sm block">
             <span className="block text-gray-600 mb-1">Consumption Excel (DataSheet — date + product + qty)</span>
-            <input type="file" accept=".xlsx,.xls" onChange={(e) => setXlsx(e.target.files?.[0] || null)} className="w-full text-sm" />
+            <input type="file" accept=".xlsx,.xls" onChange={onFilePick(setXlsx)} className="w-full text-sm" />
           </label>
+          <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
+            ⚠ <b>Check the Invoice month above</b> before upload — the Excel source stores ambiguous dates; the selected month is used to fix them. Filename hint is auto-detected (e.g. <code>1.26</code> → 2026-01).
+          </p>
           <div className="text-xs text-gray-500 bg-gray-50 border rounded-lg p-2.5 leading-relaxed">
             <p className="font-semibold mb-1">Upload guide</p>
             <ul className="space-y-0.5 pl-4 list-disc">

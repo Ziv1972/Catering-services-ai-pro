@@ -457,6 +457,69 @@ async def cleanup_bad_dates(
     return {"deleted": deleted, "site_id": site_id, "kept_month": f"{year}-{month:02d}"}
 
 
+@router.delete("/clear")
+async def clear_vending_data(
+    site_id: Optional[int] = None,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    shift: Optional[str] = None,
+    include_invoices: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete vending transactions by filter. Destructive — requires explicit filters.
+
+    - site_id: restrict to one site
+    - year/month: restrict to that period (uses tx_date)
+    - shift: restrict to 'day' | 'evening' | 'all'
+    - include_invoices: also delete matching Proformas (+ their ProformaItems)
+    """
+    if site_id is None and year is None and month is None and shift is None:
+        raise HTTPException(400, "Refusing to clear without at least one filter (site_id/year/month/shift)")
+
+    supplier = await _get_vending_supplier(db)
+
+    tx_q = select(VendingTransaction)
+    if site_id is not None:
+        tx_q = tx_q.where(VendingTransaction.site_id == site_id)
+    if year is not None:
+        tx_q = tx_q.where(year_equals(VendingTransaction.tx_date, year))
+    if month is not None:
+        tx_q = tx_q.where(month_equals(VendingTransaction.tx_date, month))
+    if shift is not None:
+        tx_q = tx_q.where(VendingTransaction.shift == shift)
+
+    txs = (await db.execute(tx_q)).scalars().all()
+    tx_count = len(txs)
+    for t in txs:
+        await db.delete(t)
+
+    inv_count = 0
+    if include_invoices:
+        p_q = select(Proforma).where(Proforma.supplier_id == supplier.id)
+        if site_id is not None:
+            p_q = p_q.where(Proforma.site_id == site_id)
+        if year is not None:
+            p_q = p_q.where(year_equals(Proforma.invoice_date, year))
+        if month is not None:
+            p_q = p_q.where(month_equals(Proforma.invoice_date, month))
+        if shift is not None:
+            p_q = p_q.where(Proforma.shift == shift)
+
+        proformas = (await db.execute(p_q)).scalars().all()
+        for p in proformas:
+            await db.execute(delete(ProformaItem).where(ProformaItem.proforma_id == p.id))
+            await db.delete(p)
+            inv_count += 1
+
+    await db.commit()
+    return {
+        "transactions_deleted": tx_count,
+        "invoices_deleted": inv_count,
+        "filters": {"site_id": site_id, "year": year, "month": month, "shift": shift, "include_invoices": include_invoices},
+    }
+
+
 @router.post("/reprice")
 async def reprice_transactions(
     year: Optional[int] = None,
