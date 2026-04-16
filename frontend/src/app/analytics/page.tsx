@@ -1459,6 +1459,29 @@ function VendingSection() {
                 variant="outline"
                 size="sm"
                 onClick={async () => {
+                  if (!siteId || !month) {
+                    alert('Pick a specific Site and Month first so cleanup knows what to keep.');
+                    return;
+                  }
+                  if (!confirm(`Delete vending transactions for this site that fall OUTSIDE ${year}-${String(month).padStart(2, '0')}? Use after a bad import.`)) return;
+                  const params = new URLSearchParams({
+                    site_id: String(siteId),
+                    year: String(year),
+                    month: String(month),
+                  });
+                  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/cleanup?${params}`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  alert(`Deleted ${data.deleted || 0} out-of-month transactions. Now re-upload the Excel with correct invoice month.`);
+                  load();
+                }}
+              >Cleanup bad dates</Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
                   const params = new URLSearchParams({ year: String(year) });
                   if (siteId) params.set('site_id', String(siteId));
                   const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/reprice?${params}`, {
@@ -1617,6 +1640,9 @@ function VendingSection() {
 function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => void }) {
   const [siteId, setSiteId] = useState<number>(1);
   const [shift, setShift] = useState<string>('all');
+  const now = new Date();
+  const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [invoiceMonth, setInvoiceMonth] = useState<string>(defaultMonth);
   const [pdf, setPdf] = useState<File | null>(null);
   const [xlsx, setXlsx] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -1630,6 +1656,7 @@ function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUp
       const fd = new FormData();
       fd.set('site_id', String(siteId));
       fd.set('shift', shift);
+      if (invoiceMonth) fd.set('invoice_month', invoiceMonth);
       if (pdf) fd.set('invoice_pdf', pdf);
       if (xlsx) fd.set('consumption_xlsx', xlsx);
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/upload`, {
@@ -1657,7 +1684,7 @@ function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUp
           <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl">×</button>
         </div>
         <div className="p-5 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <label className="text-sm">
               <span className="block text-gray-600 mb-1">Site</span>
               <select value={siteId} onChange={(e) => setSiteId(parseInt(e.target.value))} className="w-full border rounded-lg px-3 py-2">
@@ -1672,6 +1699,10 @@ function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUp
                 <option value="day">Day</option>
                 <option value="evening">Evening</option>
               </select>
+            </label>
+            <label className="text-sm">
+              <span className="block text-gray-600 mb-1">Invoice month</span>
+              <input type="month" value={invoiceMonth} onChange={(e) => setInvoiceMonth(e.target.value)} className="w-full border rounded-lg px-3 py-2" />
             </label>
           </div>
           <label className="text-sm block">

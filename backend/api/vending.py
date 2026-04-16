@@ -163,11 +163,22 @@ def _parse_invoice_pdf(raw: bytes) -> dict:
     return result
 
 
-def _parse_consumption_xlsx(raw: bytes) -> list[dict]:
+def _parse_consumption_xlsx(
+    raw: bytes,
+    invoice_month: Optional[date] = None,
+) -> list[dict]:
     """Parse DataSheet XLSX → list of transactions.
 
     Returns [{tx_date, product_name, quantity, machine_id (or None)}].
     Cols A=date, B=product, C=qty. Optional machine_id in future KG files.
+
+    Date normalization:
+        The source file often stores dates in ambiguous dd/mm vs mm/dd form.
+        For days 1-12 the parser reads "02/01/26" as Jan 2 instead of Feb 1.
+        If invoice_month is provided, each cell is normalized:
+          - cell.month == invoice_month → kept as-is (day > 12 case, unambiguous)
+          - cell.day == invoice_month   → SWAP day/month (ambiguous low-day case)
+          - neither                     → kept as-is (out-of-month row, unusual)
     """
     import openpyxl
     wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
@@ -182,6 +193,9 @@ def _parse_consumption_xlsx(raw: bytes) -> list[dict]:
             machine_col = c
             break
 
+    target_month = invoice_month.month if invoice_month else None
+    target_year = invoice_month.year if invoice_month else None
+
     for r in range(2, ws.max_row + 1):
         d = ws.cell(r, 1).value
         if d is None:
@@ -192,6 +206,20 @@ def _parse_consumption_xlsx(raw: bytes) -> list[dict]:
             tx_date = d
         else:
             continue
+
+        # Normalize ambiguous date if we have an invoice month
+        if target_month is not None:
+            if tx_date.month == target_month:
+                pass  # already correct (day was > 12 so unambiguous)
+            elif tx_date.day == target_month and 1 <= tx_date.month <= 31:
+                # dd/mm swap case: cell=(yr, day=tx.month, month=tx.day) should be (yr, tx.month, tx.day)
+                try:
+                    tx_date = date(target_year or tx_date.year, target_month, tx_date.month)
+                except ValueError:
+                    # Invalid date after swap — skip
+                    continue
+            # else: cell's month doesn't match invoice, keep as-is (rare edge case)
+
         product = ws.cell(r, 2).value
         qty = ws.cell(r, 3).value
         if not product or not isinstance(qty, (int, float)):
@@ -227,6 +255,7 @@ def _classify_transaction(product_name: str, pdf_items: list[dict]) -> tuple[Opt
 async def upload_vending(
     site_id: int = Form(...),
     shift: str = Form("all"),  # 'all' | 'day' | 'evening'
+    invoice_month: Optional[str] = Form(None),  # 'YYYY-MM' — used to normalize ambiguous Excel dates
     invoice_pdf: UploadFile = File(None),
     consumption_xlsx: UploadFile = File(None),
     db: AsyncSession = Depends(get_db),
@@ -242,6 +271,15 @@ async def upload_vending(
         raise HTTPException(400, "Provide at least one file (PDF invoice or Excel consumption)")
     if shift not in ("all", "day", "evening"):
         raise HTTPException(400, "shift must be 'all', 'day', or 'evening'")
+
+    # Parse invoice_month hint (YYYY-MM) used to normalize ambiguous Excel dates
+    invoice_month_hint: Optional[date] = None
+    if invoice_month:
+        try:
+            parts = invoice_month.split("-")
+            invoice_month_hint = date(int(parts[0]), int(parts[1]), 1)
+        except (ValueError, IndexError):
+            raise HTTPException(400, "invoice_month must be in YYYY-MM format (e.g. 2026-02)")
 
     supplier = await _get_vending_supplier(db)
 
@@ -314,8 +352,10 @@ async def upload_vending(
     tx_priced = 0
     if consumption_xlsx and consumption_xlsx.filename:
         raw_xlsx = await consumption_xlsx.read()
+        # Fall back to the PDF invoice date as the month hint if user didn't supply one
+        month_hint = invoice_month_hint or (invoice_date.replace(day=1) if invoice_date else None)
         try:
-            txs = _parse_consumption_xlsx(raw_xlsx)
+            txs = _parse_consumption_xlsx(raw_xlsx, invoice_month=month_hint)
         except Exception as e:
             logger.exception("Failed to parse vending Excel")
             raise HTTPException(500, f"Failed to parse Excel: {e}")
@@ -383,6 +423,38 @@ async def upload_vending(
         "transactions_priced": tx_priced,
         "total_amount": proforma.total_amount if proforma else None,
     }
+
+
+@router.post("/cleanup")
+async def cleanup_bad_dates(
+    site_id: int,
+    year: int,
+    month: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete all vending transactions for a given site whose tx_date falls
+    OUTSIDE the stated (year, month). Used to recover from ambiguous-date
+    imports where days 1-12 were mis-bucketed into other months.
+
+    After cleanup, re-upload the Excel with the invoice month specified.
+    """
+    from calendar import monthrange
+    last_day = monthrange(year, month)[1]
+    start = date(year, month, 1)
+    end = date(year, month, last_day)
+
+    # Find tx for this site that are OUT of the target month
+    to_delete_q = select(VendingTransaction).where(
+        VendingTransaction.site_id == site_id,
+        (VendingTransaction.tx_date < start) | (VendingTransaction.tx_date > end),
+    )
+    to_delete = (await db.execute(to_delete_q)).scalars().all()
+    deleted = len(to_delete)
+    for t in to_delete:
+        await db.delete(t)
+    await db.commit()
+    return {"deleted": deleted, "site_id": site_id, "kept_month": f"{year}-{month:02d}"}
 
 
 @router.post("/reprice")
