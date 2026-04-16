@@ -568,6 +568,18 @@ export default function Dashboard() {
   const formatCurrency = (val: number) =>
     `₪${val.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
+  // Color per supplier+site+shift — visual scan for the Budget Progress list
+  const getBudgetRowColor = (b: any): string => {
+    const isVending = b?.supplier_name?.includes('אוטומט');
+    const isFoodHouse = b?.supplier_name?.includes('FoodHouse');
+    if (isFoodHouse && b.site_id === 1) return '#3b82f6';   // FoodHouse NZ — blue
+    if (isFoodHouse && b.site_id === 2) return '#10b981';   // FoodHouse KG — emerald
+    if (isVending && b.site_id === 1) return '#6366f1';     // מ.א NZ — indigo
+    if (isVending && b.site_id === 2 && b.shift === 'day') return '#06b6d4';     // מ.א KG Day — cyan
+    if (isVending && b.site_id === 2 && b.shift === 'evening') return '#a855f7'; // מ.א KG Night — purple
+    return '#94a3b8'; // slate fallback
+  };
+
   const getPriorityColor = (p: string) => {
     const colors: Record<string, string> = {
       urgent: 'bg-red-100 text-red-800',
@@ -1336,15 +1348,19 @@ export default function Dashboard() {
                 {budgetSummary.map((b: any, i: number) => (
                   <div
                     key={i}
-                    className="group flex items-center justify-between p-3.5 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer transition-all"
+                    className="group flex items-center justify-between p-3.5 pl-4 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer transition-all"
+                    style={{ borderLeftWidth: '4px', borderLeftColor: getBudgetRowColor(b), borderLeftStyle: 'solid' }}
                     onClick={() => openBudgetDrillDown(b.supplier_id, b.site_id, `${b.supplier_name} (${b.site_name})`, data?.proforma_year)}
                   >
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{b.supplier_name}</p>
+                      <p className="font-medium text-sm truncate" style={{ color: getBudgetRowColor(b) }}>{b.supplier_name}</p>
                       <p className="text-xs text-muted-foreground">
                         {b.site_name}
                         {b.shift && b.shift !== 'all' && (
-                          <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium">
+                          <span
+                            className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full border font-medium"
+                            style={{ backgroundColor: `${getBudgetRowColor(b)}1a`, color: getBudgetRowColor(b), borderColor: `${getBudgetRowColor(b)}40` }}
+                          >
                             {b.shift === 'evening' ? 'Evening' : b.shift === 'day' ? 'Day' : b.shift}
                           </span>
                         )}
@@ -1382,16 +1398,22 @@ export default function Dashboard() {
                         className="flex items-center justify-between py-1.5 cursor-pointer hover:bg-amber-100/50 rounded px-2 -mx-2 transition-colors"
                         onClick={() => openBudgetDrillDown(b.supplier_id, b.site_id, `${b.supplier_name} (${b.site_name})`, data?.proforma_year)}
                       >
-                        <div>
-                          <p className="text-sm font-medium">{b.supplier_name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {b.site_name}
-                            {b.shift && b.shift !== 'all' && (
-                              <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-amber-100 text-amber-800 border border-amber-300 font-medium">
-                                {b.shift === 'evening' ? 'Evening' : b.shift === 'day' ? 'Day' : b.shift}
-                              </span>
-                            )}
-                          </p>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-1 h-8 rounded-full flex-shrink-0" style={{ backgroundColor: getBudgetRowColor(b) }} />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate" style={{ color: getBudgetRowColor(b) }}>{b.supplier_name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {b.site_name}
+                              {b.shift && b.shift !== 'all' && (
+                                <span
+                                  className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full border font-medium"
+                                  style={{ backgroundColor: `${getBudgetRowColor(b)}1a`, color: getBudgetRowColor(b), borderColor: `${getBudgetRowColor(b)}40` }}
+                                >
+                                  {b.shift === 'evening' ? 'Evening' : b.shift === 'day' ? 'Day' : b.shift}
+                                </span>
+                              )}
+                            </p>
+                          </div>
                         </div>
                         <p className="text-sm font-semibold tabular-nums">{formatCurrency(b.monthly_actual)}</p>
                       </div>
