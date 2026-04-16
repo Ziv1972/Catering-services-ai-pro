@@ -1576,17 +1576,36 @@ function VendingSection() {
                 </div>
               </div>
 
-              {/* Monthly trend */}
+              {/* Monthly trend — stacked by site when multiple sites present */}
               <div>
-                <h4 className="text-sm font-semibold mb-2">Monthly trend</h4>
+                <h4 className="text-sm font-semibold mb-2">
+                  Monthly trend{(data.sites_present || []).length > 1 ? ' (stacked by site)' : ''}
+                </h4>
                 <div className="h-60">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={data.monthly}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                       <XAxis dataKey="month_name" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
-                      <Tooltip formatter={(v: any, n: any) => n === 'cost' ? fmt(Number(v)) : fmtQty(Number(v))} />
-                      <Bar dataKey="qty" fill="#6366f1" name="Qty" radius={[3, 3, 0, 0]} />
+                      <Tooltip formatter={(v: any, n: any) => [fmtQty(Number(v)), String(n).replace('qty_', '')]} />
+                      <Legend wrapperStyle={{ fontSize: '11px' }} />
+                      {(data.sites_present || []).length > 1 ? (
+                        (data.sites_present || []).map((siteName: string, i: number) => {
+                          const colors: Record<string, string> = { 'Nes Ziona': '#6366f1', 'Kiryat Gat': '#06b6d4' };
+                          return (
+                            <Bar
+                              key={siteName}
+                              dataKey={`qty_${siteName}`}
+                              stackId="sites"
+                              fill={colors[siteName] || PRODUCT_COLORS[i % PRODUCT_COLORS.length]}
+                              name={siteName}
+                              radius={i === (data.sites_present.length - 1) ? [3, 3, 0, 0] : [0, 0, 0, 0]}
+                            />
+                          );
+                        })
+                      ) : (
+                        <Bar dataKey="qty" fill="#6366f1" name="Qty" radius={[3, 3, 0, 0]} />
+                      )}
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

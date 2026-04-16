@@ -636,16 +636,25 @@ async def vending_analytics(
 
     top_products = sorted(by_product.values(), key=lambda x: x["qty"], reverse=True)[:25]
 
-    # Monthly trend
+    # Monthly trend — also broken down by site for stacked-by-site chart
+    SITE_NAMES = {1: "Nes Ziona", 2: "Kiryat Gat"}
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     monthly: dict[int, dict] = {m: {"month": m, "month_name": month_names[m - 1], "qty": 0, "cost": 0} for m in range(1, 13)}
+    sites_seen: set = set()
     for r in rows:
         if not r.tx_date:
             continue
         m = r.tx_date.month
         monthly[m]["qty"] += float(r.quantity or 0)
         monthly[m]["cost"] += float(r.total_price or 0) if r.total_price else 0
+        # Per-site breakdown for stacked chart
+        site_label = SITE_NAMES.get(r.site_id, f"Site {r.site_id}")
+        sites_seen.add(site_label)
+        site_qty_key = f"qty_{site_label}"
+        site_cost_key = f"cost_{site_label}"
+        monthly[m][site_qty_key] = monthly[m].get(site_qty_key, 0) + float(r.quantity or 0)
+        monthly[m][site_cost_key] = monthly[m].get(site_cost_key, 0) + (float(r.total_price or 0) if r.total_price else 0)
 
     # Per machine (only if machines present)
     by_machine: dict[str, dict] = {}
@@ -672,10 +681,12 @@ async def vending_analytics(
             for p in top_products
         ],
         "monthly": [
-            {"month": v["month"], "month_name": v["month_name"],
-             "qty": round(v["qty"]), "cost": round(v["cost"], 2)}
+            {**{"month": v["month"], "month_name": v["month_name"],
+                "qty": round(v["qty"]), "cost": round(v["cost"], 2)},
+             **{k: round(val) for k, val in v.items() if k.startswith("qty_") or k.startswith("cost_")}}
             for v in monthly.values()
         ],
+        "sites_present": sorted(list(sites_seen)),
         "machines": [
             {"machine_id": m["machine_id"],
              "qty": round(m["qty"]), "cost": round(m["cost"], 2)}

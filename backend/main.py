@@ -383,29 +383,31 @@ async def lifespan(app: FastAPI):
             await session.flush()
             logger.info(f"Created {VENDING_NAME} supplier (id={vending.id})")
 
-        # Only seed the KG Evening row at ₪0 (user edits amount via /budget page).
-        # Existing NZ + KG budgets are left alone — user decides if KG should be
-        # split (day/evening) or kept aggregated ('all') via the Budget page.
+        # Seed KG Day + KG Evening rows at ₪0 (user edits amounts via /budget page).
+        # Vending KG actuals come in as shift='day' or shift='evening' from the
+        # invoice uploads — they need matching budget rows of the same shift.
+        # Existing NZ + KG (shift='all') budgets are left alone.
         for yr in [2025, 2026]:
-            existing = await session.execute(
-                select(SupplierBudget).where(
-                    SupplierBudget.supplier_id == vending.id,
-                    SupplierBudget.site_id == 2,
-                    SupplierBudget.year == yr,
-                    SupplierBudget.shift == "evening",
+            for shift_kind in ("day", "evening"):
+                existing = await session.execute(
+                    select(SupplierBudget).where(
+                        SupplierBudget.supplier_id == vending.id,
+                        SupplierBudget.site_id == 2,
+                        SupplierBudget.year == yr,
+                        SupplierBudget.shift == shift_kind,
+                    )
                 )
-            )
-            if not existing.scalar_one_or_none():
-                session.add(SupplierBudget(
-                    supplier_id=vending.id,
-                    site_id=2,
-                    year=yr,
-                    shift="evening",
-                    yearly_amount=0,
-                    jan=0, feb=0, mar=0, apr=0, may=0, jun=0,
-                    jul=0, aug=0, sep=0, oct=0, nov=0, dec=0,
-                    is_active=True,
-                ))
+                if not existing.scalar_one_or_none():
+                    session.add(SupplierBudget(
+                        supplier_id=vending.id,
+                        site_id=2,
+                        year=yr,
+                        shift=shift_kind,
+                        yearly_amount=0,
+                        jan=0, feb=0, mar=0, apr=0, may=0, jun=0,
+                        jul=0, aug=0, sep=0, oct=0, nov=0, dec=0,
+                        is_active=True,
+                    ))
         await session.commit()
         logger.info("מ.א אוטומטים supplier + 3 budget rows seeded")
 

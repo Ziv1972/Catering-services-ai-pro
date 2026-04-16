@@ -147,11 +147,10 @@ async def get_dashboard(
     actuals: dict[tuple, float] = {}
     for row in actual_result:
         shift = row.shift or "all"
+        # Match exactly: shift='all' budget pairs with shift='all' actuals only.
+        # Day/evening actuals appear under their own keys — if no matching budget,
+        # they surface as 'Unbudgeted' so the user knows to split the budget.
         actuals[(row.supplier_id, row.site_id, shift)] = row.total or 0
-        # Also aggregate into 'all' bucket for budgets that don't split
-        key_all = (row.supplier_id, row.site_id, "all")
-        if shift != "all":
-            actuals[key_all] = actuals.get(key_all, 0) + (row.total or 0)
 
     # YTD average as fallback
     recent_avg_result = await db.execute(
@@ -169,18 +168,12 @@ async def get_dashboard(
     for row in recent_avg_result:
         months_count = row.months or 1
         shift = row.shift or "all"
+        # Exact-shift match (no aggregation into 'all' bucket — would double-count)
         avg_actuals[(row.supplier_id, row.site_id, shift)] = {
             "ytd_total": row.total or 0,
             "monthly_avg": round((row.total or 0) / months_count),
             "months_with_data": months_count,
         }
-        # Aggregate into 'all' bucket
-        if shift != "all":
-            k = (row.supplier_id, row.site_id, "all")
-            entry = avg_actuals.get(k, {"ytd_total": 0, "monthly_avg": 0, "months_with_data": months_count})
-            entry["ytd_total"] = entry.get("ytd_total", 0) + (row.total or 0)
-            entry["monthly_avg"] = entry.get("monthly_avg", 0) + round((row.total or 0) / months_count)
-            avg_actuals[k] = entry
 
     month_col = MONTH_COLS[display_month - 1]
     budget_summary = []
