@@ -1569,7 +1569,7 @@ export default function Dashboard() {
                       try {
                         const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/proformas/reextract-kitchenette?year=${smYear}`, {
                           method: 'POST',
-                          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+                          headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
                         });
                         const data = await res.json();
                         alert(`Re-extracted ${data.total_items_saved || 0} kitchenette items from ${data.processed || 0} proformas.${data.message ? `\n\n${data.message}` : ''}`);

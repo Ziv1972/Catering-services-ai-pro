@@ -1421,7 +1421,7 @@ function VendingSection() {
       if (siteId) params.set('site_id', String(siteId));
       if (shift && shift !== 'all') params.set('shift', shift);
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/analytics?${params}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+        headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
       });
       setData(res.ok ? await res.json() : null);
     } catch {
@@ -1440,7 +1440,7 @@ function VendingSection() {
     if (siteId) params.set('site_id', String(siteId));
     if (shift && shift !== 'all') params.set('shift', shift);
     const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/product-trend?${params}`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
     });
     setProductDetail(res.ok ? await res.json() : null);
   };
@@ -1463,7 +1463,7 @@ function VendingSection() {
                   if (siteId) params.set('site_id', String(siteId));
                   const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/reprice?${params}`, {
                     method: 'POST',
-                    headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+                    headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
                   });
                   const data = await res.json().catch(() => ({}));
                   alert(`Repriced ${data.updated || 0} of ${data.scanned || 0} transactions.`);
@@ -1634,7 +1634,7 @@ function VendingUploadModal({ onClose, onUploaded }: { onClose: () => void; onUp
       if (xlsx) fd.set('consumption_xlsx', xlsx);
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/upload`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+        headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
         body: fd,
       });
       if (!res.ok) {
