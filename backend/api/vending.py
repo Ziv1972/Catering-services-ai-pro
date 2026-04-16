@@ -442,6 +442,69 @@ async def upload_vending(
     }
 
 
+@router.post("/sync-budgets")
+async def sync_budgets(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Force-create the KG day/night budget rows and deactivate the legacy
+    KG shift='all' row. Idempotent — safe to run anytime.
+
+    KG day = ₪59,214/mo, KG night = ₪62,531/mo, NZ unchanged.
+    """
+    from backend.models.supplier_budget import SupplierBudget
+    from sqlalchemy import update as sql_update
+
+    supplier = await _get_vending_supplier(db)
+
+    # Deactivate legacy KG shift='all' rows
+    await db.execute(
+        sql_update(SupplierBudget)
+        .where(
+            SupplierBudget.supplier_id == supplier.id,
+            SupplierBudget.site_id == 2,
+            SupplierBudget.shift == "all",
+        )
+        .values(is_active=False)
+    )
+
+    kg_amounts = {"day": 59214, "evening": 62531}
+    created = []
+    for yr in [2025, 2026]:
+        for shift_kind, monthly in kg_amounts.items():
+            existing = (await db.execute(
+                select(SupplierBudget).where(
+                    SupplierBudget.supplier_id == supplier.id,
+                    SupplierBudget.site_id == 2,
+                    SupplierBudget.year == yr,
+                    SupplierBudget.shift == shift_kind,
+                )
+            )).scalar_one_or_none()
+            if existing:
+                # Make sure it's active and has the right amount
+                existing.is_active = True
+                if not existing.yearly_amount or existing.yearly_amount == 0:
+                    existing.yearly_amount = monthly * 12
+                    for m in ("jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"):
+                        setattr(existing, m, monthly)
+                continue
+            db.add(SupplierBudget(
+                supplier_id=supplier.id,
+                site_id=2,
+                year=yr,
+                shift=shift_kind,
+                yearly_amount=monthly * 12,
+                jan=monthly, feb=monthly, mar=monthly,
+                apr=monthly, may=monthly, jun=monthly,
+                jul=monthly, aug=monthly, sep=monthly,
+                oct=monthly, nov=monthly, dec=monthly,
+                is_active=True,
+            ))
+            created.append({"year": yr, "shift": shift_kind, "yearly_amount": monthly * 12})
+    await db.commit()
+    return {"created": created, "kg_day_monthly": 59214, "kg_evening_monthly": 62531}
+
+
 @router.post("/strip-vat")
 async def strip_vat_from_existing(
     rate: float = 0.18,
