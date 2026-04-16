@@ -383,12 +383,26 @@ async def lifespan(app: FastAPI):
             await session.flush()
             logger.info(f"Created {VENDING_NAME} supplier (id={vending.id})")
 
-        # Seed KG Day + KG Evening rows at ₪0 (user edits amounts via /budget page).
+        # Seed KG Day + KG Evening rows with real amounts (user edits via /budget if needed).
         # Vending KG actuals come in as shift='day' or shift='evening' from the
         # invoice uploads — they need matching budget rows of the same shift.
-        # Existing NZ + KG (shift='all') budgets are left alone.
+        # KG day = ₪59,214/mo, KG evening = ₪62,531/mo.
+        # Existing NZ (shift='all') budget is left alone (it gets all NZ actuals).
+        # Legacy KG shift='all' row is deactivated below to avoid duplicate display.
+        from sqlalchemy import update as sql_update
+        await session.execute(
+            sql_update(SupplierBudget)
+            .where(
+                SupplierBudget.supplier_id == vending.id,
+                SupplierBudget.site_id == 2,
+                SupplierBudget.shift == "all",
+            )
+            .values(is_active=False)
+        )
+
+        kg_shift_amounts = {"day": 59214, "evening": 62531}
         for yr in [2025, 2026]:
-            for shift_kind in ("day", "evening"):
+            for shift_kind, monthly in kg_shift_amounts.items():
                 existing = await session.execute(
                     select(SupplierBudget).where(
                         SupplierBudget.supplier_id == vending.id,
@@ -403,9 +417,11 @@ async def lifespan(app: FastAPI):
                         site_id=2,
                         year=yr,
                         shift=shift_kind,
-                        yearly_amount=0,
-                        jan=0, feb=0, mar=0, apr=0, may=0, jun=0,
-                        jul=0, aug=0, sep=0, oct=0, nov=0, dec=0,
+                        yearly_amount=monthly * 12,
+                        jan=monthly, feb=monthly, mar=monthly,
+                        apr=monthly, may=monthly, jun=monthly,
+                        jul=monthly, aug=monthly, sep=monthly,
+                        oct=monthly, nov=monthly, dec=monthly,
                         is_active=True,
                     ))
         await session.commit()

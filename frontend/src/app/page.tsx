@@ -1384,7 +1384,14 @@ export default function Dashboard() {
                       >
                         <div>
                           <p className="text-sm font-medium">{b.supplier_name}</p>
-                          <p className="text-xs text-muted-foreground">{b.site_name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {b.site_name}
+                            {b.shift && b.shift !== 'all' && (
+                              <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-amber-100 text-amber-800 border border-amber-300 font-medium">
+                                {b.shift === 'evening' ? 'Evening' : b.shift === 'day' ? 'Day' : b.shift}
+                              </span>
+                            )}
+                          </p>
                         </div>
                         <p className="text-sm font-semibold tabular-nums">{formatCurrency(b.monthly_actual)}</p>
                       </div>

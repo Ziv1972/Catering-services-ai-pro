@@ -204,6 +204,16 @@ async def get_dashboard(
             "is_average": monthly_actual == 0 and monthly_avg > 0,
         })
 
+    # Sort budget_summary in canonical UI order:
+    #   FoodHouse NZ → FoodHouse KG → מ.א NZ → מ.א KG day → מ.א KG night
+    SUPPLIER_ORDER = {"FoodHouse": 0, "מ.א אוטומטים": 1}
+    SHIFT_ORDER = {"all": 0, "day": 1, "evening": 2}
+    budget_summary.sort(key=lambda b: (
+        SUPPLIER_ORDER.get(b["supplier_name"], 99),
+        b["site_id"] or 99,
+        SHIFT_ORDER.get(b.get("shift", "all"), 99),
+    ))
+
     # --- 2. Active Projects ---
     projects_result = await db.execute(
         select(Project)

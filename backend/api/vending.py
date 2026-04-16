@@ -148,13 +148,13 @@ def _parse_invoice_pdf(raw: bytes) -> dict:
                     })
                     total_pre_vat += total
 
-        # Find grand total (look for total incl. VAT)
-        m_total = re.search(r"ח\"ש\s+([\d,]+\.?\d*)\s+ריחמ\s+כ\"הס", full_text) or \
-                  re.search(r"([\d,]+\.?\d*)\s+ח\"ש\s+םולשתל", full_text) or \
-                  re.search(r"([\d,]+\.?\d*)\s+ח\"ש\s+לש\"חנ", full_text)
-        if m_total:
+        # Use PRE-VAT total (after discount) — invoice text "החנה ירחא ריחמ" (reversed: "ריחמ ירחא החנה")
+        # Example: "59,860.17 החנה ירחא ריחמ" → stored as 59,860.17 (not the post-VAT 70,635)
+        m_pre_vat = re.search(r"([\d,]+\.\d+)\s+החנה\s+ירחא\s+ריחמ", full_text) or \
+                    re.search(r"([\d,]+\.\d+)\s+ללוכ\s+ריחמ", full_text)
+        if m_pre_vat:
             try:
-                result["total_amount"] = float(m_total.group(1).replace(",", ""))
+                result["total_amount"] = float(m_pre_vat.group(1).replace(",", ""))
             except ValueError:
                 result["total_amount"] = total_pre_vat
         else:
@@ -440,6 +440,30 @@ async def upload_vending(
         "transactions_priced": tx_priced,
         "total_amount": proforma.total_amount if proforma else None,
     }
+
+
+@router.post("/strip-vat")
+async def strip_vat_from_existing(
+    rate: float = 0.18,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """One-shot: divide vending Proforma.total_amount by (1+rate) for invoices
+    uploaded before the pre-VAT change. Default rate 18% (Israeli VAT).
+
+    Run once after deploy if you don't want to re-upload everything.
+    """
+    supplier = await _get_vending_supplier(db)
+    proformas = (await db.execute(
+        select(Proforma).where(Proforma.supplier_id == supplier.id)
+    )).scalars().all()
+    updated = 0
+    for p in proformas:
+        if p.total_amount and p.total_amount > 0:
+            p.total_amount = round(p.total_amount / (1 + rate), 2)
+            updated += 1
+    await db.commit()
+    return {"updated": updated, "rate": rate}
 
 
 @router.post("/cleanup")
