@@ -1491,6 +1491,22 @@ function VendingSection() {
               <Button
                 variant="outline"
                 size="sm"
+                className="text-red-600 border-red-200 hover:bg-red-50"
+                onClick={async () => {
+                  if (!confirm('PURGE ALL vending data — delete every vending transaction AND every vending invoice (Proforma) across all sites and dates?')) return;
+                  if (!confirm('Final confirm — this is irreversible. Proceed?')) return;
+                  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vending/clear?purge_all=true&include_invoices=true`, {
+                    method: 'DELETE',
+                    headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  alert(`Purged ${data.transactions_deleted || 0} transactions and ${data.invoices_deleted || 0} invoices.`);
+                  load();
+                }}
+              >Purge all</Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={async () => {
                   const params = new URLSearchParams({ year: String(year) });
                   if (siteId) params.set('site_id', String(siteId));

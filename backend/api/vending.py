@@ -464,30 +464,32 @@ async def clear_vending_data(
     month: Optional[int] = None,
     shift: Optional[str] = None,
     include_invoices: bool = False,
+    purge_all: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Delete vending transactions by filter. Destructive — requires explicit filters.
+    """Delete vending transactions by filter.
 
-    - site_id: restrict to one site
-    - year/month: restrict to that period (uses tx_date)
-    - shift: restrict to 'day' | 'evening' | 'all'
-    - include_invoices: also delete matching Proformas (+ their ProformaItems)
+    - site_id / year / month / shift: narrow scope (AND-combined)
+    - include_invoices: also delete matching Proformas (+ ProformaItems)
+    - purge_all: nuclear reset — delete every vending tx and every vending proforma
+      (requires explicit purge_all=true, otherwise at least one filter is required)
     """
-    if site_id is None and year is None and month is None and shift is None:
-        raise HTTPException(400, "Refusing to clear without at least one filter (site_id/year/month/shift)")
+    if not purge_all and site_id is None and year is None and month is None and shift is None:
+        raise HTTPException(400, "Refusing to clear without filters. Set purge_all=true for full reset.")
 
     supplier = await _get_vending_supplier(db)
 
     tx_q = select(VendingTransaction)
-    if site_id is not None:
-        tx_q = tx_q.where(VendingTransaction.site_id == site_id)
-    if year is not None:
-        tx_q = tx_q.where(year_equals(VendingTransaction.tx_date, year))
-    if month is not None:
-        tx_q = tx_q.where(month_equals(VendingTransaction.tx_date, month))
-    if shift is not None:
-        tx_q = tx_q.where(VendingTransaction.shift == shift)
+    if not purge_all:
+        if site_id is not None:
+            tx_q = tx_q.where(VendingTransaction.site_id == site_id)
+        if year is not None:
+            tx_q = tx_q.where(year_equals(VendingTransaction.tx_date, year))
+        if month is not None:
+            tx_q = tx_q.where(month_equals(VendingTransaction.tx_date, month))
+        if shift is not None:
+            tx_q = tx_q.where(VendingTransaction.shift == shift)
 
     txs = (await db.execute(tx_q)).scalars().all()
     tx_count = len(txs)
@@ -495,16 +497,17 @@ async def clear_vending_data(
         await db.delete(t)
 
     inv_count = 0
-    if include_invoices:
+    if include_invoices or purge_all:
         p_q = select(Proforma).where(Proforma.supplier_id == supplier.id)
-        if site_id is not None:
-            p_q = p_q.where(Proforma.site_id == site_id)
-        if year is not None:
-            p_q = p_q.where(year_equals(Proforma.invoice_date, year))
-        if month is not None:
-            p_q = p_q.where(month_equals(Proforma.invoice_date, month))
-        if shift is not None:
-            p_q = p_q.where(Proforma.shift == shift)
+        if not purge_all:
+            if site_id is not None:
+                p_q = p_q.where(Proforma.site_id == site_id)
+            if year is not None:
+                p_q = p_q.where(year_equals(Proforma.invoice_date, year))
+            if month is not None:
+                p_q = p_q.where(month_equals(Proforma.invoice_date, month))
+            if shift is not None:
+                p_q = p_q.where(Proforma.shift == shift)
 
         proformas = (await db.execute(p_q)).scalars().all()
         for p in proformas:
@@ -516,6 +519,7 @@ async def clear_vending_data(
     return {
         "transactions_deleted": tx_count,
         "invoices_deleted": inv_count,
+        "purge_all": purge_all,
         "filters": {"site_id": site_id, "year": year, "month": month, "shift": shift, "include_invoices": include_invoices},
     }
 
