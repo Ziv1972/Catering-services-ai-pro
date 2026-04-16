@@ -196,29 +196,46 @@ def _parse_consumption_xlsx(
     target_month = invoice_month.month if invoice_month else None
     target_year = invoice_month.year if invoice_month else None
 
+    def _parse_cell_date(val) -> Optional[date]:
+        """Convert a date cell (datetime, date, or string) into a date. Returns None if unparseable."""
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val.date()
+        if isinstance(val, date):
+            return val
+        if isinstance(val, str):
+            s = val.strip()
+            if not s:
+                return None
+            # Try common formats — the Excel mixes datetime (days 1-12) with
+            # strings like "2/15/2026" (mm/dd/yyyy US) for days 13-28
+            for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%m/%d/%y", "%d/%m/%y", "%d.%m.%Y", "%d.%m.%y"):
+                try:
+                    return datetime.strptime(s, fmt).date()
+                except ValueError:
+                    continue
+        return None
+
     for r in range(2, ws.max_row + 1):
-        d = ws.cell(r, 1).value
-        if d is None:
-            continue
-        if isinstance(d, datetime):
-            tx_date = d.date()
-        elif isinstance(d, date):
-            tx_date = d
-        else:
+        raw = ws.cell(r, 1).value
+        tx_date = _parse_cell_date(raw)
+        if tx_date is None:
             continue
 
         # Normalize ambiguous date if we have an invoice month
         if target_month is not None:
             if tx_date.month == target_month:
-                pass  # already correct (day was > 12 so unambiguous)
+                pass  # already correct (day was > 12 so unambiguous, OR string date was already correct)
             elif tx_date.day == target_month and 1 <= tx_date.month <= 31:
                 # dd/mm swap case: cell=(yr, day=tx.month, month=tx.day) should be (yr, tx.month, tx.day)
                 try:
                     tx_date = date(target_year or tx_date.year, target_month, tx_date.month)
                 except ValueError:
-                    # Invalid date after swap — skip
                     continue
-            # else: cell's month doesn't match invoice, keep as-is (rare edge case)
+            else:
+                # Date doesn't match invoice month even after swap — skip to avoid spill-over
+                continue
 
         product = ws.cell(r, 2).value
         qty = ws.cell(r, 3).value
