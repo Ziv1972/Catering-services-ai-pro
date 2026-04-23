@@ -1890,7 +1890,40 @@ CRITICAL RULES:
    - "לפחות פעם בשבוע" = at least {total_days} ÷ 5 per month
 4. If expected=0, the item is OPTIONAL — skip it (do not include in results)
 5. shortage = expected - actual (positive = missing/חוסר, negative = surplus/עודף)
-6. Group names MUST be one of: מיוחדים, סלטים, עוף, בקר, מנות גריל, דגים, קינוחים
+6. OUTPUT FORMAT — קבוצה (column A) MUST be a HEBREW value, never an English DB code. Map the rule's DB category to one of: מיוחדים, סלטים, עוף, בקר, מנות גריל, דגים, קינוחים, חריגים. Mapping table:
+   - daily_structure → מיוחדים
+   - daily_mandatory → choose by rule name: דג*→דגים, עוף/שניצל/חזה עוף/פרגית→עוף, בקר/בריסקט/אסאדו→בקר, סלט→סלטים, עוגת/קינוח/פירות→קינוחים, otherwise→מיוחדים
+   - weekly_frequency / monthly_frequency → choose by rule name (same logic)
+   - prohibition → חריגים
+   The Hebrew מיוחדים group (column A=מיוחדים) is also where structural rules live (min 2 soups/day, 11 salads/day, etc.).
+6a. FREQUENCY TEXT (column C) MUST always be populated. If the rule's parameters.frequency_text is empty, EXTRACT it from the rule name. Examples:
+   - rule name "שניצל 5 פעמים בשבוע" → frequency_text "5 פעמים בשבוע"
+   - rule name "פירה 4 פעמים בחודש" → frequency_text "4 פעמים בחודש"
+   - rule name "מנת דג יומית" or any "*יומי*" → frequency_text "כל יום"
+   - rule name "מינימום 2 סוגי מרק ביום" → frequency_text "כל יום (2/יום)"
+   - rule name "אין אותו מרק פעמיים בשבוע" → frequency_text "מקסימום פעם בשבוע"
+6b. POSITION-BASED COUNTING for daily rules. The menu is given to you with row category labels in [brackets] preserving menu structure. USE these labels:
+   - "פחמימה מלאה ביום" → count days where the [פחמימה מלאה] row has any item (NOT keyword search across all rows)
+   - "קטנייה ביום" → count days where the [קיטניה] / [קטניות] row has any item
+   - "מנת דג יומית" → count days where the [בריאות מנת דג] row has any item
+   - "מנה טבעונית יומית" → count days where the [בריאות מנה טבעונית] row has any item (vegan dishes include שווארמה טבעונית, המבורגר טבעוני, טופו, סטייק טופו, מוקפץ טופו, קציצות סלק, חומוס בליווי טחון סויה, צ'ילי קונקרנה טבעוני)
+   - "מנת בקר יומית" → count days where ANY row contains a beef dish (usually [עמדת אוכל רחוב] or [עמדת שף])
+   - "שניצל יומי" / "שניצל 5 פעמים בשבוע" → count days where the [ציפסר] row has a שניצל item — but EXCLUDE שניצלוני הבית/שניצלונים/שניצלון (those are unapproved)
+   - "חזה עוף בגריל" / "גריל יומי" → count days where the [עמדת גריל 2] row has חזה עוף
+   - "מינימום 2 סוגי מרק ביום" → count days where [מרק היום] row has ≥2 distinct soups
+   - "מינימום 11 סוגי סלטים ביום" → count days where the union of [סלט מורכב 1-11] + [בר בריא*] rows has ≥11 distinct salads
+   - "קרוטונים יומיים" / "שקדי מרק יומיים" → count days where [תוספות למרק] row contains the item
+   - "סלט פירות / פירות חתוכים" → count days where [סלט פירות*] row has any item
+6c. SITE FILTERING — when checking site_name="קרית גת" (KG), SKIP these NZ-only rules entirely (do NOT include them in output): מינימום 4 סוגי ירקות אנטיפסטי, מסאחן פרגית, קציצות עוף ברוטב חמוסטה, מאפה בקר וחציל שרוף, סינייה אסאדו, פילו במילוי בקר מפורק, כנאפה אסאדו. The dish דפי פילו ממולא בשר מפורק IS the substitute for כנאפה אסאדו (count it for NZ only).
+6d. CUT NUMBER ENFORCEMENT — for these rules, count ONLY items with explicit "מספר X" / "מס X" / "מס' X" cut number:
+   - "עוף שלם" / "עופות שלמים" → must say מס' 2 / מספר 2 (not just "רבעי עוף")
+   - "בריסקט" → must say מס' 3 or מס' 10. NOTE: חזה בקר = בריסקט (same cut, count both)
+   - "צלי כתף" → must say מס' 5 or מס' 6 (both accepted)
+   - "בשר ראש" → must say מס' 4 or מס' 10
+6e. EQUIVALENCE — count interchangeably:
+   - מושט = אמנון (same fish — count both toward "פילה אמנון")
+   - חזה בקר = בריסקט (same cut)
+   - דפי פילו ממולא בשר מפורק = כנאפה אסאדו substitute (NZ only)
 7. ANOMALY DETECTION — also flag these issues as separate חריגים rows (group="חריגים", expected=0, actual=0):
    - Vague dish names like "מנת דג", "מנת בשר", "מנת עוף" — the supplier MUST specify the exact dish. Flag: "שם מנה לא מדויק - הספק צריך לפרט"
    - Same dish appearing on CONSECUTIVE days — ONLY flag if the dish name is clearly the SAME dish (identical or near-identical name, same protein/ingredient). E.g. "פילה לברק" on Apr 1 AND Apr 2 = flag. "פילה לברק" on Apr 1 and "מסאחן פרגית" on Apr 2 = NOT the same dish, do NOT flag. Each consecutive-day anomaly must list only the matched items for THAT specific dish. Create a SEPARATE anomaly row for each dish with consecutive repeats. Flag: "מנה חוזרת ימים רצופים"
@@ -1899,7 +1932,8 @@ CRITICAL RULES:
    - More than 1 פרגית dish on the same day (any of: פרגית צרפתית, פרגית במילוי, פרגית צלויה/בגריל, סטייק פרגית, מסאחן פרגית, מוקפץ פרגית, שיפודי פרגית, קציצות פרגית, שווארמה פרגית). Flag: "שתי מנות פרגית באותו יום — לא מאושר"
    - More than 1 dish from the SAME primary protein on the same day (general rule). Proteins to track: סלמון, אמנון, לברק, אסאדו, בריסקט, חזה בקר, חזה עוף, בשר ראש. Flag: "שתי מנות מאותו חומ\"ג באותו יום"
    - בקר/בשר dish WITHOUT a cut number. Beef cuts (בקר, בריסקט, חזה בקר, אסאדו, בשר צלי, בשר גולש, בשר ראש, לשון, בשר מפורק, שווארמה בקר, קציצות בקר, בורקס בשר, פילו בשר, סמבוסק בשר, פסטל בשר) MUST contain "מספר X" or "מס X" or "מס' X" (where X is a digit). Examples that PASS: "בשר צלי מספר 6", "חזה בקר מס 3", "בשר ראש מספר 10". Examples that FAIL and must be flagged: "בשר מפורק", "בורקס בשר", "קציצות בקר ברוטב עגבניות", "אסאדו בפריסה" (without מספר). Flag: "מנת בקר ללא ציון מספר נתח — חובה לציין מספר נתח". Create one anomaly row per offending dish, with that dish's date(s) in found_dates and the dish text in matched_items.
-   - Any appearance of שניצלוני הבית / שניצלונים / שניצלון. Flag: "מנה לא מאושרת — שניצלונים אינם תחליף לשניצל". List all offending dates and items.
+   - Any appearance of שניצלוני הבית / שניצלונים / שניצלון. Flag: "מנה לא מאושרת — שניצלונים אינם תחליף לשניצל". List all offending dates and items. CRITICAL: NEVER count שניצלוני/שניצלון items toward ANY שניצל rule (שניצל יומי, שניצל 5 פעמים בשבוע, שניצל בהכנה מקומית) — they are unapproved across all schnitzel requirements.
+   - Ground meat anomaly הערות column MUST list the violation date(s) (e.g. "14.5: המבורגר + בורקס בשר"). Same for פרגית/protein/duplicate anomalies — always include the date in הערות so the user can locate the violation.
 8. SUBSTITUTION & COUNTING RULES (from compliance report notes):
    • "שווארמה פרגית" is an APPROVED substitute for "שווארמה הודו ירך נקבה" (NZ) — count it as fulfilling that requirement and add note "הוגשה שווארמה פרגית כתחליף להודו"
    • "אנטריקוט" is an APPROVED substitute for "סטייק סינטה" — count it and note "הוגש אנטריקוט כתחליף לסינטה"
@@ -2016,20 +2050,24 @@ async def run_ai_compliance_check(
         rules_lines.append(line)
     rules_table = "\n".join(rules_lines)
 
-    # Build compact daily menu text
+    # Build daily menu text — PRESERVE row category labels (פחמימה מלאה,
+    # ציפסר, בריאות מנת דג, סלט מורכב, etc.) so position-based rules can
+    # work. Without this, Claude can't tell whether "קציצות בקר" is in the
+    # protein row vs. a salad row.
     menu_lines = []
     for day in days:
         items = day.menu_items or {}
-        all_items = []
-        for category, item_list in items.items():
-            if isinstance(item_list, list):
-                for item in item_list:
-                    item_str = str(item).strip()
-                    if item_str and len(item_str) >= 3:
-                        all_items.append(item_str)
         date_str = day.date.isoformat() if day.date else ""
         dow = day.day_of_week or ""
-        menu_lines.append(f"{date_str} ({dow}): {', '.join(all_items)}")
+        menu_lines.append(f"=== {date_str} ({dow}) ===")
+        for category, item_list in items.items():
+            cat_label = str(category).strip() if category else "אחר"
+            if isinstance(item_list, list):
+                clean = [str(it).strip() for it in item_list if str(it).strip() and len(str(it).strip()) >= 3]
+                if clean:
+                    menu_lines.append(f"  [{cat_label}] {' | '.join(clean)}")
+            elif isinstance(item_list, str) and item_list.strip():
+                menu_lines.append(f"  [{cat_label}] {item_list.strip()}")
     menu_text = "\n".join(menu_lines)
 
     month_name = HEBREW_MONTHS.get(check.month, str(check.month))
