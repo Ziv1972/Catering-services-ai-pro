@@ -446,7 +446,11 @@ def _extract_days_from_excel_columns(
                             pass
                         continue
 
-                if len(found_dates) >= 2:
+                if len(found_dates) >= 1:
+                    # Accept single-date rows too — handles weekly sheets that
+                    # contain only one populated day (e.g. a Sunday-only sheet
+                    # with May 31 in column B). Without this, the entire sheet
+                    # is silently dropped from the compliance check.
                     date_row_idx = row_idx
                     day_col_indices = [f[0] for f in found_dates]
                     day_dates = [f[1] for f in found_dates]
@@ -1843,7 +1847,8 @@ CRITICAL RULES:
 2. Use intelligent Hebrew matching — the menu often uses different names for the same dish:
    • "בשר צלי מס 5" or "צלי כתף" or "בשר צלי מספר 6" = "צלי כתף מספר 5/6"
    • "נסיכה בחריימה" or "נסיכה ברוטב חריימה" or "דג חריימה" = "חריימה של נסיכה"
-   • "שניצלוני הבית" or "שניצל מקסיקני" or "שניצל פריך" = counts as "שניצל בהכנה מקומית"
+   • "שניצל מקסיקני" or "שניצל פריך" = counts as "שניצל בהכנה מקומית"
+   • IMPORTANT: "שניצלוני הבית" / "שניצלונים" / "שניצלון" do NOT count toward "שניצל בהכנה מקומית" — they are unapproved (see anomalies)
    • "פרגית על הגריל" or "פרגית ממולאה" or "פרגית במרינדה" = "פרגית צרפתית"
    • "סטייק פרגית" = separate from "פרגית צרפתית" — count each independently
    • "רבעי עוף" or "עופות טבית" or "עוף בגריל מסתובב" = "עופות שלמים"
@@ -1886,11 +1891,15 @@ CRITICAL RULES:
 4. If expected=0, the item is OPTIONAL — skip it (do not include in results)
 5. shortage = expected - actual (positive = missing/חוסר, negative = surplus/עודף)
 6. Group names MUST be one of: מיוחדים, סלטים, עוף, בקר, מנות גריל, דגים, קינוחים
-7. ANOMALY DETECTION — also flag these issues in the notes:
+7. ANOMALY DETECTION — also flag these issues as separate חריגים rows (group="חריגים", expected=0, actual=0):
    - Vague dish names like "מנת דג", "מנת בשר", "מנת עוף" — the supplier MUST specify the exact dish. Flag: "שם מנה לא מדויק - הספק צריך לפרט"
    - Same dish appearing on CONSECUTIVE days — ONLY flag if the dish name is clearly the SAME dish (identical or near-identical name, same protein/ingredient). E.g. "פילה לברק" on Apr 1 AND Apr 2 = flag. "פילה לברק" on Apr 1 and "מסאחן פרגית" on Apr 2 = NOT the same dish, do NOT flag. Each consecutive-day anomaly must list only the matched items for THAT specific dish. Create a SEPARATE anomaly row for each dish with consecutive repeats. Flag: "מנה חוזרת ימים רצופים"
    - Same dish appearing TWICE on the same day. Flag: "מנה כפולה באותו יום"
-   - More than 1 ground-meat dish (בשר טחון: קציצות, המבורגר, קבב) on the same day. Flag: "יותר ממנת בשר טחון אחת ביום"
+   - More than 1 ground-meat dish on the same day. בשר טחון includes: קציצות, המבורגר, קבב, בורקס בשר, פסטל בשר, סמבוסק בשר, פילו ממולא בשר, פילו בשר מפורק, מפרום בשר, קובה בשר, ראוויולי בשר. Flag: "יותר ממנת בשר טחון אחת ביום". Include all problematic items for that day in matched_items, set found_dates to that single date.
+   - More than 1 פרגית dish on the same day (any of: פרגית צרפתית, פרגית במילוי, פרגית צלויה/בגריל, סטייק פרגית, מסאחן פרגית, מוקפץ פרגית, שיפודי פרגית, קציצות פרגית, שווארמה פרגית). Flag: "שתי מנות פרגית באותו יום — לא מאושר"
+   - More than 1 dish from the SAME primary protein on the same day (general rule). Proteins to track: סלמון, אמנון, לברק, אסאדו, בריסקט, חזה בקר, חזה עוף, בשר ראש. Flag: "שתי מנות מאותו חומ\"ג באותו יום"
+   - בקר/בשר dish WITHOUT a cut number. Beef cuts (בקר, בריסקט, חזה בקר, אסאדו, בשר צלי, בשר גולש, בשר ראש, לשון, בשר מפורק, שווארמה בקר, קציצות בקר, בורקס בשר, פילו בשר, סמבוסק בשר, פסטל בשר) MUST contain "מספר X" or "מס X" or "מס' X" (where X is a digit). Examples that PASS: "בשר צלי מספר 6", "חזה בקר מס 3", "בשר ראש מספר 10". Examples that FAIL and must be flagged: "בשר מפורק", "בורקס בשר", "קציצות בקר ברוטב עגבניות", "אסאדו בפריסה" (without מספר). Flag: "מנת בקר ללא ציון מספר נתח — חובה לציין מספר נתח". Create one anomaly row per offending dish, with that dish's date(s) in found_dates and the dish text in matched_items.
+   - Any appearance of שניצלוני הבית / שניצלונים / שניצלון. Flag: "מנה לא מאושרת — שניצלונים אינם תחליף לשניצל". List all offending dates and items.
 8. SUBSTITUTION & COUNTING RULES (from compliance report notes):
    • "שווארמה פרגית" is an APPROVED substitute for "שווארמה הודו ירך נקבה" (NZ) — count it as fulfilling that requirement and add note "הוגשה שווארמה פרגית כתחליף להודו"
    • "אנטריקוט" is an APPROVED substitute for "סטייק סינטה" — count it and note "הוגש אנטריקוט כתחליף לסינטה"
