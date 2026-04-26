@@ -32,16 +32,37 @@ class ClaudeService:
         max_tokens: Optional[int] = None
     ) -> str:
         """
-        Generate a response from Claude
+        Generate a response from Claude.
+
+        Uses streaming automatically when max_tokens is large enough that the
+        Anthropic SDK would refuse a non-streaming call (>10 min potential).
+        Threshold: 21333 tokens for Sonnet 4.5 (per anthropic SDK guard).
         """
         if not self._available or self.client is None:
             raise RuntimeError("AI service not configured: ANTHROPIC_API_KEY is not set")
 
         messages = [{"role": "user", "content": prompt}]
+        effective_max = max_tokens or self.max_tokens
 
+        # Streaming path — required for high max_tokens to avoid SDK refusal.
+        # Threshold ~21K is what the SDK uses as the long-request cutoff.
+        if effective_max >= 16384:
+            chunks: list[str] = []
+            async with self.client.messages.stream(
+                model=self.model,
+                max_tokens=effective_max,
+                temperature=temperature,
+                system=system_prompt if system_prompt else "",
+                messages=messages,
+            ) as stream:
+                async for text in stream.text_stream:
+                    chunks.append(text)
+            return "".join(chunks)
+
+        # Non-streaming path for normal-sized requests
         response = await self.client.messages.create(
             model=self.model,
-            max_tokens=max_tokens or self.max_tokens,
+            max_tokens=effective_max,
             temperature=temperature,
             system=system_prompt if system_prompt else "",
             messages=messages
