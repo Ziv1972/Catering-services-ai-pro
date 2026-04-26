@@ -2032,23 +2032,89 @@ async def run_ai_compliance_check(
     )
     rules = rules_result.scalars().all()
 
-    # Build compact rules table with frequency info
+    # ---- Translate DB category codes → Hebrew קבוצה BEFORE sending to Claude ----
+    # The DB stores English category codes (daily_structure, daily_mandatory,
+    # weekly_frequency, monthly_frequency, prohibition). The output report
+    # MUST use Hebrew קבוצה values matching the V24/V25 format. We translate
+    # here so Claude only ever sees Hebrew categories and echoes them back.
+    HEB_GROUP_BY_KEYWORD = [
+        # Order matters — first match wins. Keywords searched in rule name.
+        ("דג", "דגים"),
+        ("סלמון", "דגים"), ("אמנון", "דגים"), ("מושט", "דגים"),
+        ("לברק", "דגים"), ("חריימה", "דגים"), ("פיש", "דגים"),
+        ("שניצל", "עוף"), ("עוף", "עוף"), ("פרגית", "עוף"),
+        ("הודו", "עוף"), ("חזה עוף", "עוף"), ("גריל יומי", "עוף"),
+        ("בקר", "בקר"), ("בריסקט", "בקר"), ("אסאדו", "בקר"),
+        ("צלי", "בקר"), ("בשר ראש", "בקר"), ("המבורגר", "בקר"),
+        ("שווארמה", "מנות גריל"), ("סינטה", "מנות גריל"), ("אנטריקוט", "מנות גריל"),
+        ("נקניקיות", "מנות גריל"),
+        ("סלט", "סלטים"), ("טאבולה", "סלטים"), ("אבוקדו", "סלטים"),
+        ("קיסר", "סלטים"), ("ארטישוק", "סלטים"), ("ירקות חמים", "סלטים"),
+        ("פטריות", "סלטים"),
+        ("עוגה", "קינוחים"), ("עוגת", "קינוחים"), ("פירות", "קינוחים"),
+        ("קינוח", "קינוחים"),
+    ]
+
+    def _hebrew_group(rule_name: str, db_category: str) -> str:
+        if db_category == "prohibition":
+            return "חריגים"
+        for kw, heb in HEB_GROUP_BY_KEYWORD:
+            if kw in rule_name:
+                return heb
+        return "מיוחדים"  # default for daily_structure/daily_mandatory/etc.
+
+    def _extract_freq_text(rule_name: str, db_freq_text: str) -> str:
+        """Extract Hebrew frequency text from rule name when DB freq_text is empty."""
+        if db_freq_text:
+            return db_freq_text
+        import re as _re
+        # Common patterns in rule names
+        m = _re.search(r"(\d+\s*פעמים?\s*ב(שבוע|חודש))", rule_name)
+        if m:
+            return m.group(1)
+        m = _re.search(r"(פעם\s*ב(שבוע|חודש|רבעון))", rule_name)
+        if m:
+            return m.group(1)
+        if "יומי" in rule_name or "יומית" in rule_name or "יומיים" in rule_name or "ביום" in rule_name:
+            return "כל יום"
+        if "מקסימום" in rule_name:
+            return rule_name.split("מקסימום", 1)[1].strip() if "מקסימום" in rule_name else ""
+        return ""
+
+    # Site filter: NZ-only rules excluded from KG
+    NZ_ONLY_KEYWORDS = [
+        "אנטיפסטי", "מסאחן", "חמוסטה", "מאפה בקר",
+        "סינייה אסאדו", "כנאפה אסאדו", "פילו במילוי בקר",
+        "ויאטנמי", "ווקאמה", "סלק ותפוח",
+    ]
+
+    # Build compact rules table with TRANSLATED Hebrew categories
     rules_lines = []
+    skipped_nz_only = 0
     for r in rules:
-        cat = r.category or ""
         params = r.parameters or {}
-        freq_text = params.get("frequency_text", "")
+        freq_text = _extract_freq_text(r.name, params.get("frequency_text", ""))
         expected = params.get("count") or params.get("min_count") or params.get("expected", "")
         desc = r.description or ""
-        line = f"- [{cat}] {r.name}"
+
+        # Skip NZ-only rules when checking KG
+        if site_name and ("קרית גת" in site_name or site_name.upper() == "KG"):
+            if any(nz_kw in r.name for nz_kw in NZ_ONLY_KEYWORDS):
+                skipped_nz_only += 1
+                continue
+
+        heb_cat = _hebrew_group(r.name, r.category or "")
+        line = f"- [{heb_cat}] {r.name}"
         if freq_text:
             line += f" | {freq_text}"
         if expected:
             line += f" | expected: {expected}"
-        if desc and desc != r.name:
+        if desc and desc != r.name and desc != f"{params.get('frequency_text', '')} — {r.name}":
             line += f" | {desc}"
         rules_lines.append(line)
     rules_table = "\n".join(rules_lines)
+    if skipped_nz_only:
+        logger.info(f"AI compliance: skipped {skipped_nz_only} NZ-only rules for {site_name}")
 
     # Build daily menu text — PRESERVE row category labels (פחמימה מלאה,
     # ציפסר, בריאות מנת דג, סלט מורכב, etc.) so position-based rules can
@@ -2148,6 +2214,17 @@ async def run_ai_compliance_check(
         ai_results = ai_results.get("results", []) if isinstance(ai_results, dict) else []
 
     logger.info(f"AI compliance check returned {len(ai_results)} items")
+
+    # ---- Guarantee Hebrew קבוצה + frequency_text on every result ----
+    # Defensive: even if Claude returned an English code, force Hebrew
+    # mapping using the same lookup used to build the rules table.
+    HEB_GROUPS = {"מיוחדים", "סלטים", "עוף", "בקר", "מנות גריל", "דגים", "קינוחים", "חריגים"}
+    for _r in ai_results:
+        _grp = _r.get("group", "") or ""
+        if _grp not in HEB_GROUPS:
+            _r["group"] = _hebrew_group(_r.get("dish", ""), _grp)
+        if not _r.get("frequency_text"):
+            _r["frequency_text"] = _extract_freq_text(_r.get("dish", ""), "")
 
     # ---------------------------------------------------------------------------
     # Fallback: populate matched_items from MenuDay records when Claude omits them
