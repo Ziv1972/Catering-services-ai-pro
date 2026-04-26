@@ -2,10 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# No apt-get system packages needed — all our pip dependencies have
+# manylinux pre-built wheels (psycopg2-binary, bcrypt, cryptography, etc.).
+# The previous `apt-get install build-essential` was failing intermittently
+# on Debian mirror network errors and was unnecessary.
 
 # Copy requirements first for caching
 COPY requirements.txt .
