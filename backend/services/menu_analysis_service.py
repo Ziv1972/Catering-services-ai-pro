@@ -1867,7 +1867,7 @@ CRITICAL RULES:
    • "שווארמה פרגית" = normally separate from "שווארמה הודו" BUT for NZ site: שווארמה פרגית is an APPROVED substitute for "שווארמה הודו ירך נקבה" — count it and note "הוגשה שווארמה פרגית כתחליף להודו"
    • "סלט קיסר" or "קיסר סלט" = "סלט קיסר"
    • "פיצוחים וירוקים" = look for items with nuts/seeds and greens
-   • "סלט אבוקדו" = any salad with avocado as main ingredient
+   • "סלט אבוקדו" — count any item containing "אבוקדו" appearing in a [סלט מורכב N] / [בר בריא*] row (the menu often abbreviates to just "אבוקדו"). Same principle for ALL salad rules: if a [סלט מורכב N] row contains the keyword (e.g. "ארטישוק", "קיסר", "קינואה", "טבולה", "פטריות אסייתי", "וואקמה", "עגבניות איטלקי"), it counts. Short single-word items in salad rows are still salads.
    • "טבולה" or "בורגול" = "סלט טבולה בורגול"
    • "פיש אנד צ'יפס" or "פיש & צ'יפס" or "דג מטוגן עם צ'יפס" = "פיש & צ'יפס"
    • "קציצות דגים" or "קציצות דג" = "קציצות דגים ביתיות"
@@ -1902,18 +1902,39 @@ CRITICAL RULES:
    - rule name "מנת דג יומית" or any "*יומי*" → frequency_text "כל יום"
    - rule name "מינימום 2 סוגי מרק ביום" → frequency_text "כל יום (2/יום)"
    - rule name "אין אותו מרק פעמיים בשבוע" → frequency_text "מקסימום פעם בשבוע"
-6b. POSITION-BASED COUNTING for daily rules. The menu is given to you with row category labels in [brackets] preserving menu structure. USE these labels:
-   - "פחמימה מלאה ביום" → count days where the [פחמימה מלאה] row has any item (NOT keyword search across all rows)
-   - "קטנייה ביום" → count days where the [קיטניה] / [קטניות] row has any item
-   - "מנת דג יומית" → count days where the [בריאות מנת דג] row has any item
-   - "מנה טבעונית יומית" → count days where the [בריאות מנה טבעונית] row has any item (vegan dishes include שווארמה טבעונית, המבורגר טבעוני, טופו, סטייק טופו, מוקפץ טופו, קציצות סלק, חומוס בליווי טחון סויה, צ'ילי קונקרנה טבעוני)
-   - "מנת בקר יומית" → count days where ANY row contains a beef dish (usually [עמדת אוכל רחוב] or [עמדת שף])
-   - "שניצל יומי" / "שניצל 5 פעמים בשבוע" → count days where the [ציפסר] row has a שניצל item — but EXCLUDE שניצלוני הבית/שניצלונים/שניצלון (those are unapproved)
-   - "חזה עוף בגריל" / "גריל יומי" → count days where the [עמדת גריל 2] row has חזה עוף
-   - "מינימום 2 סוגי מרק ביום" → count days where [מרק היום] row has ≥2 distinct soups
-   - "מינימום 11 סוגי סלטים ביום" → count days where the union of [סלט מורכב 1-11] + [בר בריא*] rows has ≥11 distinct salads
-   - "קרוטונים יומיים" / "שקדי מרק יומיים" → count days where [תוספות למרק] row contains the item
-   - "סלט פירות / פירות חתוכים" → count days where [סלט פירות*] row has any item
+6b. POSITION-BASED COUNTING — CRITICAL RULE. The menu is given to you with row category labels in [brackets]. For EVERY rule below, you MUST count ONLY items in the listed [row labels]. Do NOT keyword-search across the whole day. Do NOT count items embedded inside protein dish names (e.g. "פרגית צלויה בגריל לצד סלט עגבניות חריף" is ONE protein dish in [עמדת גריל] — the "סלט עגבניות חריף" inside it does NOT count toward the salad rule). Do NOT count vegetables embedded inside beef dishes (e.g. "בשר גולש מס 10 עם ירקות" is ONE beef dish, not a vegetable serving).
+
+   Daily rules — strict row-only matching:
+   - "פחמימה מלאה ביום" → ONLY count from [פחמימה מלאה] row. expected = total_days, count = number of days where this row is non-empty
+   - "קטנייה ביום" → ONLY count from [קיטניה] / [קטניות] row
+   - "מנת דג יומית" → ONLY count from [בריאות מנת דג] / [מנת דג*] rows. Every working day this row will have a fish item — expected = total_days, count = total_days
+   - "מנה טבעונית יומית" → ONLY count from [בריאות מנה טבעונית] / [מנה טבעונית*] rows. Vegan dishes include שווארמה טבעונית, המבורגר טבעוני, טופו, סטייק טופו, מוקפץ טופו, קציצות סלק, חומוס בליווי טחון סויה, צ'ילי קונקרנה טבעוני. expected = total_days
+   - "מנת בקר יומית" → ANY row containing a beef dish (usually [עמדת אוכל רחוב] / [עמדת שף] / [עמדה משתנה]). Beef = בקר/בריסקט/חזה בקר/אסאדו/בשר/קבב/קציצות בקר/בורקס בשר/פילו בשר/מפרום
+   - "שניצל יומי" / "שניצל 5 פעמים בשבוע" → ONLY [ציפסר] row. EXCLUDE שניצלוני הבית/שניצלונים/שניצלון
+   - "חזה עוף בגריל 5 פעמים בשבוע" / "גריל יומי" → ONLY [עמדת גריל 2] row containing חזה עוף. Every day will match — expected = total_days
+   - "קרוטונים יומיים" / "שקדי מרק יומיים" / "אטריות מרק 2 פעמים בשבוע" → ONLY [תוספות למרק] row
+   - "מרק צח/ירקות יומי" → ONLY [מרק היום] / [מרק*] rows. Count days where at least one soup is מרק צח or מרק ירקות
+   - "מינימום 2 סוגי מרק ביום" → ONLY [מרק היום] / [מרק*] rows — count days with ≥2 distinct soup names
+   - "מינימום 11 סוגי סלטים ביום" → ONLY [סלט מורכב 1] through [סלט מורכב 11] + [בר בריא*] rows — count days with ≥11 distinct salads. NEVER count salad words appearing inside protein dish names.
+   - "סלט פירות / פירות חתוכים" → ONLY [סלט פירות*] / [סלט פירות או פרי*] row
+   - "עמדת אוכל רחוב 5 פעמים בשבוע" → ONLY [עמדת אוכל רחוב] row — count days where it's non-empty
+   - "כבד עוף עם בצל ופטריות על פירה" → ONLY [עמדת אוכל רחוב] / [עמדה משתנה] containing כבד עוף
+   - "סלמון פעם בשבוע" / "פילה סלמון" → [בריאות מנת דג] / [עמדת שף] / [עמדה משתנה] containing סלמון
+   - "פילה אמנון" → [בריאות מנת דג] containing אמנון or מושט (synonyms)
+   - "פילה לברק" → [בריאות מנת דג] containing לברק
+   - "חריימה של נסיכה" → [בריאות מנת דג] containing חריימה or נסיכה
+   - "קציצות דגים ביתיות" → ONLY [בריאות מנת דג] containing קציצות דג. NEVER count "קציצות בקר" / "קציצות פרגית" / "קציצות סלק" toward fish dish rule.
+   - "פיש & ציפס" → [בריאות מנת דג] containing פיש
+   - Salad-frequency rules (סלט אבוקדו, סלט עגבניות איטלקי, סלט עגבניות חריף, סלט קיסר, סלט ארטישוק, סלט קינואה, טאבולה בורגול, סלט פטריות, סלט עשבי תיבול ופיצוחים, סלט וואקמה) → ONLY [סלט מורכב N] / [בר בריא*] rows. The salad must be a STANDALONE row item, NOT mentioned as a side served alongside a protein. Example: "פרגית צלויה בגריל לצד סלט עגבניות חריף" appearing in [עמדת גריל] row is a פרגית dish — does NOT count toward "סלט עגבניות חריף" requirement.
+   - "אסאדו 3 פעמים בחודש" → count any [row] containing אסאדו, INCLUDING shredded versions: אסאדו מפורק / בשר אסאדו / רצועות אסאדו / סינייה אסאדו / פילו ממולא בשר אסאדו all count toward אסאדו (target 3-3.5/month)
+   - "בריסקט 2 פעמים בחודש" → count any [row] containing בריסקט or חזה בקר (same cut)
+   - "צלי כתף" → count any [row] containing "בשר צלי" with cut number מס' 5 or מס' 6
+   - "בשר ראש" → count any [row] containing בשר ראש with cut number מס' 4 or מס' 10. NOTE: "בשר גולש" is a separate cut, NOT בשר ראש unless explicitly named
+   - "המבורגר ביתי" → ONLY [עמדת אוכל רחוב] / [עמדת שף] containing המבורגר. Do NOT count "המבורגר טבעוני" (that's vegan).
+   - "שווארמה פעם בשבוע" → count days with שווארמה הודו / שווארמה פרגית. Do NOT count שווארמה דג / שווארמה טבעוני (different protein) toward שווארמה הודו requirement.
+   - "סטייק פרגית פעם בשבוע" → ONLY [עמדת אוכל רחוב] / [עמדת גריל*] containing סטייק פרגית / שיפודי פרגית / קציצות פרגית / מסאחן פרגית / מוקפץ פרגית / פרגית צלויה
+   - "עוגת שמרים/עוגת קראנץ' 4 פעמים בחודש" → ONLY count items containing "עוגת שמרים" or "קראנץ'" (typically every Thursday). Do NOT count עוגת סולת / עוגת גזר / etc.
+   - "עוגה מסוגים שונים" / variety check → count distinct cake names in [קינוח עוגה] row across the month — must be ≥ 5 distinct varieties
 6c. SITE FILTERING — when checking site_name="קרית גת" (KG), SKIP these NZ-only rules entirely (do NOT include them in output): מינימום 4 סוגי ירקות אנטיפסטי, מסאחן פרגית, קציצות עוף ברוטב חמוסטה, מאפה בקר וחציל שרוף, סינייה אסאדו, פילו במילוי בקר מפורק, כנאפה אסאדו. The dish דפי פילו ממולא בשר מפורק IS the substitute for כנאפה אסאדו (count it for NZ only).
 6d. CUT NUMBER ENFORCEMENT — for these rules, count ONLY items with explicit "מספר X" / "מס X" / "מס' X" cut number:
    - "עוף שלם" / "עופות שלמים" → must say מס' 2 / מספר 2 (not just "רבעי עוף")
@@ -1934,6 +1955,9 @@ CRITICAL RULES:
    - בקר/בשר dish WITHOUT a cut number. Beef cuts (בקר, בריסקט, חזה בקר, אסאדו, בשר צלי, בשר גולש, בשר ראש, לשון, בשר מפורק, שווארמה בקר, קציצות בקר, בורקס בשר, פילו בשר, סמבוסק בשר, פסטל בשר) MUST contain "מספר X" or "מס X" or "מס' X" (where X is a digit). Examples that PASS: "בשר צלי מספר 6", "חזה בקר מס 3", "בשר ראש מספר 10". Examples that FAIL and must be flagged: "בשר מפורק", "בורקס בשר", "קציצות בקר ברוטב עגבניות", "אסאדו בפריסה" (without מספר). Flag: "מנת בקר ללא ציון מספר נתח — חובה לציין מספר נתח". Create one anomaly row per offending dish, with that dish's date(s) in found_dates and the dish text in matched_items.
    - Any appearance of שניצלוני הבית / שניצלונים / שניצלון. Flag: "מנה לא מאושרת — שניצלונים אינם תחליף לשניצל". List all offending dates and items. CRITICAL: NEVER count שניצלוני/שניצלון items toward ANY שניצל rule (שניצל יומי, שניצל 5 פעמים בשבוע, שניצל בהכנה מקומית) — they are unapproved across all schnitzel requirements.
    - Ground meat anomaly הערות column MUST list the violation date(s) (e.g. "14.5: המבורגר + בורקס בשר"). Same for פרגית/protein/duplicate anomalies — always include the date in הערות so the user can locate the violation.
+   - Same salad appearing in TWO different [סלט מורכב N] rows on the same day. Flag: "סלט כפול באותו יום". Include date.
+   - Same exact item appearing on consecutive days (any row). Flag: "מנה חוזרת ימים רצופים". This applies to non-protein items too: a salad named identically on Mon and Tue, a soup named identically on Wed and Thu, etc. Include both dates and the item.
+   - Same soup type (excluding מרק צח) appearing TWICE in one week. Flag: "אותו מרק פעמיים בשבוע". Include both dates and the soup name.
 8. SUBSTITUTION & COUNTING RULES (from compliance report notes):
    • "שווארמה פרגית" is an APPROVED substitute for "שווארמה הודו ירך נקבה" (NZ) — count it as fulfilling that requirement and add note "הוגשה שווארמה פרגית כתחליף להודו"
    • "אנטריקוט" is an APPROVED substitute for "סטייק סינטה" — count it and note "הוגש אנטריקוט כתחליף לסינטה"
@@ -2149,8 +2173,9 @@ async def run_ai_compliance_check(
     )
 
     logger.info(
-        f"AI compliance check: {len(rules)} rules, {len(days)} days, "
-        f"prompt ~{len(prompt)} chars"
+        f"AI compliance check [v3-row-strict]: {len(rules)} rules "
+        f"(skipped {skipped_nz_only} NZ-only for {site_name}), "
+        f"{len(days)} days, prompt ~{len(prompt)} chars"
     )
 
     # Call Claude — use generate_response directly so our detailed schema
