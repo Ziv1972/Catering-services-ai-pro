@@ -1035,6 +1035,12 @@ async def run_compliance_check(
         logger.warning(f"AI compliance check failed, falling back to rule-based: {e}")
 
     # --- Fallback: rule-based check (if AI unavailable) ---
+    # Defense-in-depth: even when AI fails, output should still have Hebrew
+    # קבוצה in column A and frequency_text in column C (V24/V25 format).
+    logger.warning(
+        "AI compliance failed — using rule-based fallback. "
+        "Output will use Hebrew translation but may miss intelligent matching."
+    )
     catalog_result = await db.execute(
         select(DishCatalog).where(DishCatalog.category.isnot(None))
     )
@@ -1048,6 +1054,45 @@ async def run_compliance_check(
 
     check_results = _evaluate_rules(rules, days_data, catalog_map=catalog_map)
 
+    # Hebrew translation lookups (mirrors what AI path does — applied so
+    # fallback output has correct V24/V25 format regardless of which path runs).
+    _FB_HEB_GROUPS = [
+        ("דג", "דגים"), ("סלמון", "דגים"), ("אמנון", "דגים"), ("מושט", "דגים"),
+        ("לברק", "דגים"), ("חריימה", "דגים"), ("פיש", "דגים"),
+        ("שניצל", "עוף"), ("עוף", "עוף"), ("פרגית", "עוף"),
+        ("הודו", "עוף"), ("חזה עוף", "עוף"),
+        ("בקר", "בקר"), ("בריסקט", "בקר"), ("אסאדו", "בקר"),
+        ("צלי", "בקר"), ("בשר ראש", "בקר"), ("המבורגר", "בקר"),
+        ("שווארמה", "מנות גריל"), ("סינטה", "מנות גריל"), ("נקניקיות", "מנות גריל"),
+        ("סלט", "סלטים"), ("טאבולה", "סלטים"), ("אבוקדו", "סלטים"),
+        ("קיסר", "סלטים"), ("ארטישוק", "סלטים"), ("פטריות", "סלטים"),
+        ("עוגה", "קינוחים"), ("עוגת", "קינוחים"), ("פירות", "קינוחים"),
+        ("קינוח", "קינוחים"),
+    ]
+    _FB_HEB_GROUPS_SET = {"מיוחדים", "סלטים", "עוף", "בקר", "מנות גריל", "דגים", "קינוחים", "חריגים"}
+    def _fb_translate_cat(name: str, db_cat: str) -> str:
+        if db_cat in _FB_HEB_GROUPS_SET:
+            return db_cat
+        if db_cat == "prohibition":
+            return "חריגים"
+        for kw, heb in _FB_HEB_GROUPS:
+            if kw in (name or ""):
+                return heb
+        return "מיוחדים"
+    import re as _fb_re
+    def _fb_extract_freq(name: str, existing: str) -> str:
+        if existing:
+            return existing
+        m = _fb_re.search(r"(\d+\s*פעמים?\s*ב(שבוע|חודש))", name or "")
+        if m:
+            return m.group(1)
+        m = _fb_re.search(r"(פעם\s*ב(שבוע|חודש|רבעון))", name or "")
+        if m:
+            return m.group(1)
+        if any(k in (name or "") for k in ("יומי", "יומית", "יומיים", "ביום")):
+            return "כל יום"
+        return ""
+
     critical_count = 0
     warning_count = 0
     passed_count = 0
@@ -1059,10 +1104,16 @@ async def run_compliance_check(
         evidence = cr.get("evidence") or {}
         if cr.get("rule_id"):
             evidence = {**evidence, "rule_id": cr["rule_id"]}
+        # Force Hebrew קבוצה in column A (V24/V25 format) even on fallback
+        rule_name = cr["rule_name"]
+        heb_cat = _fb_translate_cat(rule_name, cr.get("rule_category") or "")
+        # Ensure frequency_text in evidence (column C)
+        if not evidence.get("frequency_text"):
+            evidence = {**evidence, "frequency_text": _fb_extract_freq(rule_name, "")}
         result_obj = CheckResult(
             menu_check_id=check.id,
-            rule_name=cr["rule_name"],
-            rule_category=cr.get("rule_category"),
+            rule_name=rule_name,
+            rule_category=heb_cat,
             passed=cr["passed"],
             severity=cr["severity"],
             finding_text=cr.get("finding_text"),
@@ -2179,15 +2230,19 @@ async def run_ai_compliance_check(
     )
 
     # Call Claude — use generate_response directly so our detailed schema
-    # instructions in the prompt are not overridden by a second schema append
+    # instructions in the prompt are not overridden by a second schema append.
+    # max_tokens bumped to 32768 — previous 16384 caused truncation mid-JSON
+    # when 50+ rules each had long matched_items lists, triggering silent
+    # fallback to rule-based check (which doesn't apply Hebrew translation).
     raw_response = await claude_service.generate_response(
         prompt=prompt,
         system_prompt=(
             "You are a precise menu compliance auditor. "
             "Return ONLY a valid JSON array — no markdown, no code blocks, no extra text. "
-            "ALWAYS populate matched_items with the exact menu text for every item you counted."
+            "Populate matched_items with exact menu text but cap at MAX 10 items per rule "
+            "(if more than 10 days match, pick the first 10 representative entries)."
         ),
-        max_tokens=16384,
+        max_tokens=32768,
     )
 
     # Extract the outermost JSON array from the response.
