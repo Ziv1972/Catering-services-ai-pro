@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir aiosqlite
 
 # Copy backend code
 COPY backend/ ./backend/
-COPY scripts/ ./scripts/
+# scripts/ are dev-only utilities (migrations, exports) — not needed at runtime.
+# Removed to unblock Railway builds that were failing on cache-key mismatch.
 
 # Create uploads directories
 RUN mkdir -p uploads/menus uploads/attachments
