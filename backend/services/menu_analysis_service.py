@@ -1928,7 +1928,18 @@ CRITICAL RULES:
    • "בריסקט" or "חזה בקר" = "בריסקט" (same cut, different names)
    • "סלט קינואה" is NOT "אטריות מרק" — these are completely different dishes
    • "פרגית צרפתית" counts ONLY as פרגית צרפתית — NOT as סטייק פרגית (they are separate dishes)
-   • "שווארמה" counts ONLY as שווארמה — "שווארמה בבאגט" or "שווארמה בלאפה" = still שווארמה
+   • "שווארמה" counts ONLY as שווארמה — "שווארמה בבאגט" or "שווארמה בלאפה" or "שיפוד שווארמה" = still שווארמה. EXCLUDE "מסאחן פרגית קצוצה" — that is a SEPARATE dish, do NOT count toward שווארמה rule.
+   • "המבורגר ביתי" rule — count ONLY items where "המבורגר" is the primary dish (e.g. "המבורגר בלחמנייה", "המבורגר שולץ"). EXCLUDE sausage/hotdog station items: "נקניקיות", "צוריסוס", "מרגז", "קנקרס", "צ'וריסו" — those are different dishes even if served on a bun.
+   • "אסאדו צלוי באיטיות" rule (NZ) — count ONLY whole-cut אסאדו preparations like "אסאדו בפריסה", "אסאדו 9", "אסאדו ברוטב", "אסאדו צלוי". EXCLUDE shredded/wrapped/composite versions: "סינייה אסאדו", "כנאפה אסאדו", "אושפלו אסאדו", "טורטיה ממולאת אסאדו", "באן אסאדו מפורק", "אסאדו מפורק" — those are SEPARATE dishes that count toward their own rules (סינייה אסאדו, כנאפה אסאדו substitutes).
+   • "סטייק סינטה" (NZ) — APPROVED substitutes: אנטריקוט, חזה בקר (with cut number), בריסקט. When any of these is served, count toward סטייק סינטה rule and add note "הוגש [name] כתחליף לסינטה".
+   • "סינייה אסאדו" / "כנאפה אסאדו" (NZ) — APPROVED substitutes: בקלאוות בשר, "כנאפה אסאדו מפורק", "סינייה אסאדו טחינה ועגבניות", "טורטיה ממולאת אסאדו מפורק". When any appears, count and note substitution.
+   • "טבית" / "טבית עופות צלויים" (NZ) — APPROVED substitute: מקלובה. Count מקלובה toward טבית rule.
+   • "כרע עוף ממולא באורז" (NZ) — APPROVED substitute: "פרגית ממולאת אורז וירקות" / "פרגית ממולאת אורז". Count these toward כרע עוף ממולא rule (REVISED: previously these were excluded).
+   • Cut number recognition — accept ALL these formats as valid cut number specification:
+       "מספר X", "מס X", "מס. X", "מס' X", "(X)", "X" inside parentheses
+     Examples that PASS: "בשר ראש (4)", "בשר ראש מספר 10", "צלי כתף (5)", "אסאדו 9 בפריסה", "מאפה בשר (7)"
+   • "קינוח ללא סוכר" rule — count items in [קינוח ללא סוכר*] row that contain: "עוגיות", "עוגיות מכונה", "פרי", "תה צמחים". The dessert is no-sugar by category, not by name.
+   • "קינוח כוס" / "קינוח בכוס" rule — count items in [קינוח בכוס*] row containing: "מעדן", "סופלה", "קרמבו", "מוס", "פנקוטה", "ג'לי", "מלאבי", "קרם ברולה" — any cup-style dessert.
 3. Frequency conversion (IMPORTANT — use {total_days} working days for this month):
    - "פעם בשבוע" = {total_days} ÷ 5 (rounded) per month (NOT always 4!)
    - "פעמיים בשבוע" = ({total_days} ÷ 5) × 2 per month
