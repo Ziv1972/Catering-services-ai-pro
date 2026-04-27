@@ -1893,6 +1893,31 @@ AI_COMPLIANCE_CHECK_PROMPT = """You are a menu compliance checker for HP Israel 
 
 Your job: compare CONTRACT REQUIREMENTS against the ACTUAL MENU and count how many times each required dish appears.
 
+RULE KEYWORD EXPANSION TABLE — when evaluating each of these rules, count items containing ANY of the listed keywords. Same item CAN count toward multiple rules.
+
+| Rule name (when seen in CONTRACT REQUIREMENTS) | Accepted keywords (search ALL these in menu items) |
+|------------------------------------------------|----------------------------------------------------|
+| סטייק סינטה | סינטה, אנטריקוט, חזה בקר (any context), בריסקט (any context, with or without cut #) |
+| קציצות פרגית | קציצות פרגית, מסאחן פרגית, מסחאן פרגית, מוקפץ פרגית, שיפודי פרגית, שיפוד שווארמה פרגית |
+| סטייק פרגית | סטייק פרגית, שיפודי פרגית, פרגית בגריל (only when prepared as steak/skewers) |
+| מסאחן פרגית | מסאחן פרגית, מסחאן פרגית |
+| כרע עוף ממולא באורז | כרע עוף ממולא, כרעיים ממולאות, פרגית ממולאת אורז (NZ approved substitute) |
+| טבית עופות צלויים | טבית, מקלובה (NZ approved substitute) |
+| בריסקט | בריסקט, חזה בקר |
+| פילה אמנון | אמנון, מושט, נסיכת הנילוס (when in fish row) |
+| חריימה של נסיכה | נסיכה, חריימה, בורי |
+| כנאפה אסאדו | כנאפה אסאדו, כנאפה אסאדו מפורק |
+| סינייה אסאדו | סינייה אסאדו, בקלאוות בשר, טורטיה ממולאת אסאדו, אושפלו אסאדו |
+| אסאדו צלוי באיטיות | אסאדו בפריסה, בשר אסאדו בפריסה, אסאדו בגריל, אסאדו ברוטב, אסאדו 9, אסאדו צלוי. EXCLUDE: סינייה אסאדו, כנאפה אסאדו, טורטיה ממולאת אסאדו, אושפלו אסאדו, באן אסאדו מפורק (those count toward their own rules) |
+| המבורגר ביתי | המבורגר (any) — EXCLUDE: נקניקיות, צוריסוס, מרגז, קנקרס, צ'וריסו, המבורגר טבעוני |
+| שווארמה הודו ירך נקבה | שווארמה הודו, שווארמה פרגית, שיפוד שווארמה פרגית, שווארמה בלאפה, שווארמה בבאגט. EXCLUDE: שווארמה דג, שווארמה טבעוני, מסאחן/מסחאן (different dishes) |
+| שוברי שגרה | day where menu has ethnic theme: יום עיראקי, יום מרוקאי, יום תורכי, יום טריפוליטאי, יום אסייתי, מטבח אסייתי, מטבח [any], עמדת לחמג'ון, עמדת טריפוליטא, עמדה תורכית, יום [ethnic-name] |
+| ימים מיוחדים | day with special-event keyword: יום העצמאות, פורים, חנוכה, פסח, שבועות, ראש השנה, יום כיפור, סוכות, ל"ג בעומר, יום הזיכרון, שף אורח, אירוע מיוחד |
+| קינוח ללא סוכר | items containing: עוגיות, עוגיות מכונה, פרי, תה צמחים — count by category not name |
+| קינוח בכוס / קינוח כוס קרמבו | items containing: מעדן (any), סופלה, קרמבו, מוס, פנקוטה, ג'לי, מלאבי, קרם ברולה |
+
+When a CONTRACT REQUIREMENT name matches a row in the table, USE THE ACCEPTED KEYWORDS — do not narrowly literal-match the rule name.
+
 CRITICAL RULES:
 1. Count unique DAYS a dish appears (not portions per day)
 2. Use intelligent Hebrew matching — the menu often uses different names for the same dish:
@@ -2316,6 +2341,67 @@ async def run_ai_compliance_check(
             _r["group"] = _hebrew_group(_r.get("dish", ""), _grp)
         if not _r.get("frequency_text"):
             _r["frequency_text"] = _extract_freq_text(_r.get("dish", ""), "")
+
+    # ---- Substitution backfill (deterministic safety net) ----
+    # Some rules accept substitutes that Claude often misses. We re-scan the
+    # menu deterministically and ENRICH the AI result if it under-counted.
+    # This guarantees core substitution rules from compliance_rules.md fire.
+    SUBSTITUTION_RULES = {
+        # rule_name_substring → (list of accepted keywords, exclude_keywords)
+        "סטייק סינטה":      (["סינטה", "אנטריקוט", "חזה בקר", "בריסקט"], []),
+        "קציצות פרגית":     (["קציצות פרגית", "מסאחן פרגית", "מסחאן פרגית", "מוקפץ פרגית", "שיפודי פרגית", "שיפוד שווארמה פרגית"], []),
+        "טבית":             (["טבית", "מקלובה"], []),
+        "כרע עוף ממולא":    (["כרע עוף ממולא", "כרעיים ממולאות", "פרגית ממולאת אורז"], []),
+        "סינייה אסאדו":     (["סינייה אסאדו", "בקלאוות בשר", "טורטיה ממולאת אסאדו", "אושפלו אסאדו"], []),
+        "כנאפה אסאדו":      (["כנאפה אסאדו"], []),
+        "שוברי שגרה":       (["יום עיראקי", "יום מרוקאי", "יום תורכי", "יום טריפוליטא", "יום אסייתי", "מטבח אסייתי", "עמדת לחמג'ון", "עמדת טריפוליטא"], ["סלט"]),
+        "ימים מיוחדים":     (["יום העצמאות", "פורים", "חנוכה", "פסח", "שבועות", "ראש השנה", "יום כיפור", "סוכות", "ל\"ג בעומר", "יום הזיכרון", "שף אורח", "אירוע מיוחד"], []),
+    }
+
+    # Build per-day flat items (preserving row category labels)
+    _day_rows: dict[str, dict[str, list[str]]] = {}
+    for _day in days:
+        _dk = _day.date.isoformat() if _day.date else ""
+        _day_rows[_dk] = _day.menu_items or {}
+
+    def _menu_items_matching(keywords: list[str], excludes: list[str]) -> list[tuple[str, str, str]]:
+        """Return [(date, row_label, item)] where item contains any keyword and no exclude."""
+        out = []
+        for d, rows in _day_rows.items():
+            day_hits: list[tuple[str, str, str]] = []
+            for cat, items in rows.items():
+                if not isinstance(items, list):
+                    continue
+                for it in items:
+                    s = str(it)
+                    if excludes and any(x in s for x in excludes):
+                        continue
+                    if any(kw in s for kw in keywords):
+                        day_hits.append((d, cat, s))
+                        break
+                if day_hits and day_hits[-1][0] == d:
+                    break
+            out.extend(day_hits)
+        return out
+
+    for _r in ai_results:
+        dish_name = _r.get("dish", "")
+        for rule_kw, (kws, excludes) in SUBSTITUTION_RULES.items():
+            if rule_kw not in dish_name:
+                continue
+            backfill = _menu_items_matching(kws, excludes)
+            backfill_dates = sorted(set(d for d, _, _ in backfill))
+            backfill_count = len(backfill_dates)
+            ai_actual = _r.get("actual", 0) or 0
+            if backfill_count > ai_actual:
+                old_actual = ai_actual
+                _r["actual"] = backfill_count
+                _r["found_dates"] = backfill_dates[:20]
+                _r["matched_items"] = list(set(it for _, _, it in backfill))[:10]
+                _r["shortage"] = (_r.get("expected", 0) or 0) - backfill_count
+                _r["notes"] = (_r.get("notes") or "") + f" [backfill: {old_actual}→{backfill_count} via substitute keywords]"
+                logger.info(f"Substitution backfill: '{dish_name}' {old_actual}→{backfill_count}")
+            break
 
     # ---------------------------------------------------------------------------
     # Fallback: populate matched_items from MenuDay records when Claude omits them
