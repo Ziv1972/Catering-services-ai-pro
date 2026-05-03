@@ -102,30 +102,37 @@ def _parse_invoice_pdf(raw: bytes) -> dict:
                 except ValueError:
                     pass
 
-        # Extract line items from tables
+        # Extract line items from tables.
+        # Confirmed table layout (consistent for both 2025 and 2026 invoices):
+        #   col 0: total          e.g. "5,144.88"
+        #   col 1: unit_price     e.g. 'ח"ש 5.82'   (NIS prefix + price)
+        #   col 2: quantity       e.g. "'חי 884.00" (יח' prefix + qty)
+        #   col 3: product_desc   e.g. '1.25 תג תירק-םינטק םיכירכ' or 'הניטב'ג'
+        #          (reversed Hebrew; may be prefixed with a "<MM.YY> " or numeric filler)
+        #   col 4: SKU            e.g. "000" (placeholder, ignored)
+        #   col 5: line_no
+        # The previous version mistakenly read qty from col 3 — it was finding the
+        # "1.25" filler instead of the real quantity, and using col 4 ("000") as the
+        # product name. This block fixes column positions so all formats work.
         total_pre_vat = 0.0
         for page in pdf.pages:
             for table in page.extract_tables() or []:
                 for row in table:
                     if not row or len(row) < 4:
                         continue
-                    # Row pattern: [total, unit_price, delivery_balance, quantity, product_desc, barcode, sku, line_no]
                     cells = [str(c or "").strip() for c in row]
-                    # Must have numeric total in col 0, unit price in col 1
                     try:
-                        total_str = cells[0].replace(",", "")
-                        total = float(total_str)
+                        total = float(cells[0].replace(",", ""))
                     except (ValueError, IndexError):
                         continue
-                    unit_str_m = re.search(r"([\d,]+\.?\d*)", cells[1] if len(cells) > 1 else "")
-                    if not unit_str_m:
+                    unit_m = re.search(r"(-?[\d,]+\.?\d*)", cells[1] if len(cells) > 1 else "")
+                    if not unit_m:
                         continue
                     try:
-                        unit_price = float(unit_str_m.group(1).replace(",", ""))
+                        unit_price = float(unit_m.group(1).replace(",", ""))
                     except ValueError:
                         continue
-                    # Quantity is in col 3, stripped of units
-                    qty_m = re.search(r"([-\d,]+\.?\d*)", cells[3] if len(cells) > 3 else "")
+                    qty_m = re.search(r"(-?[\d,]+\.?\d*)", cells[2] if len(cells) > 2 else "")
                     if not qty_m:
                         continue
                     try:
@@ -134,12 +141,13 @@ def _parse_invoice_pdf(raw: bytes) -> dict:
                         continue
                     if quantity == 0:
                         continue
-                    # Product description (reversed Hebrew)
-                    desc_raw = cells[4] if len(cells) > 4 else ""
+                    # Product description: strip any leading "<number> " filler
+                    # (the 2025 invoices prepend "1.25 " or "MM.YY " before the product name)
+                    desc_raw = cells[3] if len(cells) > 3 else ""
+                    desc_raw = re.sub(r"^[\d.,]+\s+", "", desc_raw).strip()
                     desc = _reverse_hebrew_if_rtl(desc_raw).strip()
                     if not desc:
                         continue
-                    # Skip credit/refund rows (negative totals) — keep them for accuracy
                     result["items"].append({
                         "category": desc,
                         "quantity": quantity,
@@ -161,6 +169,107 @@ def _parse_invoice_pdf(raw: bytes) -> dict:
             result["total_amount"] = total_pre_vat
 
     return result
+
+
+def _detect_xlsx_format(ws) -> str:
+    """Probe the header row to decide which parser to use.
+
+    Returns:
+        '2025'  — 7-col format with SKU at col B and monthly aggregate at cols F+G
+                  (header pattern: ת.התעודה|מק"ט|תאור מוצר|כמות|<blank>|שם המוצר|כמות חודשית שסופקה)
+        '2026'  — 6-col format with per-day data at cols A+B+C
+                  (header pattern: ת.התעודה|תאור מוצר|כמות|<blank>|שם המוצר|כמות חודשית שסופקה)
+    """
+    h_b = str(ws.cell(1, 2).value or "").strip()
+    # 2025 has a SKU column at B labelled מק"ט. 2026's col B is the product description.
+    if "מק" in h_b and "ט" in h_b:
+        return "2025"
+    return "2026"
+
+
+def _parse_consumption_xlsx_2025(
+    raw: bytes,
+    invoice_month: Optional[date] = None,
+) -> tuple[list[dict], dict]:
+    """Parse 2025-format DataSheet XLSX → list of transactions.
+
+    The 2025 file is a monthly aggregate: each unique product appears once with
+    its total monthly quantity in col G. The per-machine columns (C+D) repeat
+    the same products with low refill qtys, which we ignore.
+
+    Header layout:
+      col A: ת. התעודה (date)        — typically all = 1st of invoice month
+      col B: מק"ט (SKU)
+      col C: תאור מוצר (product description per-machine perspective)
+      col D: כמות (per-machine refill qty)
+      col E: (blank)
+      col F: שם המוצר (canonical product name)         ← used for product
+      col G: כמות חודשית שסופקה (monthly total qty)    ← used for quantity
+
+    Returns (transactions, diagnostics) where diagnostics has counts of rows
+    seen / kept / skipped + sample skipped reason.
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
+    ws = wb[wb.sheetnames[0]]
+
+    # Default tx_date = first day of invoice month (or first row's date, or today)
+    base_date = invoice_month or date.today().replace(day=1)
+
+    # Patterns we treat as summary/total rows, not real products
+    TOTAL_ROW_TOKENS = ('סה"כ', 'סך הכל', 'סהכ', 'total', 'TOTAL')
+
+    seen: dict[str, dict] = {}  # product_name → {qty}
+    rows_total = 0
+    rows_kept = 0
+    rows_skipped = 0
+    skipped_samples: list[str] = []
+    for r in range(2, ws.max_row + 1):
+        product = ws.cell(r, 6).value
+        qty = ws.cell(r, 7).value
+        if not product or qty is None:
+            continue
+        rows_total += 1
+        name = str(product).strip()
+        if any(tok in name for tok in TOTAL_ROW_TOKENS):
+            rows_skipped += 1
+            if len(skipped_samples) < 3:
+                skipped_samples.append(f"row {r}: '{name}' looks like a total/summary row")
+            continue
+        if not isinstance(qty, (int, float)):
+            rows_skipped += 1
+            if len(skipped_samples) < 3:
+                skipped_samples.append(f"row {r}: qty='{qty}' not numeric")
+            continue
+        if float(qty) <= 0:
+            rows_skipped += 1
+            if len(skipped_samples) < 3:
+                skipped_samples.append(f"row {r}: qty={qty} <= 0")
+            continue
+        if name in seen:
+            # Duplicate product within file — keep first occurrence (already aggregated)
+            rows_skipped += 1
+            continue
+        seen[name] = {"quantity": float(qty)}
+        rows_kept += 1
+
+    transactions = [
+        {
+            "tx_date": base_date,
+            "product_name": name,
+            "quantity": data["quantity"],
+            "machine_id": None,
+        }
+        for name, data in seen.items()
+    ]
+    diagnostics = {
+        "format": "2025",
+        "rows_total": rows_total,
+        "rows_kept": rows_kept,
+        "rows_skipped": rows_skipped,
+        "skipped_samples": skipped_samples,
+    }
+    return transactions, diagnostics
 
 
 def _parse_consumption_xlsx(
@@ -367,12 +476,30 @@ async def upload_vending(
     # 2. Parse Excel → VendingTransactions
     tx_count = 0
     tx_priced = 0
+    excel_diagnostics: dict = {}
     if consumption_xlsx and consumption_xlsx.filename:
         raw_xlsx = await consumption_xlsx.read()
         # Fall back to the PDF invoice date as the month hint if user didn't supply one
         month_hint = invoice_month_hint or (invoice_date.replace(day=1) if invoice_date else None)
+        # Detect format by probing the header row, then dispatch
         try:
-            txs = _parse_consumption_xlsx(raw_xlsx, invoice_month=month_hint)
+            import openpyxl
+            wb_probe = openpyxl.load_workbook(io.BytesIO(raw_xlsx), data_only=True, read_only=True)
+            ws_probe = wb_probe[wb_probe.sheetnames[0]]
+            xlsx_format = _detect_xlsx_format(ws_probe)
+            wb_probe.close()
+        except Exception as e:
+            logger.exception("Failed to probe Excel format")
+            raise HTTPException(500, f"Failed to read Excel: {e}")
+
+        try:
+            if xlsx_format == "2025":
+                txs, excel_diagnostics = _parse_consumption_xlsx_2025(
+                    raw_xlsx, invoice_month=month_hint
+                )
+            else:
+                txs = _parse_consumption_xlsx(raw_xlsx, invoice_month=month_hint)
+                excel_diagnostics = {"format": "2026", "rows_kept": len(txs)}
         except Exception as e:
             logger.exception("Failed to parse vending Excel")
             raise HTTPException(500, f"Failed to parse Excel: {e}")
@@ -439,6 +566,7 @@ async def upload_vending(
         "transactions_saved": tx_count,
         "transactions_priced": tx_priced,
         "total_amount": proforma.total_amount if proforma else None,
+        "excel_diagnostics": excel_diagnostics,
     }
 
 

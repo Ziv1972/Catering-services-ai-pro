@@ -8,7 +8,7 @@ AI-native catering management system for HP Israel. Agent-driven operations acro
 
 ## Version & Deploy Policy
 
-**Current Production Version: V02** (commit `67682e3`, 2026-03-31)
+**Current Production Version: V03** (commit `79c2f82`, 2026-05-03)
 
 ### CRITICAL: Deploy only with user approval
 - **NEVER push to main or deploy without explicit user approval**
