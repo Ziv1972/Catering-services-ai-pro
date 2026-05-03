@@ -43,7 +43,8 @@ def month_equals(column, month: int):
 def month_between(column, start_month: int, end_month: int):
     """Filter: date column's month is between start and end (inclusive)."""
     if is_sqlite:
-        month_expr = cast(func.strftime("%m", column), type_=None)
-        return month_expr.between(str(start_month).zfill(2), str(end_month).zfill(2))
-    month_expr = extract("month", column)
-    return month_expr.between(start_month, end_month)
+        # strftime("%m", ...) returns a zero-padded string in SQLite; compare as strings
+        return func.strftime("%m", column).between(
+            str(start_month).zfill(2), str(end_month).zfill(2)
+        )
+    return extract("month", column).between(start_month, end_month)

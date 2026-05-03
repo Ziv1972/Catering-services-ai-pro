@@ -6,7 +6,7 @@ import {
   CalendarDays, AlertTriangle, FileText, TrendingUp,
   Utensils, Home, ClipboardCheck, Building2,
   FolderKanban, ListTodo, Wrench, DollarSign, Tag,
-  Menu, X, Bot
+  Menu, X, Bot, FileBarChart
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   { href: '/proformas', label: 'Proformas', icon: FileText },
   { href: '/violations', label: 'Violations', icon: AlertTriangle },
   { href: '/analytics', label: 'Analytics', icon: TrendingUp },
+  { href: '/reports', label: 'Reports', icon: FileBarChart },
   { href: '/agent-crew', label: 'Agent Crew', icon: Bot },
 ];
 

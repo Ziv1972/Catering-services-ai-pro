@@ -20,6 +20,7 @@ from backend.models.dish_catalog import DishCatalog
 from backend.models.meal_breakdown import MealBreakdown
 from backend.models.kitchenette_item import KitchenetteItem
 from backend.models.vending_transaction import VendingTransaction
+from backend.models.saved_report import SavedReport
 
 __all__ = [
     "User",
@@ -58,4 +59,5 @@ __all__ = [
     "MealBreakdown",
     "KitchenetteItem",
     "VendingTransaction",
+    "SavedReport",
 ]

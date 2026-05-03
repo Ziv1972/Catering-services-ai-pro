@@ -25,7 +25,7 @@ from backend.api.auth import get_password_hash
 from backend.api import auth, meetings, chat, dashboard, violations
 from backend.api import menu_compliance, proformas, historical, anomalies, webhooks, suppliers
 from backend.api import supplier_budgets, projects, maintenance, todos, price_lists, fine_rules
-from backend.api import category_analysis, attachments, dish_catalog, agent_crew, vending
+from backend.api import category_analysis, attachments, dish_catalog, agent_crew, vending, reports
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -843,6 +843,7 @@ app.include_router(attachments.router, prefix="/api/attachments", tags=["Attachm
 app.include_router(dish_catalog.router, tags=["Dish Catalog"])
 app.include_router(agent_crew.router, tags=["Agent Crew"])
 app.include_router(vending.router, tags=["Vending"])
+app.include_router(reports.router)
 
 
 @app.get("/")

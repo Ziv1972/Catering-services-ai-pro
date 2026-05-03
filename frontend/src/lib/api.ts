@@ -1008,6 +1008,119 @@ export const attachmentsAPI = {
   },
 };
 
+// Reports — unified Report Generator
+export type ReportMetric = { name: string; agg: string };
+export type ReportFilters = {
+  year?: number;
+  from_month?: number;
+  to_month?: number;
+  site_id?: number;
+  supplier_id?: number;
+  shift?: string;
+  category?: string;
+  product_name_like?: string;
+};
+export type ReportConfig = {
+  data_source: string;
+  filters: ReportFilters;
+  group_by: string[];
+  metrics: ReportMetric[];
+  chart_type: 'bar' | 'line' | 'pie' | 'stacked_bar';
+  title?: string;
+  limit?: number;
+};
+export type ReportResponse = {
+  columns: string[];
+  rows: Record<string, any>[];
+  totals: Record<string, number>;
+  chart: {
+    type: string;
+    labels: string[];
+    series: { name: string; data: number[] }[];
+  };
+  row_count: number;
+};
+export type SourceMetadata = {
+  key: string;
+  label: string;
+  label_he: string;
+  group_by_options: { key: string; label: string }[];
+  metric_options: { name: string; label: string; default_agg: string }[];
+  default_chart: string;
+};
+export type SavedReport = {
+  id: number;
+  name: string;
+  description?: string | null;
+  data_source: string;
+  config: ReportConfig;
+  created_at: string;
+  updated_at?: string | null;
+};
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+function filenameFromHeaders(headers: any, fallback: string): string {
+  const disp = headers?.['content-disposition'] || '';
+  const m = disp.match(/filename="?([^";]+)"?/);
+  return m ? m[1] : fallback;
+}
+
+export const reportsAPI = {
+  getSources: async (): Promise<{ sources: SourceMetadata[] }> => {
+    const response = await api.get('/api/reports/sources');
+    return response.data;
+  },
+  run: async (config: ReportConfig): Promise<ReportResponse> => {
+    const response = await api.post('/api/reports/run', config, { timeout: 60000 });
+    return response.data;
+  },
+  exportXlsx: async (config: ReportConfig): Promise<void> => {
+    const response = await api.post('/api/reports/export', config, {
+      responseType: 'blob',
+      timeout: 60000,
+    });
+    const filename = filenameFromHeaders(response.headers, `report_${Date.now()}.xlsx`);
+    downloadBlob(response.data, filename);
+  },
+  listSaved: async (): Promise<SavedReport[]> => {
+    const response = await api.get('/api/reports/saved');
+    return response.data;
+  },
+  createSaved: async (data: { name: string; description?: string; config: ReportConfig }): Promise<SavedReport> => {
+    const response = await api.post('/api/reports/saved', data);
+    return response.data;
+  },
+  updateSaved: async (id: number, data: { name: string; description?: string; config: ReportConfig }): Promise<SavedReport> => {
+    const response = await api.put(`/api/reports/saved/${id}`, data);
+    return response.data;
+  },
+  deleteSaved: async (id: number): Promise<void> => {
+    await api.delete(`/api/reports/saved/${id}`);
+  },
+  runSaved: async (id: number): Promise<ReportResponse> => {
+    const response = await api.post(`/api/reports/saved/${id}/run`, null, { timeout: 60000 });
+    return response.data;
+  },
+  exportSaved: async (id: number, fallbackName = 'saved_report'): Promise<void> => {
+    const response = await api.post(`/api/reports/saved/${id}/export`, null, {
+      responseType: 'blob',
+      timeout: 60000,
+    });
+    const filename = filenameFromHeaders(response.headers, `${fallbackName}.xlsx`);
+    downloadBlob(response.data, filename);
+  },
+};
+
 // Agent Crew
 export const agentCrewAPI = {
   getCrewInfo: async () => {
