@@ -814,6 +814,16 @@ async def upload_proforma(
         except Exception as e:
             logger.warning("Kitchenette extraction skipped: %s", e)
 
+    # Trigger DailyOpsMonitor scan for this proforma. Non-fatal on errors.
+    monitor_findings: list = []
+    try:
+        from backend.agents.daily_ops_monitor.agent import DailyOpsMonitorAgent
+        monitor = DailyOpsMonitorAgent()
+        mon_result = await monitor.check_proforma_upload(db, proforma_id=proforma.id)
+        monitor_findings = mon_result.get("findings", [])
+    except Exception as e:
+        logger.warning("DailyOpsMonitor failed for proforma upload (non-fatal): %s", e)
+
     return {
         "id": proforma.id,
         "supplier_id": proforma.supplier_id,
@@ -826,6 +836,7 @@ async def upload_proforma(
         "message": f"Created proforma with {items_created} items from {file.filename}",
         "meal_breakdown_extracted": meal_extracted,
         "kitchenette_items_extracted": kitchenette_count,
+        "monitor_findings": monitor_findings,
     }
 
 

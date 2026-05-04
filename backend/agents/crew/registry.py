@@ -63,6 +63,7 @@ class AgentRegistry:
         from backend.agents.event_coordination.agent import EventCoordinationAgent
         from backend.agents.dietary_compliance.agent import DietaryComplianceAgent
         from backend.agents.communication_hub.agent import CommunicationHubAgent
+        from backend.agents.daily_ops_monitor.agent import DailyOpsMonitorAgent
 
         agent_map = {
             "data_analyst": BudgetIntelligenceAgent(),
@@ -70,7 +71,7 @@ class AgentRegistry:
             "invoice_analyst": BudgetIntelligenceAgent(),
             "budget_intelligence": BudgetIntelligenceAgent(),
             "violation_intelligence": ViolationIntelligenceAgent(),
-            "daily_ops_monitor": BudgetIntelligenceAgent(),
+            "daily_ops_monitor": DailyOpsMonitorAgent(),
             "supplier_manager": BudgetIntelligenceAgent(),
             "event_coordinator": EventCoordinationAgent(),
             "communication_hub": CommunicationHubAgent(),

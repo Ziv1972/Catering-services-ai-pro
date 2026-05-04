@@ -79,6 +79,19 @@ async def acknowledge_anomaly(
     return {"message": "Anomaly acknowledged", "id": anomaly_id}
 
 
+@router.post("/scan")
+async def scan_for_anomalies(
+    months_back: int = 24,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run the DailyOpsMonitor agent across all recent vending periods +
+    proformas. Used to bootstrap after deploy or to refresh manually."""
+    from backend.agents.daily_ops_monitor.agent import DailyOpsMonitorAgent
+    monitor = DailyOpsMonitorAgent()
+    return await monitor.scan_all(db, months_back=months_back)
+
+
 @router.post("/{anomaly_id}/resolve")
 async def resolve_anomaly(
     anomaly_id: int,

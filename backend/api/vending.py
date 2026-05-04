@@ -629,6 +629,22 @@ async def upload_vending(
             tx_count += 1
         await db.commit()
 
+    # Trigger DailyOpsMonitor scan for this (site, year, month). Wrapped in
+    # try/except so monitoring failures never break the upload itself.
+    monitor_findings: list = []
+    target_month = invoice_month_hint or (invoice_date.replace(day=1) if invoice_date else None)
+    if target_month:
+        try:
+            from backend.agents.daily_ops_monitor.agent import DailyOpsMonitorAgent
+            monitor = DailyOpsMonitorAgent()
+            mon_result = await monitor.check_vending_upload(
+                db, site_id=site_id, year=target_month.year,
+                month=target_month.month, shift=shift,
+            )
+            monitor_findings = mon_result.get("findings", [])
+        except Exception as e:
+            logger.exception("DailyOpsMonitor failed for vending upload (non-fatal): %s", e)
+
     return {
         "proforma_id": proforma.id if proforma else None,
         "invoice_date": invoice_date.isoformat() if invoice_date else None,
@@ -639,6 +655,7 @@ async def upload_vending(
         "transactions_priced": tx_priced,
         "total_amount": proforma.total_amount if proforma else None,
         "excel_diagnostics": excel_diagnostics,
+        "monitor_findings": monitor_findings,
     }
 
 
