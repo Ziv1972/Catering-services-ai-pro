@@ -360,19 +360,77 @@ def _parse_consumption_xlsx(
     return transactions
 
 
+# Hebrew final-form letters → their regular form. Needed because the PDF and the
+# Excel often spell the same root with different forms (e.g. "כריכים" plural
+# uses regular כ, but the singular "כריך" uses final ך — different Unicode points
+# that don't match as substrings).
+_HEBREW_FINAL_FORMS = str.maketrans({"ך": "כ", "ם": "מ", "ן": "נ", "ף": "פ", "ץ": "צ"})
+
+
+def _normalize_hebrew(s: str) -> str:
+    """Lowercase final-form Hebrew letters so substring matching is robust."""
+    return s.translate(_HEBREW_FINAL_FORMS)
+
+
+def _category_keywords(cat: str) -> set[str]:
+    """Build a keyword set for matching a PDF category against an Excel product
+    name. Tries BOTH orientations of the Hebrew text because pdfplumber
+    inconsistently outputs reversed (display-order) vs correctly-oriented Hebrew
+    even within the same invoice. Drops numeric-only tokens (e.g. "1.25", date
+    fillers) and short tokens (< 3 chars) that would cause false positives.
+
+    Also emits Hebrew STEMS (4–5 char prefixes) so plural/inflected forms in the
+    PDF still match singular forms in the Excel: "כריכים" → also try "כריך";
+    "שמיניות" → also try "שמיני"; "משולשים" → also try "משולש".
+    """
+    # Single-letter Hebrew prefixes ("and/the/in/at/to/from/as/that") that often
+    # attach to nouns and produce false negatives if not stripped.
+    HEBREW_PREFIXES = ("ו", "ה", "ב", "ל", "מ", "כ", "ש")
+
+    def add_word(kws: set[str], w: str) -> None:
+        if len(w) < 3 or re.fullmatch(r"[\d.,/-]+", w):
+            return
+        kws.add(w)
+        if any('֐' <= c <= '׿' for c in w):
+            if len(w) >= 5:
+                kws.add(w[:4])
+            if len(w) >= 6:
+                kws.add(w[:5])
+
+    kws: set[str] = set()
+    for variant in (cat, cat[::-1]):
+        variant = _normalize_hebrew(variant)
+        for w in re.split(r"[\s,\-]+", variant):
+            w = w.strip()
+            add_word(kws, w)
+            # Also try the word with a single Hebrew prefix letter stripped
+            # ("וטוסטים" → "טוסטים", "הסלטים" → "סלטים")
+            if len(w) >= 5 and w[0] in HEBREW_PREFIXES and any('֐' <= c <= '׿' for c in w[1:]):
+                add_word(kws, w[1:])
+    return kws
+
+
 def _classify_transaction(product_name: str, pdf_items: list[dict]) -> tuple[Optional[str], Optional[float]]:
-    """Match a transaction product name to a PDF invoice category → returns (category, unit_price)."""
+    """Match a transaction product name to a PDF invoice category → returns
+    (category, unit_price). Prefers the longest matching keyword across all
+    candidate categories, so "כריך בריא משולש" matches the משולשים category
+    even if "כריך" alone would also match an unrelated sandwich category.
+    """
     if not pdf_items:
         return (None, None)
-    name = product_name or ""
+    name = _normalize_hebrew(product_name or "")
+    best_cat: Optional[str] = None
+    best_price: Optional[float] = None
+    best_score = 0
     for it in pdf_items:
         cat = it.get("category") or ""
-        # Split category into keywords and check if any keyword is in the transaction
-        kws = [w for w in re.split(r"\s+", cat) if len(w) >= 3]
-        for kw in kws:
-            if kw in name:
-                return (cat, float(it.get("unit_price") or 0))
-    return (None, None)
+        for kw in sorted(_category_keywords(cat), key=len, reverse=True):
+            if kw in name and len(kw) > best_score:
+                best_cat = cat
+                best_price = float(it.get("unit_price") or 0)
+                best_score = len(kw)
+                break  # already found longest kw for this category
+    return (best_cat, best_price) if best_cat else (None, None)
 
 
 # ── Endpoints ───────────────────────────────────────────────────────────
