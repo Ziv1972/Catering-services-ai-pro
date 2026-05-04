@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
-  AlertTriangle, CheckCircle2, Eye, Send, Shield
+  AlertTriangle, CheckCircle2, Eye, Send, Shield, RefreshCw
 } from 'lucide-react';
 import { anomaliesAPI } from '@/lib/api';
 import { format } from 'date-fns';
@@ -16,6 +16,8 @@ export default function AnomaliesPage() {
   const [filter, setFilter] = useState<'all' | 'active' | 'resolved'>('all');
   const [resolveId, setResolveId] = useState<number | null>(null);
   const [resolveNotes, setResolveNotes] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -38,6 +40,22 @@ export default function AnomaliesPage() {
       await loadData();
     } catch (error) {
       console.error('Failed to acknowledge:', error);
+    }
+  };
+
+  const handleScan = async () => {
+    setScanning(true);
+    setScanResult(null);
+    try {
+      const result = await anomaliesAPI.scan(24);
+      setScanResult(
+        `Scanned ${result.periods_scanned} vending periods + ${result.proformas_scanned} proformas → ${result.total_findings} findings`
+      );
+      await loadData();
+    } catch (error: any) {
+      setScanResult(`Scan failed: ${error?.response?.data?.detail || error?.message || 'unknown'}`);
+    } finally {
+      setScanning(false);
     }
   };
 
@@ -79,9 +97,20 @@ export default function AnomaliesPage() {
   return (
     <div>
       <main className="max-w-7xl mx-auto px-4 py-8">
-        <div className="mb-6">
-          <h2 className="text-2xl font-bold text-gray-900">Anomalies & Alerts</h2>
-          <p className="text-gray-500 text-sm">{anomalies.length} anomalies detected</p>
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Anomalies & Alerts</h2>
+            <p className="text-gray-500 text-sm">
+              {anomalies.length} anomalies detected — auto-flagged by Daily Ops Monitor on every upload
+            </p>
+            {scanResult && (
+              <p className="text-xs mt-1 text-indigo-700">{scanResult}</p>
+            )}
+          </div>
+          <Button onClick={handleScan} disabled={scanning} variant="outline" className="gap-2">
+            <RefreshCw className={`w-4 h-4 ${scanning ? 'animate-spin' : ''}`} />
+            {scanning ? 'Scanning…' : 'Run Scan'}
+          </Button>
         </div>
 
         {/* Summary Cards */}

@@ -12,7 +12,7 @@ import {
   ChevronRight, ChevronDown, ArrowLeft, X,
   UtensilsCrossed, Upload, Loader2,
 } from 'lucide-react';
-import { dashboardAPI, chatAPI, drillDownAPI, categoryAnalysisAPI, dailyMealsAPI } from '@/lib/api';
+import { dashboardAPI, chatAPI, drillDownAPI, categoryAnalysisAPI, dailyMealsAPI, anomaliesAPI } from '@/lib/api';
 import ChatMessageRenderer from '@/components/chat/ChatMessageRenderer';
 import { format } from 'date-fns';
 import {
@@ -25,6 +25,7 @@ export default function Dashboard() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
+  const [anomalies, setAnomalies] = useState<any[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<Array<{ role: string; text: string }>>(() => {
     if (typeof window !== 'undefined') {
@@ -118,6 +119,11 @@ export default function Dashboard() {
       if (result?.proforma_year) {
         setDrillDownYear(result.proforma_year);
       }
+      // Anomalies — load active ones for the KPI card. Non-fatal if it fails.
+      try {
+        const a = await anomaliesAPI.list({ resolved: false });
+        setAnomalies(a || []);
+      } catch { /* ignore */ }
     } catch {
       // Sections will show empty states
     } finally {
@@ -648,17 +654,41 @@ export default function Dashboard() {
           );
         })()}
 
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-5 card-hover">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Meetings</span>
-            <div className="p-1.5 rounded-lg bg-sky-50 text-sky-600">
-              <CalendarDays className="w-4 h-4" />
-            </div>
-          </div>
-          <p className="text-2xl font-bold tracking-tight">{meetings.length}</p>
-          <p className="text-xs text-muted-foreground mt-1">upcoming scheduled</p>
-          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-sky-500 to-sky-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-        </div>
+        {(() => {
+          const activeAnomalies = anomalies.filter((a: any) => !a.resolved);
+          const criticalCount = activeAnomalies.filter((a: any) => a.severity === 'critical' || a.severity === 'high').length;
+          const hasIssues = activeAnomalies.length > 0;
+          return (
+            <button
+              onClick={() => router.push('/anomalies')}
+              className={`group relative overflow-hidden rounded-xl border p-5 card-hover text-left ${hasIssues ? 'bg-red-50 border-red-200 ring-1 ring-red-200' : 'bg-card'}`}
+              title="Click to see anomaly details"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Anomalies</span>
+                <div className={`p-1.5 rounded-lg ${hasIssues ? 'bg-red-100 text-red-600' : 'bg-sky-50 text-sky-600'}`}>
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+              </div>
+              <p className={`text-2xl font-bold tracking-tight ${hasIssues ? 'text-red-700' : ''}`}>
+                {activeAnomalies.length}
+              </p>
+              <p className="text-xs mt-1">
+                {activeAnomalies.length === 0 ? (
+                  <span className="text-muted-foreground">no issues detected</span>
+                ) : criticalCount > 0 ? (
+                  <span className="text-red-600 font-semibold flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" />
+                    {criticalCount} high/critical
+                  </span>
+                ) : (
+                  <span className="text-orange-600 font-medium">{activeAnomalies.length} active</span>
+                )}
+              </p>
+              <div className={`absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r ${hasIssues ? 'from-red-500 to-red-400 opacity-100' : 'from-sky-500 to-sky-400 opacity-0 group-hover:opacity-100'} transition-opacity`} />
+            </button>
+          );
+        })()}
 
         <div className="group relative overflow-hidden rounded-xl border bg-card p-5 card-hover">
           <div className="flex items-center justify-between mb-3">

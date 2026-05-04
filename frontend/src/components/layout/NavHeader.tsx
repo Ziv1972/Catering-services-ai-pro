@@ -22,6 +22,7 @@ const NAV_ITEMS = [
   { href: '/price-lists', label: 'Price Lists', icon: Tag },
   { href: '/proformas', label: 'Proformas', icon: FileText },
   { href: '/violations', label: 'Violations', icon: AlertTriangle },
+  { href: '/anomalies', label: 'Anomalies', icon: AlertTriangle },
   { href: '/analytics', label: 'Analytics', icon: TrendingUp },
   { href: '/reports', label: 'Reports', icon: FileBarChart },
   { href: '/agent-crew', label: 'Agent Crew', icon: Bot },

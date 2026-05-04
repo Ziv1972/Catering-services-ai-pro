@@ -510,6 +510,15 @@ export const anomaliesAPI = {
     });
     return response.data;
   },
+
+  scan: async (monthsBack: number = 24) => {
+    const response = await api.post(
+      `/api/anomalies/scan?months_back=${monthsBack}`,
+      null,
+      { timeout: 180000 },
+    );
+    return response.data;
+  },
 };
 
 // Dashboard
