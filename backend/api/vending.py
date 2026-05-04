@@ -418,12 +418,26 @@ def _classify_transaction(product_name: str, pdf_items: list[dict]) -> tuple[Opt
     """
     if not pdf_items:
         return (None, None)
+    # Tokens identifying credit/refund rows in the invoice. The reversed
+    # spellings come from PDFs where Hebrew is in display (RTL) order.
+    REFUND_TOKENS = ("זיכוי", "אשראי", "יוכיז", "יארשא")
     name = _normalize_hebrew(product_name or "")
     best_cat: Optional[str] = None
     best_price: Optional[float] = None
     best_score = 0
     for it in pdf_items:
+        # Skip credit/refund rows. They explode the matched cost because
+        # their unit_price holds the entire refund amount (e.g. ₪355.82).
+        # Detect by quantity (negative when available), high unit_price, or
+        # explicit refund-keyword in the category text.
+        qty_val = it.get("quantity")
+        if qty_val is not None and qty_val <= 0:
+            continue
+        if (it.get("unit_price") or 0) > 100:
+            continue
         cat = it.get("category") or ""
+        if any(tok in cat for tok in REFUND_TOKENS):
+            continue
         for kw in sorted(_category_keywords(cat), key=len, reverse=True):
             if kw in name and len(kw) > best_score:
                 best_cat = cat
