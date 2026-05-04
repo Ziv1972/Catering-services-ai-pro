@@ -40,6 +40,7 @@ METRIC_NAMES = (
     "qty",          # quantity / count
     "total",        # total cost / fine amount
     "unit_price",
+    "effective_price",  # derived: sum(total)/sum(qty) — true ₪/unit, weighted by qty
     "budget",
     "actual",
     "variance",

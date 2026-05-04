@@ -53,6 +53,7 @@ SOURCE_METADATA: dict[str, dict[str, Any]] = {
             {"name": "qty", "label": "Quantity", "default_agg": "sum"},
             {"name": "total", "label": "Total Cost", "default_agg": "sum"},
             {"name": "unit_price", "label": "Unit Price", "default_agg": "avg"},
+            {"name": "effective_price", "label": "Effective ₪/unit (Total÷Qty)", "default_agg": "weighted_avg"},
         ],
         "default_chart": "bar",
     },
@@ -70,6 +71,7 @@ SOURCE_METADATA: dict[str, dict[str, Any]] = {
             {"name": "qty", "label": "Quantity", "default_agg": "sum"},
             {"name": "total", "label": "Total", "default_agg": "sum"},
             {"name": "unit_price", "label": "Unit Price", "default_agg": "avg"},
+            {"name": "effective_price", "label": "Effective ₪/unit (Total÷Qty)", "default_agg": "weighted_avg"},
         ],
         "default_chart": "bar",
     },
@@ -84,6 +86,7 @@ SOURCE_METADATA: dict[str, dict[str, Any]] = {
         "metric_options": [
             {"name": "qty", "label": "Meals", "default_agg": "sum"},
             {"name": "total", "label": "Cost", "default_agg": "sum"},
+            {"name": "effective_price", "label": "Effective ₪/meal (Cost÷Meals)", "default_agg": "weighted_avg"},
         ],
         "default_chart": "bar",
     },
@@ -99,6 +102,7 @@ SOURCE_METADATA: dict[str, dict[str, Any]] = {
         "metric_options": [
             {"name": "qty", "label": "Quantity", "default_agg": "sum"},
             {"name": "total", "label": "Total Cost", "default_agg": "sum"},
+            {"name": "effective_price", "label": "Effective ₪/unit (Total÷Qty)", "default_agg": "weighted_avg"},
         ],
         "default_chart": "bar",
     },
@@ -114,6 +118,7 @@ SOURCE_METADATA: dict[str, dict[str, Any]] = {
         "metric_options": [
             {"name": "qty", "label": "Count", "default_agg": "count"},
             {"name": "total", "label": "Fine Amount", "default_agg": "sum"},
+            {"name": "effective_price", "label": "Avg Fine (Total÷Count)", "default_agg": "weighted_avg"},
         ],
         "default_chart": "bar",
     },
@@ -212,10 +217,19 @@ class ReportEngine:
         group_by: list[str],
         metrics: list[Metric],
     ) -> list[dict[str, Any]]:
+        # `effective_price` is a derived metric — sum(total)/sum(qty) per group,
+        # which gives a true qty-weighted ₪/unit (the right number when prices
+        # change mid-period). It needs raw qty + total tracked even if the user
+        # didn't request them explicitly, so we shadow them in the bucket.
+        needs_eff_price = any(m.name == "effective_price" for m in metrics)
+        shadow_keys: list[str] = []
+        if needs_eff_price:
+            shadow_keys = ["qty", "total"]
+
         if not group_by:
             # Single grand-total row
             agg: dict[str, list[float]] = {m.name: [] for m in metrics}
-            counts: list[int] = []
+            shadow: dict[str, list[float]] = {k: [] for k in shadow_keys}
             n = 0
             for r in raw_rows:
                 n += 1
@@ -223,9 +237,16 @@ class ReportEngine:
                     val = r.get(m.name)
                     if val is not None:
                         agg[m.name].append(float(val))
+                for k in shadow_keys:
+                    val = r.get(k)
+                    if val is not None:
+                        shadow[k].append(float(val))
             row: dict[str, Any] = {"_label": "All"}
             for m in metrics:
-                row[m.name] = self._reduce(agg[m.name], m.agg, count=n)
+                if m.name == "effective_price":
+                    row[m.name] = self._effective_price(shadow.get("total", []), shadow.get("qty", []))
+                else:
+                    row[m.name] = self._reduce(agg[m.name], m.agg, count=n)
             return [row]
 
         buckets: dict[tuple, dict[str, Any]] = {}
@@ -236,20 +257,48 @@ class ReportEngine:
                 buckets[key]["__count"] = 0
                 for m in metrics:
                     buckets[key][f"__vals_{m.name}"] = []
+                for k in shadow_keys:
+                    buckets[key][f"__vals_{k}"] = []  # safe no-op if same key already created above
             buckets[key]["__count"] += 1
             for m in metrics:
                 val = r.get(m.name)
                 if val is not None:
                     buckets[key][f"__vals_{m.name}"].append(float(val))
+            for k in shadow_keys:
+                if k in {m.name for m in metrics}:
+                    continue  # already collected above
+                val = r.get(k)
+                if val is not None:
+                    buckets[key][f"__vals_{k}"].append(float(val))
 
         out = []
         for bucket in buckets.values():
             row = {g: bucket[g] for g in group_by}
             cnt = bucket["__count"]
             for m in metrics:
-                row[m.name] = self._reduce(bucket[f"__vals_{m.name}"], m.agg, count=cnt)
+                if m.name == "effective_price":
+                    row[m.name] = self._effective_price(
+                        bucket.get("__vals_total", []),
+                        bucket.get("__vals_qty", []),
+                    )
+                else:
+                    row[m.name] = self._reduce(bucket[f"__vals_{m.name}"], m.agg, count=cnt)
+            # Attach shadow sums when effective_price was requested so the
+            # grand-total row in _assemble can compute the overall ₪/unit even
+            # when the user didn't pick qty/total as visible metrics.
+            if needs_eff_price:
+                row["__shadow_qty_sum"] = sum(bucket.get("__vals_qty", []))
+                row["__shadow_total_sum"] = sum(bucket.get("__vals_total", []))
             out.append(row)
         return out
+
+    @staticmethod
+    def _effective_price(totals: list[float], qtys: list[float]) -> float:
+        """Qty-weighted ₪/unit: sum(total) / sum(qty). Returns 0 if qty sums to 0."""
+        sq = sum(qtys)
+        if sq == 0:
+            return 0.0
+        return round(sum(totals) / sq, 2)
 
     @staticmethod
     def _reduce(values: list[float], agg: str, count: int = 0) -> float:
@@ -507,10 +556,22 @@ class ReportEngine:
         # Totals across all rows (for footer + summary)
         totals: dict[str, float] = {}
         for m in metrics:
-            if m.agg == "count":
+            if m.name == "effective_price":
+                # Overall ₪/unit across the whole result set, computed from the
+                # shadow sums attached in _aggregate (works even when qty/total
+                # aren't visible metrics).
+                tot_sum = sum(float(r.get("__shadow_total_sum", 0) or 0) for r in agg_rows)
+                qty_sum = sum(float(r.get("__shadow_qty_sum", 0) or 0) for r in agg_rows)
+                totals[m.name] = round(tot_sum / qty_sum, 2) if qty_sum else 0.0
+            elif m.agg == "count":
                 totals[m.name] = sum(float(r.get(m.name, 0) or 0) for r in agg_rows)
             else:
                 totals[m.name] = round(sum(float(r.get(m.name, 0) or 0) for r in agg_rows), 2)
+
+        # Strip shadow keys so they don't leak into the response
+        for r in agg_rows:
+            r.pop("__shadow_qty_sum", None)
+            r.pop("__shadow_total_sum", None)
 
         chart = self._build_chart(agg_rows, config, metrics)
 

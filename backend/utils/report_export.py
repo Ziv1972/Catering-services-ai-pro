@@ -30,6 +30,7 @@ COLUMN_LABELS = {
     "qty": "Quantity",
     "total": "Total",
     "unit_price": "Unit Price",
+    "effective_price": "Effective ₪/unit",
     "budget": "Budget",
     "actual": "Actual",
     "variance": "Variance",

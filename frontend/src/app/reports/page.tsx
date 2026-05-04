@@ -17,6 +17,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 
 const PRETTY: Record<string, string> = {
   qty: 'Quantity', total: 'Total', unit_price: 'Unit Price',
+  effective_price: 'Effective ₪/unit',
   budget: 'Budget', actual: 'Actual', variance: 'Variance',
   supplier: 'Supplier', site: 'Site', category: 'Category',
   product: 'Product', month: 'Month', shift: 'Shift',
@@ -388,6 +389,7 @@ export default function ReportsPage() {
             <CardContent className="space-y-2">
               {activeSource?.metric_options.map((m) => {
                 const selected = config.metrics.find((x) => x.name === m.name);
+                const isDerived = m.name === 'effective_price';
                 return (
                   <div key={m.name} className="flex items-center gap-2">
                     <button
@@ -400,7 +402,7 @@ export default function ReportsPage() {
                     >
                       {m.label}
                     </button>
-                    {selected && (
+                    {selected && !isDerived && (
                       <select
                         value={selected.agg}
                         onChange={(e) => setMetricAgg(m.name, e.target.value)}
@@ -412,6 +414,9 @@ export default function ReportsPage() {
                         <option value="max">Max</option>
                         <option value="count">Count</option>
                       </select>
+                    )}
+                    {selected && isDerived && (
+                      <span className="text-[10px] text-gray-400 italic px-2">derived</span>
                     )}
                   </div>
                 );
