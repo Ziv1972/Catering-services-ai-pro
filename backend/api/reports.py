@@ -21,7 +21,9 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 from datetime import date
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -129,17 +131,27 @@ async def export_report(
     title = config.title or _default_title(config)
     xlsx_bytes = build_xlsx(report, config, title)
 
-    safe_name = (
-        title.replace(" ", "_").replace("/", "_").replace("—", "-")
-        or "report"
-    )
-    filename = f"{safe_name}_{date.today().isoformat()}.xlsx"
-
     return StreamingResponse(
         io.BytesIO(xlsx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(title)},
     )
+
+
+def _content_disposition(title: str) -> str:
+    """Build a Content-Disposition header that is safe for non-ASCII titles
+    (Hebrew, em-dashes, etc). HTTP headers can only carry Latin-1, so we use
+    both an ASCII-safe `filename=` and an RFC 5987 `filename*=UTF-8''…` form
+    that browsers prefer when present.
+    """
+    full = f"{title}_{date.today().isoformat()}.xlsx"
+    # ASCII-only fallback: drop anything outside printable ASCII, collapse
+    # whitespace and slashes, never empty.
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", full).strip("_") or "report.xlsx"
+    if not ascii_name.endswith(".xlsx"):
+        ascii_name += ".xlsx"
+    encoded = quote(full, safe="")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
 
 
 # ── Saved reports CRUD ──────────────────────────────────────────────
@@ -264,9 +276,8 @@ async def export_saved(
     report = await ReportEngine(db).run(config)
     title = saved.name or _default_title(config)
     xlsx_bytes = build_xlsx(report, config, title)
-    filename = f"{title.replace(' ', '_')}_{date.today().isoformat()}.xlsx"
     return StreamingResponse(
         io.BytesIO(xlsx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(title)},
     )
