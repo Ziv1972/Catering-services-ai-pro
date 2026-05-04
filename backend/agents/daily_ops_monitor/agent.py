@@ -26,7 +26,7 @@ from backend.models.operations import Anomaly
 from backend.models.proforma import Proforma, ProformaItem
 from backend.models.vending_transaction import VendingTransaction
 from backend.models.supplier import Supplier
-from backend.utils.db_compat import year_equals, month_equals
+from backend.utils.db_compat import year_equals, month_equals, extract_year, extract_month
 
 logger = logging.getLogger(__name__)
 
@@ -119,11 +119,13 @@ class DailyOpsMonitorAgent(BaseAgent):
         Used by the manual scan endpoint and bootstrap after deploys."""
         cutoff = date.today() - timedelta(days=months_back * 30)
 
-        # Vending periods: distinct (site_id, year, month) from VendingTransaction
+        # Vending periods: distinct (site_id, year, month) from VendingTransaction.
+        # Use extract_year/extract_month from db_compat so this works on both
+        # SQLite (dev) and PostgreSQL (prod).
         vt_q = select(
             VendingTransaction.site_id,
-            func.strftime("%Y", VendingTransaction.tx_date).label("y"),
-            func.strftime("%m", VendingTransaction.tx_date).label("m"),
+            extract_year(VendingTransaction.tx_date).label("y"),
+            extract_month(VendingTransaction.tx_date).label("m"),
         ).where(VendingTransaction.tx_date >= cutoff).distinct()
         vt_periods = set()
         for sid, y, m in (await db.execute(vt_q)).all():
