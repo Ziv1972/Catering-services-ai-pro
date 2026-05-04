@@ -872,6 +872,12 @@ async def reprice_transactions(
             t.unit_price = unit_price
             t.total_price = float(unit_price) * float(t.quantity or 0)
             updated += 1
+        else:
+            # No match — clear any stale price so previously-bad data doesn't
+            # linger after the matcher logic improves.
+            t.category = None
+            t.unit_price = None
+            t.total_price = None
 
     await db.commit()
     return {"updated": updated, "scanned": len(txs), "year": target_year, "site_id": site_id}
