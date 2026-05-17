@@ -573,6 +573,24 @@ async def lifespan(app: FastAPI):
             await session.commit()
             logger.info("Tagged existing compliance rules as KG (site_id=2)")
 
+        # Idempotent rule-name correction: "מקסימום 2 מנות בשר טחון ביום" → MAX 1
+        # User confirmed (June 2026) the rule is MAX 1 ground-meat dish per day,
+        # not max 2. Update the DB rule name + description to match.
+        await session.execute(
+            text(
+                "UPDATE compliance_rules "
+                "SET name = :new_name, description = :new_desc "
+                "WHERE name = :old_name"
+            ),
+            {
+                "old_name": "מקסימום 2 מנות בשר טחון ביום",
+                "new_name": "אין להגיש יותר ממנה אחת עשויה מבשר טחון באותו יום",
+                "new_desc": "מקסימום מנת בשר טחון אחת ביום. בשר טחון כולל קציצות, המבורגר, קבב, נקניקיות, בורקס/פסטל/סמבוסק/פילו/סיגרים/מאפה/בקלאוות בשר, מפרום, קובה בשר, ראוויולי בשר, וגם ירקות ממולאים (פלפל/קישוא/ארטישוק/חציל/כרוב ממולא — נחשבים ממולאי בשר במטבח הישראלי). לא נספרים: קציצות דג, קציצות סלק/טופו, מנות טבעוניות מפורשות.",
+            },
+        )
+        await session.commit()
+        logger.info("Migrated ground-meat rule: 'max 2' → 'max 1' wording aligned with user policy")
+
         # Seed NZ-specific rules from the חוסרים תפריט נס ציונה template
         nz_tagged = await session.execute(
             select(ComplianceRule).where(ComplianceRule.site_id == 1).limit(1)
