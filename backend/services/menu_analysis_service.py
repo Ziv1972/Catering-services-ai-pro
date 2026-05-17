@@ -2019,7 +2019,7 @@ CRITICAL RULES:
    - "בשר ראש" → count any [row] containing בשר ראש with cut number מס' 4 or מס' 10. NOTE: "בשר גולש" is a separate cut, NOT בשר ראש unless explicitly named
    - "המבורגר ביתי" → ONLY [עמדת אוכל רחוב] / [עמדת שף] containing המבורגר. Do NOT count "המבורגר טבעוני" (that's vegan).
    - "שווארמה פעם בשבוע" → count days with שווארמה הודו / שווארמה פרגית. Do NOT count שווארמה דג / שווארמה טבעוני (different protein) toward שווארמה הודו requirement.
-   - "סטייק פרגית פעם בשבוע" → ONLY [עמדת אוכל רחוב] / [עמדת גריל*] containing סטייק פרגית / שיפודי פרגית / קציצות פרגית / מסאחן פרגית / מוקפץ פרגית / פרגית צלויה
+   - "סטייק פרגית פעם בשבוע" → count days where ANY non-salad row contains: סטייק פרגית, שיפודי פרגית, שיפוד שווארמה פרגית, **פרגית צלויה / פרגית צלוייה** (double-yod variant common), פרגית בגריל, פרגית על הגריל, מסאחן/מסחאן פרגית, מוקפץ פרגית, קציצות פרגית. CRITICAL: "פרגית צלויה" and "פרגית צלוייה" IS the same dish as סטייק פרגית — count it (e.g. "פרגית צלוייה לצד סלט עגבניות חריף בליווי טחינה ירוקה" in [עמדת אוכל רחוב] counts). The garnish-salad text inside the dish name does NOT count toward any salad rule.
    - "עוגת שמרים/עוגת קראנץ' 4 פעמים בחודש" → ONLY count items containing "עוגת שמרים" or "קראנץ'" (typically every Thursday). Do NOT count עוגת סולת / עוגת גזר / etc.
    - "עוגה מסוגים שונים" / variety check → count distinct cake names in [קינוח עוגה] row across the month — must be ≥ 5 distinct varieties
 6c. SITE FILTERING — when checking site_name="קרית גת" (KG), SKIP these NZ-only rules entirely (do NOT include them in output): מינימום 4 סוגי ירקות אנטיפסטי, מסאחן פרגית, קציצות עוף ברוטב חמוסטה, מאפה בקר וחציל שרוף, סינייה אסאדו, פילו במילוי בקר מפורק, כנאפה אסאדו. The dish דפי פילו ממולא בשר מפורק IS the substitute for כנאפה אסאדו (count it for NZ only).
@@ -2362,7 +2362,8 @@ async def run_ai_compliance_check(
     SUBSTITUTION_RULES = {
         # rule_name_substring → (list of accepted keywords, exclude_keywords)
         "סטייק סינטה":      (["סינטה", "אנטריקוט", "חזה בקר", "בריסקט"], []),
-        "קציצות פרגית":     (["קציצות פרגית", "מסאחן פרגית", "מסחאן פרגית", "מוקפץ פרגית", "שיפודי פרגית", "שיפוד שווארמה פרגית"], []),
+        "סטייק פרגית":      (["סטייק פרגית", "שיפודי פרגית", "שיפוד שווארמה פרגית", "פרגית צלויה", "פרגית צלוייה", "פרגית בגריל", "פרגית על הגריל", "מסאחן פרגית", "מסחאן פרגית", "מוקפץ פרגית", "קציצות פרגית"], ["סלט"]),
+        "קציצות פרגית":     (["קציצות פרגית", "מסאחן פרגית", "מסחאן פרגית", "מוקפץ פרגית", "שיפודי פרגית", "שיפוד שווארמה פרגית", "פרגית צלויה", "פרגית צלוייה"], ["סלט"]),
         "טבית":             (["טבית", "מקלובה"], []),
         "כרע עוף ממולא":    (["כרע עוף ממולא", "כרעיים ממולאות", "פרגית ממולאת אורז"], []),
         "סינייה אסאדו":     (["סינייה אסאדו", "בקלאוות בשר", "טורטיה ממולאת אסאדו", "אושפלו אסאדו"], []),
