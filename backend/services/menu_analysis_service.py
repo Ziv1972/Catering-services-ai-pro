@@ -2036,7 +2036,20 @@ CRITICAL RULES:
    - Vague dish names like "מנת דג", "מנת בשר", "מנת עוף" — the supplier MUST specify the exact dish. Flag: "שם מנה לא מדויק - הספק צריך לפרט"
    - Same dish appearing on CONSECUTIVE days — ONLY flag if the dish name is clearly the SAME dish (identical or near-identical name, same protein/ingredient). E.g. "פילה לברק" on Apr 1 AND Apr 2 = flag. "פילה לברק" on Apr 1 and "מסאחן פרגית" on Apr 2 = NOT the same dish, do NOT flag. Each consecutive-day anomaly must list only the matched items for THAT specific dish. Create a SEPARATE anomaly row for each dish with consecutive repeats. Flag: "מנה חוזרת ימים רצופים"
    - Same dish appearing TWICE on the same day. Flag: "מנה כפולה באותו יום"
-   - More than 1 ground-meat dish on the same day. בשר טחון includes: קציצות, המבורגר, קבב, בורקס בשר, פסטל בשר, סמבוסק בשר, פילו ממולא בשר, פילו בשר מפורק, מפרום בשר, קובה בשר, ראוויולי בשר. Flag: "יותר ממנת בשר טחון אחת ביום". Include all problematic items for that day in matched_items, set found_dates to that single date.
+   - **GROUND-MEAT RULE — MAX 1 PER DAY** (regardless of what any DB rule name says about "max 2"). If 2+ ground-meat dishes appear on the same day → flag the day as a violation. Even if a daily-mandatory rule like "מנת בקר יומית" is satisfied by one ground-meat dish, you STILL must flag the day if a second ground-meat dish appears elsewhere.
+
+     בשר טחון INCLUDES (any of these in any row counts as a ground-meat dish):
+     • Patties/burgers: קציצות בשר, קציצות בקר, המבורגר (בלחמנייה / שולץ / ביתי), קבב, נקניקיות, צ'וריסו, מרגז
+     • Wrapped/stuffed PASTRIES with meat: בורקס בשר, פסטל בשר, סמבוסק בשר, פילו ממולא בשר, פילו בשר מפורק, סיגרים בשר, מאפה בשר, בקלאוות בשר
+     • Other ground-meat preps: מפרום (בשר), קובה בשר, ראוויולי בשר, גולש בשר (if shredded/ground form)
+     • **STUFFED VEGETABLES**: in Israeli cuisine `ממולא` / `ממולאים` defaults to ground-MEAT filling unless the menu EXPLICITLY says טבעוני / צמחוני / אורז וירקות בלבד / טופו / סויה. Count as ground-meat: פלפל ממולא, קישוא ממולא, ארטישוק ממולא, חציל ממולא, כרוב ממולא, עלי גפן ממולא, מוסקה, פלפל קישוא וארטישוק ממולא ברוטב צהוב, ירקות ממולאים.
+
+     EXCLUDED from ground-meat (do not count):
+     • Fish patties: קציצות דג, קציצות דגים — count toward fish rule instead
+     • Vegan patties: קציצות סלק, קציצות טופו, המבורגר טבעוני, שווארמה טבעוני — count toward vegan rule
+     • Stuffed vegetables explicitly labeled vegetarian/vegan
+
+     Flag format: "יותר ממנת בשר טחון אחת ביום". For EACH violating day, create ONE anomaly row. הערות column MUST list the violation date + the offending dishes, format: "4.6: פלפל קישוא וארטישוק ממולא + המבורגר בלחמנייה". matched_items lists all offending dishes for that day. If multiple days have violations, create one anomaly row per day.
    - More than 1 פרגית dish on the same day (any of: פרגית צרפתית, פרגית במילוי, פרגית צלויה/בגריל, סטייק פרגית, מסאחן פרגית, מוקפץ פרגית, שיפודי פרגית, קציצות פרגית, שווארמה פרגית). Flag: "שתי מנות פרגית באותו יום — לא מאושר"
    - More than 1 dish from the SAME primary protein on the same day (general rule). Proteins to track: סלמון, אמנון, לברק, אסאדו, בריסקט, חזה בקר, חזה עוף, בשר ראש. Flag: "שתי מנות מאותו חומ\"ג באותו יום"
    - בקר/בשר dish WITHOUT a cut number. Beef cuts (בקר, בריסקט, חזה בקר, אסאדו, בשר צלי, בשר גולש, בשר ראש, לשון, בשר מפורק, שווארמה בקר, קציצות בקר, בורקס בשר, פילו בשר, סמבוסק בשר, פסטל בשר) MUST contain "מספר X" or "מס X" or "מס' X" (where X is a digit). Examples that PASS: "בשר צלי מספר 6", "חזה בקר מס 3", "בשר ראש מספר 10". Examples that FAIL and must be flagged: "בשר מפורק", "בורקס בשר", "קציצות בקר ברוטב עגבניות", "אסאדו בפריסה" (without מספר). Flag: "מנת בקר ללא ציון מספר נתח — חובה לציין מספר נתח". Create one anomaly row per offending dish, with that dish's date(s) in found_dates and the dish text in matched_items.
@@ -2402,6 +2415,74 @@ async def run_ai_compliance_check(
                 _r["notes"] = (_r.get("notes") or "") + f" [backfill: {old_actual}→{backfill_count} via substitute keywords]"
                 logger.info(f"Substitution backfill: '{dish_name}' {old_actual}→{backfill_count}")
             break
+
+    # ---- Ground-meat anomaly backfill (deterministic safety net) ----
+    # User-confirmed rule: MAX 1 ground-meat dish per day.
+    # Claude often misses this when stuffed-veg "ממולא" defaults to meat,
+    # or when "max 2" wording in DB rule confuses the trigger threshold.
+    # We scan every day and inject/replace the anomaly row to guarantee firing.
+    GROUND_MEAT_KEYWORDS = [
+        # Patties / burgers / sausages
+        "קציצות בשר", "קציצות בקר", "המבורגר", "קבב", "נקניקיות",
+        "צ'וריסו", "מרגז", "צוריסוס",
+        # Wrapped pastries with meat
+        "בורקס בשר", "פסטל בשר", "סמבוסק בשר",
+        "פילו ממולא בשר", "פילו בשר מפורק", "סיגרים בשר",
+        "מאפה בשר", "בקלאוות בשר",
+        # Other ground forms
+        "מפרום", "קובה בשר", "ראוויולי בשר",
+        # Stuffed vegetables (default meat-filled in Israeli cuisine)
+        "פלפל ממולא", "קישוא ממולא", "ארטישוק ממולא",
+        "חציל ממולא", "כרוב ממולא", "עלי גפן ממולא",
+        "ירקות ממולאים", "ממולא ברוטב", "ממולאים ברוטב",
+    ]
+    GROUND_MEAT_EXCLUDES = [
+        "דג", "טבעוני", "טבעונית", "צמחוני", "צמחונית",
+        "טופו", "סלק", "סויה", "סייטן", "אורז וירקות בלבד",
+    ]
+
+    # Per-day collect ground-meat items
+    gm_by_day: dict[str, list[tuple[str, str]]] = {}
+    for d, rows in _day_rows.items():
+        seen_items: set[str] = set()
+        for cat, items in rows.items():
+            if not isinstance(items, list):
+                continue
+            for it in items:
+                s = str(it).strip()
+                if not s or s in seen_items:
+                    continue
+                # Skip if exclude keyword present
+                if any(x in s for x in GROUND_MEAT_EXCLUDES):
+                    continue
+                if any(kw in s for kw in GROUND_MEAT_KEYWORDS):
+                    gm_by_day.setdefault(d, []).append((cat, s))
+                    seen_items.add(s)
+
+    violation_days = [(d, items) for d, items in gm_by_day.items() if len(items) >= 2]
+    if violation_days:
+        logger.info(f"Ground-meat anomaly backfill: {len(violation_days)} day(s) with 2+ ground-meat dishes")
+        # Remove any existing ground-meat anomaly rows from AI output (we'll replace)
+        ai_results[:] = [
+            r for r in ai_results
+            if not ("בשר טחון" in str(r.get("dish", "")) and "חריגים" in str(r.get("group", "")))
+        ]
+        # Inject one anomaly row per violating day
+        for d, items in sorted(violation_days):
+            dish_list = " + ".join(f"{cat}: {s[:50]}" for cat, s in items)
+            short_date = d.split("-")
+            heb_date = f"{int(short_date[2])}.{int(short_date[1])}" if len(short_date) == 3 else d
+            ai_results.append({
+                "group": "חריגים",
+                "dish": "יותר ממנת בשר טחון אחת ביום",
+                "frequency_text": "מקסימום 1 ביום",
+                "expected": 0,
+                "actual": 0,
+                "shortage": 0,
+                "found_dates": [d],
+                "matched_items": [s for _, s in items][:5],
+                "notes": f"{heb_date}: {dish_list}",
+            })
 
     # ---------------------------------------------------------------------------
     # Fallback: populate matched_items from MenuDay records when Claude omits them
