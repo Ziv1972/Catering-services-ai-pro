@@ -17,7 +17,6 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.proforma import Proforma, ProformaItem
-from backend.models.product import Product
 from backend.models.supplier import Supplier
 from backend.models.site import Site
 from backend.models.vending_transaction import VendingTransaction
@@ -319,7 +318,44 @@ class ReportEngine:
     # ─── Source: Proforma items ───────────────────────────────────────
 
     async def _query_proforma_items(self, config: ReportConfig) -> list[dict[str, Any]]:
+        """Raw invoice line items with category derived via ProductCategoryGroup.
+
+        Single-source-of-truth rule: category classification goes through
+        ProductCategoryGroup + ProductCategoryMapping (same classifier as the
+        dashboard and the kitchenette source). The `f.category` filter matches
+        against ProductCategoryGroup.name (e.g. 'kitchenette_dairy'). Items
+        that match no pattern are labelled 'לא מסווג' and still returned,
+        so this source shows every line item the user sees on a proforma.
+        """
+        import re as _re
+
         f = config.filters
+
+        mapping_q = (
+            select(
+                ProductCategoryMapping.product_name_pattern,
+                ProductCategoryGroup.name,
+                ProductCategoryGroup.display_name_he,
+            )
+            .join(ProductCategoryGroup)
+            .where(ProductCategoryGroup.is_active == True)  # noqa: E712
+            .order_by(ProductCategoryGroup.sort_order, ProductCategoryMapping.id)
+        )
+        mappings = list((await self.db.execute(mapping_q)).all())
+        compiled: list[tuple[Any, str, str]] = []
+        for pattern, group_name, display_he in mappings:
+            try:
+                compiled.append((_re.compile(pattern.replace("%", ".*").lower()), group_name, display_he))
+            except _re.error:
+                continue
+
+        def classify(name: str) -> tuple[str, str]:
+            nl = (name or "").lower()
+            for rx, key, label in compiled:
+                if rx.search(nl):
+                    return key, label
+            return "uncategorized", "לא מסווג"
+
         filters = [Proforma.invoice_date.isnot(None)]
         if f.year:
             filters.append(year_equals(Proforma.invoice_date, f.year))
@@ -338,20 +374,19 @@ class ReportEngine:
                 Proforma.invoice_date,
                 Proforma.site_id,
                 Proforma.supplier_id,
-                Product.category,
             )
             .join(Proforma, ProformaItem.proforma_id == Proforma.id)
-            .outerjoin(Product, ProformaItem.product_id == Product.id)
             .where(and_(*filters))
         )
-        if f.category:
-            q = q.where(Product.category == f.category)
         if f.product_name_like:
             q = q.where(ProformaItem.product_name.ilike(f"%{f.product_name_like}%"))
 
         result = await self.db.execute(q)
         raw = []
-        for product_name, qty, unit_price, total, inv_date, site_id, supplier_id, cat in result.all():
+        for product_name, qty, unit_price, total, inv_date, site_id, supplier_id in result.all():
+            cat_key, cat_label = classify(product_name or "")
+            if f.category and cat_key != f.category:
+                continue
             raw.append({
                 "product": product_name,
                 "qty": float(qty or 0),
@@ -360,7 +395,7 @@ class ReportEngine:
                 "month": MONTH_NAMES[inv_date.month - 1] if inv_date else "—",
                 "site": self._site_names.get(site_id) or "—",
                 "supplier": self._supplier_names.get(supplier_id) or "—",
-                "category": cat or "—",
+                "category": cat_label,
             })
         return raw
 
