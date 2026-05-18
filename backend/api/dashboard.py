@@ -1136,53 +1136,29 @@ async def kitchenette_monthly(
 ):
     """Kitchenette/BTB spending per family per month per site.
 
-    Sources data from ProformaItem joined with ProductCategoryGroup (same source as
-    the Budget vs Actual drill-down). This guarantees the Kitchenette panel and the
-    drill-down stay in sync. Includes BTB-related category groups: kitchenette_*,
-    coffee_tea, coffee_beans, cut_veg, extras_lunch.
+    Uses the canonical classifier (`_match_product_to_category`) so this panel,
+    the budget drill-down, the reports kitchenette source, and historical
+    analytics all return the same numbers for the same data. Items whose
+    canonical category is meals/working_days/uncategorized are filtered out
+    so this view only shows BTB.
     """
     from backend.models.proforma import Proforma, ProformaItem
-    from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping
-    import re
+    from backend.api.category_analysis import (
+        _load_category_mappings, _match_product_to_category,
+    )
 
     target_year = year or datetime.now().year
     proforma_year = await _resolve_proforma_year(db, target_year)
 
-    # Load all category mappings (pattern → group)
-    mapping_q = (
-        select(
-            ProductCategoryMapping.product_name_pattern,
-            ProductCategoryGroup.name,
-            ProductCategoryGroup.display_name_he,
-        )
-        .join(ProductCategoryGroup)
-        .where(ProductCategoryGroup.is_active == True)
-        .order_by(ProductCategoryGroup.sort_order, ProductCategoryMapping.id)
-    )
-    mappings = list((await db.execute(mapping_q)).all())
+    mappings = await _load_category_mappings(db)
 
-    # Family keys we treat as "kitchenette" (BTB) — exclude meals-related + uncategorized.
-    # Uncategorized products are hidden from this panel (they're surfaced in the main
-    # Budget vs Actual drill-down instead).
+    # BTB groups = everything except meals/working-days/uncategorized.
     EXCLUDED_GROUPS = {"total_meals", "working_days", "uncategorized"}
     family_labels: dict[str, str] = {}
-    for _, group_name, display_he in mappings:
+    for _, group_name, display_he, _ in mappings:
         if group_name in EXCLUDED_GROUPS:
             continue
         family_labels.setdefault(group_name, display_he)
-
-    def classify(name: str) -> str | None:
-        nl = name.lower()
-        for pattern, group_name, _ in mappings:
-            if group_name in EXCLUDED_GROUPS:
-                continue
-            regex = pattern.replace("%", ".*").lower()
-            try:
-                if re.search(regex, nl):
-                    return group_name
-            except re.error:
-                continue
-        return None
 
     # Pull all proforma line items for the year (+ optional site)
     # Top kitchenette view always combines both sites (HP Indigo top-level overview).
@@ -1209,9 +1185,9 @@ async def kitchenette_monthly(
     for product_name, qty, total_price, invoice_date in rows:
         if not invoice_date:
             continue
-        fk = classify(product_name or "")
-        if fk is None or fk not in family_labels:
-            continue  # skip uncategorized — not a kitchenette product
+        fk, _, _ = _match_product_to_category(product_name or "", mappings)
+        if fk not in family_labels:
+            continue  # not a kitchenette/BTB product
         m = invoice_date.month
         if m not in family_data[fk]:
             family_data[fk][m] = {"qty": 0, "cost": 0}
@@ -1263,23 +1239,21 @@ async def kitchenette_drilldown(
 
     - Without month: returns monthly time series + per-site split (Level 1)
     - With month: returns product-level breakdown for that family/site/month (Level 2)
+
+    Uses the canonical classifier so the items shown here match the totals on
+    the kitchenette panel (single-source-of-truth rule).
     """
     from backend.models.proforma import Proforma, ProformaItem
-    from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping
+    from backend.models.product_category import ProductCategoryGroup
     from backend.models.site import Site
-    import re
+    from backend.api.category_analysis import (
+        _load_category_mappings, _match_product_to_category,
+    )
 
     target_year = year or datetime.now().year
     proforma_year = await _resolve_proforma_year(db, target_year)
 
-    # Patterns that classify products into THIS family
-    pat_q = (
-        select(ProductCategoryMapping.product_name_pattern)
-        .join(ProductCategoryGroup)
-        .where(ProductCategoryGroup.name == family_key)
-        .where(ProductCategoryGroup.is_active == True)
-    )
-    patterns = [r[0] for r in (await db.execute(pat_q)).all()]
+    mappings = await _load_category_mappings(db)
 
     # Family display name
     name_q = select(ProductCategoryGroup.display_name_he, ProductCategoryGroup.display_name_en).where(
@@ -1309,18 +1283,11 @@ async def kitchenette_drilldown(
 
     rows = list((await db.execute(items_q)).all())
 
-    # Filter to ones matching family patterns
-    def matches(name: str) -> bool:
-        nl = (name or "").lower()
-        for p in patterns:
-            try:
-                if re.search(p.replace("%", ".*").lower(), nl):
-                    return True
-            except re.error:
-                continue
-        return False
-
-    matched = [r for r in rows if matches(r[0])]
+    # Keep only items whose canonical category equals this family.
+    matched = [
+        r for r in rows
+        if _match_product_to_category(r[0] or "", mappings)[0] == family_key
+    ]
 
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

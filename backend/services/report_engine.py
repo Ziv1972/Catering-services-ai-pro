@@ -21,7 +21,6 @@ from backend.models.supplier import Supplier
 from backend.models.site import Site
 from backend.models.vending_transaction import VendingTransaction
 from backend.models.meal_breakdown import MealBreakdown
-from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping
 from backend.models.violation import Violation
 from backend.models.supplier_budget import SupplierBudget
 from backend.schemas.report import (
@@ -318,43 +317,21 @@ class ReportEngine:
     # ─── Source: Proforma items ───────────────────────────────────────
 
     async def _query_proforma_items(self, config: ReportConfig) -> list[dict[str, Any]]:
-        """Raw invoice line items with category derived via ProductCategoryGroup.
+        """Raw invoice line items with category derived via the canonical
+        classifier (`_match_product_to_category` in `category_analysis.py`).
 
-        Single-source-of-truth rule: category classification goes through
-        ProductCategoryGroup + ProductCategoryMapping (same classifier as the
-        dashboard and the kitchenette source). The `f.category` filter matches
-        against ProductCategoryGroup.name (e.g. 'kitchenette_dairy'). Items
-        that match no pattern are labelled 'לא מסווג' and still returned,
-        so this source shows every line item the user sees on a proforma.
+        Single-source-of-truth rule: same classifier used everywhere. The
+        `f.category` filter matches `ProductCategoryGroup.name` keys
+        (e.g. 'kitchenette_dairy'). Items that match no pattern are
+        labelled 'לא מסווג' but still returned — this source shows every
+        invoice line.
         """
-        import re as _re
+        from backend.api.category_analysis import (
+            _load_category_mappings, _match_product_to_category,
+        )
 
         f = config.filters
-
-        mapping_q = (
-            select(
-                ProductCategoryMapping.product_name_pattern,
-                ProductCategoryGroup.name,
-                ProductCategoryGroup.display_name_he,
-            )
-            .join(ProductCategoryGroup)
-            .where(ProductCategoryGroup.is_active == True)  # noqa: E712
-            .order_by(ProductCategoryGroup.sort_order, ProductCategoryMapping.id)
-        )
-        mappings = list((await self.db.execute(mapping_q)).all())
-        compiled: list[tuple[Any, str, str]] = []
-        for pattern, group_name, display_he in mappings:
-            try:
-                compiled.append((_re.compile(pattern.replace("%", ".*").lower()), group_name, display_he))
-            except _re.error:
-                continue
-
-        def classify(name: str) -> tuple[str, str]:
-            nl = (name or "").lower()
-            for rx, key, label in compiled:
-                if rx.search(nl):
-                    return key, label
-            return "uncategorized", "לא מסווג"
+        mappings = await _load_category_mappings(self.db)
 
         filters = [Proforma.invoice_date.isnot(None)]
         if f.year:
@@ -384,7 +361,7 @@ class ReportEngine:
         result = await self.db.execute(q)
         raw = []
         for product_name, qty, unit_price, total, inv_date, site_id, supplier_id in result.all():
-            cat_key, cat_label = classify(product_name or "")
+            cat_key, cat_label, _ = _match_product_to_category(product_name or "", mappings)
             if f.category and cat_key != f.category:
                 continue
             raw.append({
@@ -464,45 +441,27 @@ class ReportEngine:
     # ─── Source: Kitchenette ─────────────────────────────────────────
 
     async def _query_kitchenette(self, config: ReportConfig) -> list[dict[str, Any]]:
-        """Kitchenette/BTB rows from ProformaItem classified via ProductCategoryGroup.
+        """Kitchenette/BTB rows from ProformaItem classified via the canonical
+        classifier (`_match_product_to_category` in `category_analysis.py`).
 
-        Mirrors the dashboard's `/api/dashboard/kitchenette-monthly` classifier so
-        the two views stay in sync. Family keys are `ProductCategoryGroup.name`
-        (e.g. `kitchenette_dairy`); display labels come from `display_name_he`.
-        Excludes meal totals + working-days + uncategorized.
+        Single-source-of-truth rule: same classifier used by the dashboard
+        drill-down, historical analytics, and the proforma_items report source.
+        Items whose canonical category is not a kitchenette family (e.g.
+        `total_meals`, `working_days`, `uncategorized`) are dropped here so
+        this view only shows BTB items. If the user picks a specific
+        `family`, we filter to that group.
         """
-        import re as _re
+        from backend.api.category_analysis import (
+            _load_category_mappings, _match_product_to_category,
+        )
 
         f = config.filters
+        mappings = await _load_category_mappings(self.db)
 
-        mapping_q = (
-            select(
-                ProductCategoryMapping.product_name_pattern,
-                ProductCategoryGroup.name,
-                ProductCategoryGroup.display_name_he,
-            )
-            .join(ProductCategoryGroup)
-            .where(ProductCategoryGroup.is_active == True)  # noqa: E712
-            .order_by(ProductCategoryGroup.sort_order, ProductCategoryMapping.id)
-        )
-        mappings = list((await self.db.execute(mapping_q)).all())
-
-        EXCLUDED = {"total_meals", "working_days", "uncategorized"}
-        compiled: list[tuple[Any, str, str]] = []
-        for pattern, group_name, display_he in mappings:
-            if group_name in EXCLUDED:
-                continue
-            try:
-                compiled.append((_re.compile(pattern.replace("%", ".*").lower()), group_name, display_he))
-            except _re.error:
-                continue
-
-        def classify(name: str) -> tuple[str | None, str | None]:
-            nl = (name or "").lower()
-            for rx, key, label in compiled:
-                if rx.search(nl):
-                    return key, label
-            return None, None
+        kitchenette_groups = {
+            name for _, name, _, _ in mappings
+            if name not in {"total_meals", "working_days", "uncategorized"}
+        }
 
         q = (
             select(
@@ -525,14 +484,14 @@ class ReportEngine:
 
         rows = []
         for product_name, qty, total, inv_date, site_id in (await self.db.execute(q)).all():
-            family_key, family_label = classify(product_name or "")
-            if family_key is None:
+            group_name, display_he, _ = _match_product_to_category(product_name or "", mappings)
+            if group_name not in kitchenette_groups:
                 continue
-            if f.family and family_key != f.family:
+            if f.family and group_name != f.family:
                 continue
             rows.append({
                 "product": product_name,
-                "family": family_label,
+                "family": display_he,
                 "site": self._site_names.get(site_id) or "—",
                 "month": MONTH_NAMES[inv_date.month - 1] if inv_date else "—",
                 "qty": float(qty or 0),
