@@ -85,14 +85,37 @@ def _default_title(config: ReportConfig) -> str:
 # ── Metadata ─────────────────────────────────────────────────────────
 
 @router.get("/sources")
-async def list_sources(current_user: User = Depends(get_current_user)):
+async def list_sources(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Return the list of data sources and their group-by + metric options.
-    The frontend uses this to render the dynamic config form."""
-    return {
-        "sources": [
-            {"key": k, **v} for k, v in SOURCE_METADATA.items()
-        ]
-    }
+    The frontend uses this to render the dynamic config form.
+
+    For the kitchenette source we attach `filter_options.family` loaded live
+    from `ProductCategoryGroup` so the Family dropdown stays in sync with the
+    dashboard's classifier.
+    """
+    from backend.models.product_category import ProductCategoryGroup
+
+    families_q = (
+        select(ProductCategoryGroup.name, ProductCategoryGroup.display_name_he)
+        .where(ProductCategoryGroup.is_active == True)  # noqa: E712
+        .where(ProductCategoryGroup.name.notin_(["total_meals", "working_days", "uncategorized"]))
+        .order_by(ProductCategoryGroup.sort_order)
+    )
+    families = [
+        {"key": name, "label": label}
+        for name, label in (await db.execute(families_q)).all()
+    ]
+
+    sources = []
+    for k, v in SOURCE_METADATA.items():
+        meta = {**v}
+        if k == "kitchenette":
+            meta["filter_options"] = {"family": families}
+        sources.append({"key": k, **meta})
+    return {"sources": sources}
 
 
 # ── Run / Export ─────────────────────────────────────────────────────

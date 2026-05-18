@@ -22,7 +22,7 @@ from backend.models.supplier import Supplier
 from backend.models.site import Site
 from backend.models.vending_transaction import VendingTransaction
 from backend.models.meal_breakdown import MealBreakdown
-from backend.models.kitchenette_item import KitchenetteItem, KITCHENETTE_FAMILIES
+from backend.models.product_category import ProductCategoryGroup, ProductCategoryMapping
 from backend.models.violation import Violation
 from backend.models.supplier_budget import SupplierBudget
 from backend.schemas.report import (
@@ -429,28 +429,79 @@ class ReportEngine:
     # ─── Source: Kitchenette ─────────────────────────────────────────
 
     async def _query_kitchenette(self, config: ReportConfig) -> list[dict[str, Any]]:
-        f = config.filters
-        q = select(KitchenetteItem)
-        if f.year:
-            q = q.where(year_equals(KitchenetteItem.invoice_month, f.year))
-        q = q.where(month_between(KitchenetteItem.invoice_month, f.from_month, f.to_month))
-        if f.site_id:
-            q = q.where(KitchenetteItem.site_id == f.site_id)
-        if f.family:
-            q = q.where(KitchenetteItem.family == f.family)
-        if f.product_name_like:
-            q = q.where(KitchenetteItem.product_name.ilike(f"%{f.product_name_like}%"))
+        """Kitchenette/BTB rows from ProformaItem classified via ProductCategoryGroup.
 
-        result = await self.db.execute(q)
+        Mirrors the dashboard's `/api/dashboard/kitchenette-monthly` classifier so
+        the two views stay in sync. Family keys are `ProductCategoryGroup.name`
+        (e.g. `kitchenette_dairy`); display labels come from `display_name_he`.
+        Excludes meal totals + working-days + uncategorized.
+        """
+        import re as _re
+
+        f = config.filters
+
+        mapping_q = (
+            select(
+                ProductCategoryMapping.product_name_pattern,
+                ProductCategoryGroup.name,
+                ProductCategoryGroup.display_name_he,
+            )
+            .join(ProductCategoryGroup)
+            .where(ProductCategoryGroup.is_active == True)  # noqa: E712
+            .order_by(ProductCategoryGroup.sort_order, ProductCategoryMapping.id)
+        )
+        mappings = list((await self.db.execute(mapping_q)).all())
+
+        EXCLUDED = {"total_meals", "working_days", "uncategorized"}
+        compiled: list[tuple[Any, str, str]] = []
+        for pattern, group_name, display_he in mappings:
+            if group_name in EXCLUDED:
+                continue
+            try:
+                compiled.append((_re.compile(pattern.replace("%", ".*").lower()), group_name, display_he))
+            except _re.error:
+                continue
+
+        def classify(name: str) -> tuple[str | None, str | None]:
+            nl = (name or "").lower()
+            for rx, key, label in compiled:
+                if rx.search(nl):
+                    return key, label
+            return None, None
+
+        q = (
+            select(
+                ProformaItem.product_name,
+                ProformaItem.quantity,
+                ProformaItem.total_price,
+                Proforma.invoice_date,
+                Proforma.site_id,
+            )
+            .join(Proforma, ProformaItem.proforma_id == Proforma.id)
+            .where(Proforma.invoice_date.isnot(None))
+        )
+        if f.year:
+            q = q.where(year_equals(Proforma.invoice_date, f.year))
+        q = q.where(month_between(Proforma.invoice_date, f.from_month, f.to_month))
+        if f.site_id:
+            q = q.where(Proforma.site_id == f.site_id)
+        if f.product_name_like:
+            q = q.where(ProformaItem.product_name.ilike(f"%{f.product_name_like}%"))
+
         rows = []
-        for ki in result.scalars().all():
+        for product_name, qty, total, inv_date, site_id in (await self.db.execute(q)).all():
+            family_key, family_label = classify(product_name or "")
+            if family_key is None:
+                continue
+            if f.family and family_key != f.family:
+                continue
             rows.append({
-                "product": ki.product_name,
-                "family": KITCHENETTE_FAMILIES.get(ki.family, ki.family),
-                "site": self._site_names.get(ki.site_id) or "—",
-                "month": MONTH_NAMES[ki.invoice_month.month - 1] if ki.invoice_month else "—",
-                "qty": float(ki.quantity or 0),
-                "total": float(ki.total_cost or 0),
+                "product": product_name,
+                "family": family_label,
+                "site": self._site_names.get(site_id) or "—",
+                "month": MONTH_NAMES[inv_date.month - 1] if inv_date else "—",
+                "qty": float(qty or 0),
+                "total": float(total or 0),
             })
         return rows
 

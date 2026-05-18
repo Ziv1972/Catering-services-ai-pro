@@ -1057,6 +1057,7 @@ export type SourceMetadata = {
   group_by_options: { key: string; label: string }[];
   metric_options: { name: string; label: string; default_agg: string }[];
   default_chart: string;
+  filter_options?: { family?: { key: string; label: string }[] };
 };
 export type SavedReport = {
   id: number;
