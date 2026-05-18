@@ -36,6 +36,16 @@ const SITES = [
   { id: 2, name: 'Kiryat Gat' },
 ];
 
+const KITCHENETTE_FAMILIES: { key: string; label: string }[] = [
+  { key: 'coffee_tea',      label: 'קפה ותה' },
+  { key: 'coffee_machines', label: 'קפה ושכירות מכונות' },
+  { key: 'dairy',           label: 'מוצרי חלב' },
+  { key: 'dry_goods',       label: 'יבשים' },
+  { key: 'fruits',          label: 'פירות' },
+  { key: 'accompaniments',  label: 'נילווים' },
+  { key: 'misc',            label: 'שונות' },
+];
+
 export default function ReportsPage() {
   const currentYear = new Date().getFullYear();
   const [sources, setSources] = useState<SourceMetadata[]>([]);
@@ -334,6 +344,25 @@ export default function ReportsPage() {
                     <option value="all">All shifts</option>
                     <option value="day">Day</option>
                     <option value="evening">Evening</option>
+                  </select>
+                </div>
+              )}
+
+              {activeSourceKey === 'kitchenette' && (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Family</label>
+                  <select
+                    value={config.filters.family ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setConfig((c) => ({ ...c, filters: { ...c.filters, family: v || undefined } }));
+                    }}
+                    className="w-full border rounded px-2 py-1 text-sm"
+                  >
+                    <option value="">All families</option>
+                    {KITCHENETTE_FAMILIES.map((fam) => (
+                      <option key={fam.key} value={fam.key}>{fam.label}</option>
+                    ))}
                   </select>
                 </div>
               )}

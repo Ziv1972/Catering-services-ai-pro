@@ -64,6 +64,7 @@ class ReportFilters(BaseModel):
     supplier_id: Optional[int] = None
     shift: Optional[str] = None  # 'all' | 'day' | 'evening'
     category: Optional[str] = None
+    family: Optional[str] = None  # one of KITCHENETTE_FAMILIES keys (kitchenette source)
     product_name_like: Optional[str] = None
 
 

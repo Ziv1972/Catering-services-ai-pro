@@ -436,6 +436,8 @@ class ReportEngine:
         q = q.where(month_between(KitchenetteItem.invoice_month, f.from_month, f.to_month))
         if f.site_id:
             q = q.where(KitchenetteItem.site_id == f.site_id)
+        if f.family:
+            q = q.where(KitchenetteItem.family == f.family)
         if f.product_name_like:
             q = q.where(KitchenetteItem.product_name.ilike(f"%{f.product_name_like}%"))
 

@@ -1027,6 +1027,7 @@ export type ReportFilters = {
   supplier_id?: number;
   shift?: string;
   category?: string;
+  family?: string;
   product_name_like?: string;
 };
 export type ReportConfig = {
