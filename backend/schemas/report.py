@@ -103,6 +103,9 @@ class SavedReportIn(BaseModel):
     name: str
     description: Optional[str] = None
     config: ReportConfig
+    auto_email_enabled: bool = False
+    auto_email_recipients: Optional[str] = None  # comma-separated emails
+    auto_email_trigger: str = "monthly_after_foodhouse"
 
 
 class SavedReportOut(BaseModel):
@@ -111,6 +114,9 @@ class SavedReportOut(BaseModel):
     description: Optional[str]
     data_source: str
     config: ReportConfig
+    auto_email_enabled: bool = False
+    auto_email_recipients: Optional[str] = None
+    auto_email_trigger: str = "monthly_after_foodhouse"
     created_at: str
     updated_at: Optional[str]
 

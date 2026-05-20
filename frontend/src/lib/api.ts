@@ -1065,6 +1065,9 @@ export type SavedReport = {
   description?: string | null;
   data_source: string;
   config: ReportConfig;
+  auto_email_enabled?: boolean;
+  auto_email_recipients?: string | null;
+  auto_email_trigger?: string;
   created_at: string;
   updated_at?: string | null;
 };
@@ -1107,11 +1110,11 @@ export const reportsAPI = {
     const response = await api.get('/api/reports/saved');
     return response.data;
   },
-  createSaved: async (data: { name: string; description?: string; config: ReportConfig }): Promise<SavedReport> => {
+  createSaved: async (data: { name: string; description?: string; config: ReportConfig; auto_email_enabled?: boolean; auto_email_recipients?: string | null; auto_email_trigger?: string }): Promise<SavedReport> => {
     const response = await api.post('/api/reports/saved', data);
     return response.data;
   },
-  updateSaved: async (id: number, data: { name: string; description?: string; config: ReportConfig }): Promise<SavedReport> => {
+  updateSaved: async (id: number, data: { name: string; description?: string; config: ReportConfig; auto_email_enabled?: boolean; auto_email_recipients?: string | null; auto_email_trigger?: string }): Promise<SavedReport> => {
     const response = await api.put(`/api/reports/saved/${id}`, data);
     return response.data;
   },

@@ -57,6 +57,8 @@ export default function ReportsPage() {
   const [savedReports, setSavedReports] = useState<SavedReport[]>([]);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveName, setSaveName] = useState('');
+  const [saveAutoEmail, setSaveAutoEmail] = useState(false);
+  const [saveRecipients, setSaveRecipients] = useState('ziv.reshef-simchoni@hp.com');
 
   const activeSource = useMemo(
     () => sources.find((s) => s.key === activeSourceKey),
@@ -126,10 +128,17 @@ export default function ReportsPage() {
   const saveReport = async () => {
     if (!saveName.trim()) return;
     try {
-      const created = await reportsAPI.createSaved({ name: saveName.trim(), config });
+      const created = await reportsAPI.createSaved({
+        name: saveName.trim(),
+        config,
+        auto_email_enabled: saveAutoEmail,
+        auto_email_recipients: saveAutoEmail ? (saveRecipients.trim() || null) : null,
+        auto_email_trigger: 'monthly_after_foodhouse',
+      });
       setSavedReports((s) => [created, ...s]);
       setShowSaveModal(false);
       setSaveName('');
+      setSaveAutoEmail(false);
     } catch (e: any) {
       setError(e?.response?.data?.detail || e?.message || 'Save failed');
     }
@@ -626,6 +635,37 @@ export default function ReportsPage() {
             <p className="text-xs text-gray-500 mb-4">
               The current data source, filters, group-by and metrics will be saved.
             </p>
+
+            {/* Auto-email scheduling */}
+            <div className="border-t pt-3 mb-4 space-y-2">
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={saveAutoEmail}
+                  onChange={(e) => setSaveAutoEmail(e.target.checked)}
+                  className="rounded"
+                />
+                Auto-email monthly (after both NZ + KG FoodHouse proformas land)
+              </label>
+              {saveAutoEmail && (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    Recipients (comma-separated)
+                  </label>
+                  <input
+                    type="text"
+                    value={saveRecipients}
+                    onChange={(e) => setSaveRecipients(e.target.value)}
+                    placeholder="ziv.reshef-simchoni@hp.com, other@hp.com"
+                    className="w-full border rounded px-3 py-2 text-sm"
+                  />
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    The .xlsx (pivoted by month) will be emailed automatically once per month.
+                  </p>
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setShowSaveModal(false)}>Cancel</Button>
               <Button onClick={saveReport} disabled={!saveName.trim()} className="gap-2">

@@ -236,6 +236,10 @@ async def lifespan(app: FastAPI):
             ("proformas", "file_blob", "BLOB" if is_sqlite else "BYTEA"),
             # Proforma: shift column for vending day/evening split
             ("proformas", "shift", "VARCHAR NOT NULL DEFAULT 'all'"),
+            # SavedReport: auto-email scheduling
+            ("saved_reports", "auto_email_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("saved_reports", "auto_email_recipients", "TEXT"),
+            ("saved_reports", "auto_email_trigger", "VARCHAR NOT NULL DEFAULT 'monthly_after_foodhouse'"),
         ]
         for table, column, col_type in migrations:
             try:

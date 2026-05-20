@@ -186,6 +186,9 @@ def _saved_to_out(s: SavedReport) -> SavedReportOut:
         description=s.description,
         data_source=s.data_source,
         config=ReportConfig(**json.loads(s.config_json)),
+        auto_email_enabled=bool(getattr(s, "auto_email_enabled", False)),
+        auto_email_recipients=getattr(s, "auto_email_recipients", None),
+        auto_email_trigger=getattr(s, "auto_email_trigger", None) or "monthly_after_foodhouse",
         created_at=s.created_at.isoformat() if s.created_at else "",
         updated_at=s.updated_at.isoformat() if s.updated_at else None,
     )
@@ -217,6 +220,9 @@ async def create_saved(
         description=payload.description,
         data_source=payload.config.data_source,
         config_json=payload.config.model_dump_json(),
+        auto_email_enabled=payload.auto_email_enabled,
+        auto_email_recipients=payload.auto_email_recipients,
+        auto_email_trigger=payload.auto_email_trigger,
     )
     db.add(saved)
     await db.commit()
@@ -260,6 +266,9 @@ async def update_saved(
     saved.description = payload.description
     saved.data_source = payload.config.data_source
     saved.config_json = payload.config.model_dump_json()
+    saved.auto_email_enabled = payload.auto_email_enabled
+    saved.auto_email_recipients = payload.auto_email_recipients
+    saved.auto_email_trigger = payload.auto_email_trigger
     await db.commit()
     await db.refresh(saved)
     return _saved_to_out(saved)
