@@ -7,11 +7,20 @@ from backend.models.violation import Violation
 from backend.models.meeting import Meeting
 from backend.models.proforma import Proforma
 from backend.models.operations import Anomaly
+from backend.models.saved_report import SavedReport, MonthlyReportSent
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from datetime import datetime, timedelta
-from typing import Dict, Any
+from datetime import datetime, timedelta, date
+from typing import Dict, Any, List, Optional
 import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Supplier ID for FoodHouse — used to decide when a month is "ready" to send.
+# Memory: FoodHouse is supplier id=1; if it ever changes, this constant is the
+# single place to update.
+FOODHOUSE_SUPPLIER_ID = 1
 
 
 class CommunicationHubAgent(BaseAgent):
@@ -179,6 +188,165 @@ class CommunicationHubAgent(BaseAgent):
         )
 
         return {"management_update": update}
+
+    # ─── Auto-email scheduled reports ─────────────────────────────────────
+
+    async def maybe_send_monthly_reports(
+        self,
+        db: AsyncSession,
+        proforma_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Trigger entry-point called after a successful proforma upload.
+
+        Walks every SavedReport with `auto_email_enabled=True` and sends the
+        ones whose configured trigger is now satisfied. Only one trigger
+        type is implemented: `monthly_after_foodhouse` — fires when both
+        Nes Ziona + Kiryat Gat FoodHouse proformas exist for a given month.
+
+        Dedupe is enforced via the MonthlyReportSent table — each
+        (saved_report_id, year, month) is sent at most once. Failures
+        are recorded too so retries are explicit, not silent.
+
+        Returns a summary {sent: int, skipped: int, errors: [..]}.
+        Never raises — callers (the upload endpoint) should treat any
+        result as advisory.
+        """
+        summary: Dict[str, Any] = {"sent": 0, "skipped": 0, "errors": []}
+
+        # Which (year, month) pairs have both sites uploaded for FoodHouse?
+        ready_months = await self._foodhouse_complete_months(db)
+        if not ready_months:
+            return summary
+
+        # All saved reports that opted into auto-email.
+        res = await db.execute(
+            select(SavedReport).where(SavedReport.auto_email_enabled == True)  # noqa: E712
+        )
+        reports = res.scalars().all()
+        if not reports:
+            return summary
+
+        # Already-sent (saved_report_id, year, month) pairs — skip these.
+        sent_res = await db.execute(select(MonthlyReportSent))
+        already_sent = {
+            (s.saved_report_id, s.year, s.month)
+            for s in sent_res.scalars().all()
+            if s.status == "sent"
+        }
+
+        for saved in reports:
+            if (saved.auto_email_trigger or "monthly_after_foodhouse") != "monthly_after_foodhouse":
+                continue
+            for year, month in ready_months:
+                key = (saved.id, year, month)
+                if key in already_sent:
+                    summary["skipped"] += 1
+                    continue
+                try:
+                    await self._send_one_monthly_report(db, saved, year, month)
+                    summary["sent"] += 1
+                except Exception as e:
+                    logger.exception("Auto-email failed for saved_report=%s %d-%02d", saved.id, year, month)
+                    summary["errors"].append({
+                        "saved_report_id": saved.id,
+                        "year": year, "month": month, "error": str(e),
+                    })
+                    # Record the failure so we don't retry on every upload
+                    db.add(MonthlyReportSent(
+                        saved_report_id=saved.id, year=year, month=month,
+                        recipient_count=0, status="failed", error=str(e)[:500],
+                    ))
+                    await db.commit()
+
+        return summary
+
+    async def _foodhouse_complete_months(self, db: AsyncSession) -> List[tuple]:
+        """Return (year, month) pairs where FoodHouse has uploaded proformas
+        for BOTH sites (site_id 1 = NZ, site_id 2 = KG)."""
+        from backend.utils.db_compat import extract_year, extract_month
+        q = (
+            select(
+                extract_year(Proforma.invoice_date).label("y"),
+                extract_month(Proforma.invoice_date).label("m"),
+                func.count(func.distinct(Proforma.site_id)).label("sites"),
+            )
+            .where(Proforma.supplier_id == FOODHOUSE_SUPPLIER_ID)
+            .where(Proforma.invoice_date.isnot(None))
+            .group_by(extract_year(Proforma.invoice_date), extract_month(Proforma.invoice_date))
+        )
+        rows = (await db.execute(q)).all()
+        complete = []
+        for y, m, sites in rows:
+            try:
+                if int(sites) >= 2:
+                    complete.append((int(y), int(m)))
+            except (TypeError, ValueError):
+                continue
+        return complete
+
+    async def _send_one_monthly_report(
+        self,
+        db: AsyncSession,
+        saved: SavedReport,
+        year: int,
+        month: int,
+    ) -> None:
+        """Run a SavedReport for (year, month), build the .xlsx, email it,
+        and record the send. Raises on any failure (caller catches)."""
+        from backend.schemas.report import ReportConfig
+        from backend.services.report_engine import ReportEngine
+        from backend.utils.report_export import build_xlsx
+        from backend.services.email_sender import send_xlsx_email
+        from backend.api.reports import _default_title
+
+        # Materialize config, then narrow filters to this specific month
+        cfg = ReportConfig(**json.loads(saved.config_json))
+        cfg = cfg.model_copy(update={
+            "filters": cfg.filters.model_copy(update={
+                "year": year, "from_month": month, "to_month": month,
+            })
+        })
+
+        engine = ReportEngine(db)
+        report = await engine.run(cfg)
+        title = saved.name or _default_title(cfg)
+        xlsx_bytes = build_xlsx(report, cfg, title)
+
+        recipients_raw = (saved.auto_email_recipients or "").strip()
+        recipients = [r.strip() for r in recipients_raw.split(",") if r.strip()]
+        if not recipients:
+            raise ValueError("no recipients configured")
+
+        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        period = f"{month_names[month - 1]} {year}"
+        subject = f"[Catering AI] {saved.name} — {period}"
+        body = (
+            f"Automated monthly report from Catering AI Pro.\n\n"
+            f"Report: {saved.name}\n"
+            f"Period: {period}\n"
+            f"Generated: {datetime.utcnow().date().isoformat()}\n\n"
+            f"The full table is attached as an Excel file (.xlsx)."
+        )
+        filename = f"{saved.name}_{year}-{month:02d}.xlsx"
+
+        count = send_xlsx_email(
+            recipients=recipients,
+            subject=subject,
+            body=body,
+            xlsx_bytes=xlsx_bytes,
+            xlsx_filename=filename,
+        )
+
+        db.add(MonthlyReportSent(
+            saved_report_id=saved.id, year=year, month=month,
+            recipient_count=count, status="sent",
+        ))
+        await db.commit()
+        logger.info(
+            "Auto-emailed saved_report=%s for %d-%02d to %d recipient(s)",
+            saved.id, year, month, count,
+        )
 
     def _get_system_prompt(self) -> str:
         return (

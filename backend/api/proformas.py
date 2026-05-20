@@ -824,6 +824,15 @@ async def upload_proforma(
     except Exception as e:
         logger.warning("DailyOpsMonitor failed for proforma upload (non-fatal): %s", e)
 
+    # Trigger auto-email scheduled reports. Non-fatal — never blocks the upload.
+    auto_email_summary: dict = {"sent": 0, "skipped": 0, "errors": []}
+    try:
+        from backend.agents.communication_hub.agent import CommunicationHubAgent
+        comms = CommunicationHubAgent()
+        auto_email_summary = await comms.maybe_send_monthly_reports(db, proforma_id=proforma.id)
+    except Exception as e:
+        logger.warning("Auto-email scheduler failed (non-fatal): %s", e)
+
     return {
         "id": proforma.id,
         "supplier_id": proforma.supplier_id,
@@ -837,6 +846,7 @@ async def upload_proforma(
         "meal_breakdown_extracted": meal_extracted,
         "kitchenette_items_extracted": kitchenette_count,
         "monitor_findings": monitor_findings,
+        "auto_email_summary": auto_email_summary,
     }
 
 
