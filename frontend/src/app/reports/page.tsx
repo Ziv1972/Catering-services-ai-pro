@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   FileBarChart, Download, Save, Trash2, Play, Table2, BarChart3,
-  Loader2, Bookmark, Plus,
+  Loader2, Bookmark, Plus, Mail,
 } from 'lucide-react';
 import {
   reportsAPI, suppliersAPI,
@@ -484,6 +484,23 @@ export default function ReportsPage() {
                     >
                       <Download className="w-3.5 h-3.5" />
                     </button>
+                    {s.auto_email_enabled && (
+                      <button
+                        onClick={async () => {
+                          if (!confirm(`Send "${s.name}" now to ${s.auto_email_recipients || '(no recipients)'}?`)) return;
+                          try {
+                            const res = await reportsAPI.sendSavedNow(s.id);
+                            alert(`Sent ${res.year}-${String(res.month).padStart(2, '0')} to:\n${res.recipients.join('\n')}`);
+                          } catch (e: any) {
+                            alert(`Send failed: ${e?.response?.data?.detail || e?.message || 'unknown error'}`);
+                          }
+                        }}
+                        className="p-1 rounded hover:bg-blue-100 text-blue-600"
+                        title="Send now (test)"
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button
                       onClick={() => deleteSaved(s.id)}
                       className="p-1 rounded hover:bg-red-100 text-red-600"

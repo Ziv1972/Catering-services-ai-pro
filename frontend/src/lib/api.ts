@@ -1133,6 +1133,14 @@ export const reportsAPI = {
     const filename = filenameFromHeaders(response.headers, `${fallbackName}.xlsx`);
     downloadBlob(response.data, filename);
   },
+  sendSavedNow: async (id: number, year?: number, month?: number): Promise<{ status: string; year: number; month: number; recipients: string[] }> => {
+    const params = new URLSearchParams();
+    if (year) params.set('year', String(year));
+    if (month) params.set('month', String(month));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const response = await api.post(`/api/reports/saved/${id}/send-now${qs}`, null, { timeout: 60000 });
+    return response.data;
+  },
 };
 
 // Agent Crew

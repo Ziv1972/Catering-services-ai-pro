@@ -313,3 +313,54 @@ async def export_saved(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": _content_disposition(title)},
     )
+
+
+@router.post("/saved/{report_id}/send-now")
+async def send_saved_now(
+    report_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Manually fire the auto-email path for a saved report.
+
+    Used for testing / re-send. Bypasses the MonthlyReportSent dedupe by
+    deleting any prior log entry for the same (saved_report, year, month)
+    before sending. Defaults to the current month if year/month omitted.
+
+    Requires the saved report to have auto_email_enabled + at least one
+    recipient configured (so the test exercises the real send path).
+    """
+    from backend.agents.communication_hub.agent import CommunicationHubAgent
+    from backend.models.saved_report import MonthlyReportSent
+    from sqlalchemy import delete as sql_delete
+
+    saved = await _load_saved(db, current_user.id, report_id)
+    if not saved.auto_email_enabled:
+        raise HTTPException(status_code=400, detail="auto_email_enabled is off on this saved report")
+    if not (saved.auto_email_recipients or "").strip():
+        raise HTTPException(status_code=400, detail="No recipients configured")
+
+    today = date.today()
+    y = year or today.year
+    m = month or today.month
+    if not (1 <= m <= 12):
+        raise HTTPException(status_code=400, detail="month must be 1..12")
+
+    # Clear any prior log entry so we can re-send freely
+    await db.execute(sql_delete(MonthlyReportSent).where(
+        MonthlyReportSent.saved_report_id == report_id,
+        MonthlyReportSent.year == y,
+        MonthlyReportSent.month == m,
+    ))
+    await db.commit()
+
+    agent = CommunicationHubAgent()
+    try:
+        await agent._send_one_monthly_report(db, saved, y, m)
+        return {"status": "sent", "year": y, "month": m,
+                "recipients": (saved.auto_email_recipients or "").split(",")}
+    except Exception as e:
+        logger.exception("Manual send-now failed for saved_report=%s", report_id)
+        raise HTTPException(status_code=500, detail=f"Send failed: {e}")
