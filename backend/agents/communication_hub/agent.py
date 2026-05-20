@@ -198,10 +198,11 @@ class CommunicationHubAgent(BaseAgent):
     ) -> Dict[str, Any]:
         """Trigger entry-point called after a successful proforma upload.
 
-        Walks every SavedReport with `auto_email_enabled=True` and sends the
-        ones whose configured trigger is now satisfied. Only one trigger
-        type is implemented: `monthly_after_foodhouse` — fires when both
-        Nes Ziona + Kiryat Gat FoodHouse proformas exist for a given month.
+        Scoped intentionally narrow: only fires for the (year, month) of
+        the proforma that was just uploaded, and only if THAT month now
+        has both Nes Ziona + Kiryat Gat FoodHouse proformas. This avoids
+        back-filling emails for older complete months when auto-email is
+        first turned on.
 
         Dedupe is enforced via the MonthlyReportSent table — each
         (saved_report_id, year, month) is sent at most once. Failures
@@ -213,9 +214,25 @@ class CommunicationHubAgent(BaseAgent):
         """
         summary: Dict[str, Any] = {"sent": 0, "skipped": 0, "errors": []}
 
-        # Which (year, month) pairs have both sites uploaded for FoodHouse?
-        ready_months = await self._foodhouse_complete_months(db)
-        if not ready_months:
+        if not proforma_id:
+            return summary
+
+        # Look up the (year, month) of the proforma that just triggered us
+        pf_res = await db.execute(
+            select(Proforma.invoice_date, Proforma.supplier_id)
+            .where(Proforma.id == proforma_id)
+        )
+        pf_row = pf_res.first()
+        if not pf_row or not pf_row[0]:
+            return summary
+        inv_date, supplier_id = pf_row
+        # Only FoodHouse uploads complete a "monthly_after_foodhouse" trigger
+        if supplier_id != FOODHOUSE_SUPPLIER_ID:
+            return summary
+        year, month = inv_date.year, inv_date.month
+
+        # Is this month now complete (both NZ + KG FoodHouse proformas)?
+        if not await self._month_is_complete(db, year, month):
             return summary
 
         # All saved reports that opted into auto-email.
@@ -226,63 +243,51 @@ class CommunicationHubAgent(BaseAgent):
         if not reports:
             return summary
 
-        # Already-sent (saved_report_id, year, month) pairs — skip these.
-        sent_res = await db.execute(select(MonthlyReportSent))
-        already_sent = {
-            (s.saved_report_id, s.year, s.month)
-            for s in sent_res.scalars().all()
-            if s.status == "sent"
-        }
+        # Already-sent for this exact month — skip those reports.
+        already_sent_res = await db.execute(
+            select(MonthlyReportSent.saved_report_id).where(
+                MonthlyReportSent.year == year,
+                MonthlyReportSent.month == month,
+                MonthlyReportSent.status == "sent",
+            )
+        )
+        already_sent_ids = {row[0] for row in already_sent_res.all()}
 
         for saved in reports:
             if (saved.auto_email_trigger or "monthly_after_foodhouse") != "monthly_after_foodhouse":
                 continue
-            for year, month in ready_months:
-                key = (saved.id, year, month)
-                if key in already_sent:
-                    summary["skipped"] += 1
-                    continue
-                try:
-                    await self._send_one_monthly_report(db, saved, year, month)
-                    summary["sent"] += 1
-                except Exception as e:
-                    logger.exception("Auto-email failed for saved_report=%s %d-%02d", saved.id, year, month)
-                    summary["errors"].append({
-                        "saved_report_id": saved.id,
-                        "year": year, "month": month, "error": str(e),
-                    })
-                    # Record the failure so we don't retry on every upload
-                    db.add(MonthlyReportSent(
-                        saved_report_id=saved.id, year=year, month=month,
-                        recipient_count=0, status="failed", error=str(e)[:500],
-                    ))
-                    await db.commit()
+            if saved.id in already_sent_ids:
+                summary["skipped"] += 1
+                continue
+            try:
+                await self._send_one_monthly_report(db, saved, year, month)
+                summary["sent"] += 1
+            except Exception as e:
+                logger.exception("Auto-email failed for saved_report=%s %d-%02d", saved.id, year, month)
+                summary["errors"].append({
+                    "saved_report_id": saved.id,
+                    "year": year, "month": month, "error": str(e),
+                })
+                db.add(MonthlyReportSent(
+                    saved_report_id=saved.id, year=year, month=month,
+                    recipient_count=0, status="failed", error=str(e)[:500],
+                ))
+                await db.commit()
 
         return summary
 
-    async def _foodhouse_complete_months(self, db: AsyncSession) -> List[tuple]:
-        """Return (year, month) pairs where FoodHouse has uploaded proformas
-        for BOTH sites (site_id 1 = NZ, site_id 2 = KG)."""
-        from backend.utils.db_compat import extract_year, extract_month
+    async def _month_is_complete(self, db: AsyncSession, year: int, month: int) -> bool:
+        """True if FoodHouse has uploaded proformas for BOTH sites in
+        the given (year, month)."""
+        from backend.utils.db_compat import year_equals, month_equals
         q = (
-            select(
-                extract_year(Proforma.invoice_date).label("y"),
-                extract_month(Proforma.invoice_date).label("m"),
-                func.count(func.distinct(Proforma.site_id)).label("sites"),
-            )
+            select(func.count(func.distinct(Proforma.site_id)))
             .where(Proforma.supplier_id == FOODHOUSE_SUPPLIER_ID)
-            .where(Proforma.invoice_date.isnot(None))
-            .group_by(extract_year(Proforma.invoice_date), extract_month(Proforma.invoice_date))
+            .where(year_equals(Proforma.invoice_date, year))
+            .where(month_equals(Proforma.invoice_date, month))
         )
-        rows = (await db.execute(q)).all()
-        complete = []
-        for y, m, sites in rows:
-            try:
-                if int(sites) >= 2:
-                    complete.append((int(y), int(m)))
-            except (TypeError, ValueError):
-                continue
-        return complete
+        sites = (await db.execute(q)).scalar() or 0
+        return int(sites) >= 2
 
     async def _send_one_monthly_report(
         self,
