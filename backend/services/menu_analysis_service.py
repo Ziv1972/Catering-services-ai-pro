@@ -414,10 +414,22 @@ def _extract_days_from_excel_columns(
             date_row_idx = -1
             day_col_indices: list[int] = []
             day_dates: list[date | None] = []
+            day_themes: list[str] = []
+
+            def _extract_theme(cell_str: str) -> str:
+                """Strip date and Hebrew weekday prefix; return remaining theme text."""
+                if not cell_str:
+                    return ""
+                t = cell_str
+                t = re.sub(r'\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?', '', t)
+                t = re.sub(r'\d{4}-\d{2}-\d{2}', '', t)
+                for hd in hebrew_days:
+                    t = t.replace(f"יום {hd}", "").replace(hd, "")
+                return t.strip(" -–—\t\n").strip()
 
             for row_idx in range(min(5, len(all_rows))):
                 row = all_rows[row_idx]
-                found_dates: list[tuple[int, date | None]] = []
+                found_dates: list[tuple[int, date | None, str]] = []
                 for col_idx, cell in enumerate(row):
                     if col_idx == 0:
                         continue  # Skip column A (categories)
@@ -425,7 +437,7 @@ def _extract_days_from_excel_columns(
                         continue
                     # Check for datetime objects (Excel dates)
                     if isinstance(cell, dt):
-                        found_dates.append((col_idx, cell.date() if hasattr(cell, 'date') else None))
+                        found_dates.append((col_idx, cell.date() if hasattr(cell, 'date') else None, ""))
                         continue
                     cell_str = str(cell).strip()
                     # Check for date strings
@@ -433,7 +445,7 @@ def _extract_days_from_excel_columns(
                     if date_match:
                         try:
                             d = date(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
-                            found_dates.append((col_idx, d))
+                            found_dates.append((col_idx, d, _extract_theme(cell_str)))
                         except ValueError:
                             pass
                         continue
@@ -441,7 +453,7 @@ def _extract_days_from_excel_columns(
                     if date_match:
                         try:
                             d = date(year, int(date_match.group(2)), int(date_match.group(1)))
-                            found_dates.append((col_idx, d))
+                            found_dates.append((col_idx, d, _extract_theme(cell_str)))
                         except ValueError:
                             pass
                         continue
@@ -454,6 +466,7 @@ def _extract_days_from_excel_columns(
                     date_row_idx = row_idx
                     day_col_indices = [f[0] for f in found_dates]
                     day_dates = [f[1] for f in found_dates]
+                    day_themes = [f[2] for f in found_dates]
                     break
 
             # Fallback: look for Hebrew day name row
@@ -469,6 +482,7 @@ def _extract_days_from_excel_columns(
                     if len(cols) >= 3:
                         day_col_indices = cols
                         day_dates = [None] * len(cols)
+                        day_themes = [""] * len(cols)
                         break
 
             if not day_col_indices:
@@ -508,6 +522,13 @@ def _extract_days_from_excel_columns(
                     if category not in day_items:
                         day_items[category] = []
                     day_items[category].append(val)
+
+                # Inject day-header theme (e.g. "דרום אמריקה", "מטבח תורכי")
+                # so theme-day rules (שוברי שגרה / ימים מיוחדים) can see themes
+                # that appear ONLY in the column header rather than in any menu cell.
+                theme_text = day_themes[i] if i < len(day_themes) else ""
+                if theme_text:
+                    day_items.setdefault("[כותרת היום]", []).append(theme_text)
 
                 if not any(day_items.values()):
                     continue
@@ -2368,8 +2389,21 @@ async def run_ai_compliance_check(
         "כרע עוף ממולא":    (["כרע עוף ממולא", "כרעיים ממולאות", "פרגית ממולאת אורז"], []),
         "סינייה אסאדו":     (["סינייה אסאדו", "בקלאוות בשר", "טורטיה ממולאת אסאדו", "אושפלו אסאדו"], []),
         "כנאפה אסאדו":      (["כנאפה אסאדו"], []),
-        "שוברי שגרה":       (["יום עיראקי", "יום מרוקאי", "יום תורכי", "יום טריפוליטא", "יום אסייתי", "מטבח אסייתי", "עמדת לחמג'ון", "עמדת טריפוליטא"], ["סלט"]),
+        "שוברי שגרה":       (["יום עיראקי", "יום מרוקאי", "יום תורכי", "יום טריפוליטא", "יום אסייתי", "יום ויאטנמי", "יום בוכרי", "יום ים תיכוני", "מטבח אסייתי", "מטבח תורכי", "מטבח מרוקאי", "מטבח עיראקי", "מטבח טריפוליטא", "מטבח בוכרי", "עמדת לחמג'ון", "עמדה תורכית", "עמדת טריפוליטא", "דרום אמריקה", "אמריקה הדרומית", "ברזיל", "פרואני"], ["סלט"]),
         "ימים מיוחדים":     (["יום העצמאות", "פורים", "חנוכה", "פסח", "שבועות", "ראש השנה", "יום כיפור", "סוכות", "ל\"ג בעומר", "יום הזיכרון", "שף אורח", "אירוע מיוחד"], []),
+        # NZ weekly rules — Claude often under-counts; deterministic backfill guarantees firing.
+        # Multiple dict keys with the SAME keyword set act as rule-name aliases:
+        # whichever spelling Claude echoes back will trigger the backfill (dict
+        # iteration stops at the first match via `break` in the consumer loop).
+        "קינואה עדשים":     (["קינואה ועדשים", "קינואה עדשים"], []),
+        "קינואה ועדשים":    (["קינואה ועדשים", "קינואה עדשים"], []),
+        "ווקאמה":           (["ווקאמה", "וואקמה"], []),
+        "וואקמה":           (["ווקאמה", "וואקמה"], []),
+        "פילה סלמון":       (["פילה סלמון", "סלמון"], ["שווארמה דג", "שווארמת דג"]),
+        "מאפה בשר וחציל":   (["מאפה בשר", "מאפה בקר", "מאפה חציל ואסאדו", "מאפה פילו בקר"], []),
+        "מאפה בקר וחציל":   (["מאפה בשר", "מאפה בקר", "מאפה חציל ואסאדו", "מאפה פילו בקר"], []),
+        "קארנץ שמרים":      (["עוגת קראנץ", "עוגת קארנץ", "עוגת שמרים", "קרואסון שמרים", "קראוסון שמרים"], []),
+        "קראנץ שמרים":      (["עוגת קראנץ", "עוגת קארנץ", "עוגת שמרים", "קרואסון שמרים", "קראוסון שמרים"], []),
     }
 
     # Build per-day flat items (preserving row category labels)
