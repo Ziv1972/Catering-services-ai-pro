@@ -538,6 +538,21 @@ def _extract_days_from_excel_columns(
                 if not day_date:
                     # Generate date from position
                     day_date = date(year, month_num, min(len(days_data) + 1, 28))
+                # Coerce dates that fall outside the requested month/year — these
+                # are almost always Excel typos (e.g. 2026-06-27 typed where
+                # 2026-07-27 was meant). Without coercion the day shows up as
+                # the wrong weekday and all rules miss it.
+                elif day_date.month != month_num or day_date.year != year:
+                    try:
+                        coerced = date(year, month_num, day_date.day)
+                        logger.warning(
+                            f"Date typo in menu file: {day_date.isoformat()} "
+                            f"→ coerced to {coerced.isoformat()} (requested "
+                            f"{year}-{month_num:02d})"
+                        )
+                        day_date = coerced
+                    except ValueError:
+                        pass
 
                 days_data.append({
                     "date": day_date.isoformat(),
@@ -2457,6 +2472,78 @@ async def run_ai_compliance_check(
                 _r["shortage"] = (_r.get("expected", 0) or 0) - backfill_count
                 _r["notes"] = (_r.get("notes") or "") + f" [backfill: {old_actual}→{backfill_count} via substitute keywords]"
                 logger.info(f"Substitution backfill: '{dish_name}' {old_actual}→{backfill_count}")
+            break
+
+    # ---- Row-position backfill (deterministic safety net for daily/weekly mandatory rules) ----
+    # Claude often misses position-based daily rules because the DISH NAME in
+    # the menu does NOT contain the rule keyword: e.g. the "גריל יומי" rule's
+    # actual dishes are "חזה עוף ..." in [עמדת גריל 2] row — none contain "גריל".
+    # SUBSTITUTION_RULES (keyword-in-dish) can't catch this; we need to scan
+    # by ROW LABEL instead.
+    #
+    # Schema: rule_kw → (row_substrings, item_keywords, item_excludes)
+    #   - row_substrings: a row label matches if any of these is a substring
+    #   - item_keywords: if non-empty, the item must contain one of these
+    #   - item_excludes: items containing these are skipped
+    ROW_POSITION_RULES = {
+        "פחמימה מלאה":     (["פחמימה מלאה"], [], []),
+        "קטנייה":          (["קיטניה", "קטניה", "קטניות"], [], []),
+        "קטניה ביום":      (["קיטניה", "קטניה", "קטניות"], [], []),
+        "גריל יומי":       (["עמדת גריל 2", "גריל יומי", "[גריל]"], [], []),
+        "חזה עוף בגריל":   (["עמדת גריל 2", "גריל יומי", "[גריל]"], [], []),
+        "מנה טבעונית":     (["בריאות מנה טבעונית", "המנה הטבעונית", "מנה טבעונית"], [], []),
+        "עמדת אוכל רחוב":  (["עמדת אוכל רחוב"], [], []),
+        # מרק צח/ירקות — the row label is "מרק היום" (≥1 such row per day, KG
+        # actually has 2). Item must contain "צח" or "ירקות" to count.
+        "מרק צח":          (["מרק היום", "מרק"], ["צח", "ירקות"], []),
+        "מרק ירקות":       (["מרק היום", "מרק"], ["צח", "ירקות"], []),
+    }
+
+    def _menu_items_in_rows(
+        row_kws: list[str], item_kws: list[str], item_excludes: list[str]
+    ) -> list[tuple[str, str, str]]:
+        """Return [(date, row_label, item)] where row matches and item passes filters."""
+        out = []
+        for d, rows in _day_rows.items():
+            day_hit = False
+            for cat, items in rows.items():
+                cat_str = str(cat)
+                if row_kws and not any(rk in cat_str for rk in row_kws):
+                    continue
+                if not isinstance(items, list):
+                    continue
+                for it in items:
+                    s = str(it).strip()
+                    if not s or len(s) < 2:
+                        continue
+                    if item_excludes and any(x in s for x in item_excludes):
+                        continue
+                    if item_kws and not any(k in s for k in item_kws):
+                        continue
+                    out.append((d, cat_str, s))
+                    day_hit = True
+                    break
+                if day_hit:
+                    break
+        return out
+
+    for _r in ai_results:
+        dish_name = _r.get("dish", "")
+        for rule_kw, (row_kws, item_kws, item_excludes) in ROW_POSITION_RULES.items():
+            if rule_kw not in dish_name:
+                continue
+            backfill = _menu_items_in_rows(row_kws, item_kws, item_excludes)
+            backfill_dates = sorted(set(d for d, _, _ in backfill))
+            backfill_count = len(backfill_dates)
+            ai_actual = _r.get("actual", 0) or 0
+            if backfill_count > ai_actual:
+                old_actual = ai_actual
+                _r["actual"] = backfill_count
+                _r["found_dates"] = backfill_dates[:25]
+                _r["matched_items"] = list(set(it for _, _, it in backfill))[:10]
+                _r["shortage"] = (_r.get("expected", 0) or 0) - backfill_count
+                _r["notes"] = (_r.get("notes") or "") + f" [row-backfill: {old_actual}→{backfill_count}]"
+                logger.info(f"Row-position backfill: '{dish_name}' {old_actual}→{backfill_count}")
             break
 
     # ---- Ground-meat anomaly backfill (deterministic safety net) ----
