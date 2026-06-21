@@ -29,7 +29,8 @@ class ClaudeService:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        prefill: Optional[str] = None,
     ) -> str:
         """
         Generate a response from Claude.
@@ -37,11 +38,18 @@ class ClaudeService:
         Uses streaming automatically when max_tokens is large enough that the
         Anthropic SDK would refuse a non-streaming call (>10 min potential).
         Threshold: 21333 tokens for Sonnet 4.5 (per anthropic SDK guard).
+
+        prefill: if set, seed the assistant turn so the model continues from
+        that text — useful for forcing JSON output (`prefill="["`). The
+        returned string includes the prefill prepended to the model's
+        continuation, so callers can parse a complete document.
         """
         if not self._available or self.client is None:
             raise RuntimeError("AI service not configured: ANTHROPIC_API_KEY is not set")
 
-        messages = [{"role": "user", "content": prompt}]
+        messages: list = [{"role": "user", "content": prompt}]
+        if prefill:
+            messages.append({"role": "assistant", "content": prefill})
         effective_max = max_tokens or self.max_tokens
 
         # Streaming path — required for high max_tokens to avoid SDK refusal.
@@ -57,7 +65,7 @@ class ClaudeService:
             ) as stream:
                 async for text in stream.text_stream:
                     chunks.append(text)
-            return "".join(chunks)
+            return (prefill or "") + "".join(chunks)
 
         # Non-streaming path for normal-sized requests
         response = await self.client.messages.create(
@@ -68,7 +76,7 @@ class ClaudeService:
             messages=messages
         )
 
-        return response.content[0].text
+        return (prefill or "") + response.content[0].text
 
     async def generate_vision_response(
         self,

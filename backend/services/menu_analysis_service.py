@@ -2332,10 +2332,15 @@ async def run_ai_compliance_check(
         system_prompt=(
             "You are a precise menu compliance auditor. "
             "Return ONLY a valid JSON array — no markdown, no code blocks, no extra text. "
+            "Do NOT narrate your analysis or list dates before the JSON — start IMMEDIATELY with `[`. "
             "Populate matched_items with exact menu text but cap at MAX 10 items per rule "
             "(if more than 10 days match, pick the first 10 representative entries)."
         ),
         max_tokens=32768,
+        # Prefill forces Claude to start with `[` — Sonnet 4.6 otherwise
+        # writes pages of day-by-day analysis as preamble and hits max_tokens
+        # before reaching the JSON, leaving the bracket-matching parser empty.
+        prefill="[",
     )
 
     # Extract the outermost JSON array from the response.
