@@ -2157,6 +2157,7 @@ async def run_ai_compliance_check(
     site_result = await db.execute(select(Site).where(Site.id == check.site_id))
     site = site_result.scalar_one_or_none()
     site_name = site.name if site else "Unknown"
+    site_code = (site.code or "").upper() if site else ""
 
     # Load parsed menu days
     days_result = await db.execute(
@@ -2226,12 +2227,19 @@ async def run_ai_compliance_check(
             return rule_name.split("מקסימום", 1)[1].strip() if "מקסימום" in rule_name else ""
         return ""
 
-    # Site filter: NZ-only rules excluded from KG
+    # Site filter: NZ-only rules excluded from KG.
+    # NOTE: include spelling variants — historic KG-imported rules use
+    # "וואקמה" (with extra aleph) vs NZ seed's "ווקאמה". Both must filter.
     NZ_ONLY_KEYWORDS = [
-        "אנטיפסטי", "מסאחן", "חמוסטה", "מאפה בקר",
+        "אנטיפסטי", "מסאחן", "חמוסטה", "מאפה בקר", "מאפה בשר וחציל",
         "סינייה אסאדו", "כנאפה אסאדו", "פילו במילוי בקר",
-        "ויאטנמי", "ווקאמה", "סלק ותפוח",
+        "ויאטנמי", "ווקאמה", "וואקמה", "סלק ותפוח",
     ]
+    # Site identity check — DB sites are seeded with English names
+    # ("Kiryat Gat", "Nes Ziona") and short codes ("KG", "NZ"). The filter
+    # MUST match by code; relying on Hebrew-substring/upper-eq tests against
+    # the English name silently lets every NZ-only rule leak into KG checks.
+    is_kg = (site_code == "KG") or (site_name and ("קרית גת" in site_name or "Kiryat" in site_name))
 
     # Build compact rules table with TRANSLATED Hebrew categories
     rules_lines = []
@@ -2243,7 +2251,7 @@ async def run_ai_compliance_check(
         desc = r.description or ""
 
         # Skip NZ-only rules when checking KG
-        if site_name and ("קרית גת" in site_name or site_name.upper() == "KG"):
+        if is_kg:
             if any(nz_kw in r.name for nz_kw in NZ_ONLY_KEYWORDS):
                 skipped_nz_only += 1
                 continue
