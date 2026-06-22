@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # Claude API
     ANTHROPIC_API_KEY: str = ""
-    CLAUDE_MODEL: str = "claude-sonnet-4-6"
+    CLAUDE_MODEL: str = "claude-opus-4-7"
     CLAUDE_MAX_TOKENS: int = 4096
 
     # Email (Gmail API)

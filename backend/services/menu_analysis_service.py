@@ -2330,17 +2330,17 @@ async def run_ai_compliance_check(
     raw_response = await claude_service.generate_response(
         prompt=prompt,
         system_prompt=(
-            "You are a precise menu compliance auditor. "
-            "Return ONLY a valid JSON array — no markdown, no code blocks, no extra text. "
-            "Do NOT narrate your analysis or list dates before the JSON — start IMMEDIATELY with `[`. "
-            "Populate matched_items with exact menu text but cap at MAX 10 items per rule "
-            "(if more than 10 days match, pick the first 10 representative entries)."
+            "You are a JSON-only compliance API endpoint. "
+            "Your ENTIRE response is one raw JSON array — nothing else. "
+            "ABSOLUTE RULES:\n"
+            "1. The FIRST character of your reply MUST be `[` — no prose, no markdown, no `Let me analyze`, no day-by-day breakdown.\n"
+            "2. The LAST character MUST be `]`.\n"
+            "3. Do all reasoning silently. NEVER write analysis or commentary in the response.\n"
+            "4. Populate matched_items with exact menu text but cap at MAX 10 items per rule "
+            "(if more than 10 days match, pick the first 10 representative entries).\n"
+            "Violating these rules breaks the calling system."
         ),
         max_tokens=32768,
-        # Prefill forces Claude to start with `[` — Sonnet 4.6 otherwise
-        # writes pages of day-by-day analysis as preamble and hits max_tokens
-        # before reaching the JSON, leaving the bracket-matching parser empty.
-        prefill="[",
     )
 
     # Extract the outermost JSON array from the response.
