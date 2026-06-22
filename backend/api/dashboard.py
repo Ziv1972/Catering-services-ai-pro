@@ -1591,6 +1591,134 @@ async def dashboard_daily_meals(
     }
 
 
+@router.get("/daily-meals/export")
+async def dashboard_daily_meals_export(
+    days: int = Query(default=30, ge=1, le=365),
+    site_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Download daily meal counts as an Excel report, broken down by
+    site / meal type / quantity. Honors the same days + site filters
+    as the dashboard chart.
+    """
+    import io
+    from datetime import timedelta
+    from fastapi.responses import StreamingResponse
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail="openpyxl not installed")
+
+    from backend.models.daily_meal_count import DailyMealCount
+    from backend.models.site import Site
+
+    today = date.today()
+    start_date = today - timedelta(days=days)
+
+    query = (
+        select(DailyMealCount)
+        .where(DailyMealCount.date >= start_date)
+        .order_by(DailyMealCount.date.desc())
+    )
+    if site_id:
+        query = query.where(DailyMealCount.site_id == site_id)
+    result = await db.execute(query)
+    records = result.scalars().all()
+
+    sites_result = await db.execute(select(Site.id, Site.name))
+    sites = {r.id: r.name for r in sites_result}
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="EA580C", end_color="EA580C", fill_type="solid")
+    center = Alignment(horizontal="center")
+
+    def style_header(ws, headers):
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center
+
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: daily detail ──
+    ws_detail = wb.active
+    ws_detail.title = "פירוט יומי"
+    style_header(ws_detail, ["תאריך", "אתר", "סוג ארוחה", "Meal Type", "כמות", "מקור"])
+    for row_idx, m in enumerate(
+        sorted(records, key=lambda r: (r.date, sites.get(r.site_id, ""), r.meal_type_en or r.meal_type or "")),
+        start=2,
+    ):
+        ws_detail.cell(row=row_idx, column=1, value=str(m.date))
+        ws_detail.cell(row=row_idx, column=2, value=sites.get(m.site_id, "?"))
+        ws_detail.cell(row=row_idx, column=3, value=m.meal_type or "")
+        ws_detail.cell(row=row_idx, column=4, value=m.meal_type_en or "")
+        ws_detail.cell(row=row_idx, column=5, value=m.quantity)
+        ws_detail.cell(row=row_idx, column=6, value=m.source or "")
+
+    # ── Sheet 2: summary by site & type ──
+    summary: dict[tuple[int, str, str], dict] = {}
+    for m in records:
+        key = (m.site_id, m.meal_type or "", m.meal_type_en or "")
+        agg = summary.setdefault(key, {"qty": 0.0, "days": set()})
+        agg["qty"] += m.quantity
+        agg["days"].add(m.date)
+
+    ws_sum = wb.create_sheet("סיכום לפי אתר וסוג")
+    style_header(ws_sum, ["אתר", "סוג ארוחה", "Meal Type", "סה\"כ כמות", "ימים", "ממוצע יומי"])
+    for row_idx, ((sid, mt_he, mt_en), agg) in enumerate(
+        sorted(summary.items(), key=lambda kv: (sites.get(kv[0][0], ""), kv[0][2])),
+        start=2,
+    ):
+        n_days = len(agg["days"])
+        ws_sum.cell(row=row_idx, column=1, value=sites.get(sid, "?"))
+        ws_sum.cell(row=row_idx, column=2, value=mt_he)
+        ws_sum.cell(row=row_idx, column=3, value=mt_en)
+        ws_sum.cell(row=row_idx, column=4, value=round(agg["qty"]))
+        ws_sum.cell(row=row_idx, column=5, value=n_days)
+        ws_sum.cell(row=row_idx, column=6, value=round(agg["qty"] / n_days) if n_days else 0)
+
+    # ── Sheet 3: totals by site ──
+    site_totals: dict[int, dict] = {}
+    for m in records:
+        agg = site_totals.setdefault(m.site_id, {"qty": 0.0, "days": set()})
+        agg["qty"] += m.quantity
+        agg["days"].add(m.date)
+
+    ws_site = wb.create_sheet("סיכום לפי אתר")
+    style_header(ws_site, ["אתר", "סה\"כ כמות", "ימים", "ממוצע יומי"])
+    for row_idx, (sid, agg) in enumerate(
+        sorted(site_totals.items(), key=lambda kv: sites.get(kv[0], "")), start=2
+    ):
+        n_days = len(agg["days"])
+        ws_site.cell(row=row_idx, column=1, value=sites.get(sid, "?"))
+        ws_site.cell(row=row_idx, column=2, value=round(agg["qty"]))
+        ws_site.cell(row=row_idx, column=3, value=n_days)
+        ws_site.cell(row=row_idx, column=4, value=round(agg["qty"] / n_days) if n_days else 0)
+
+    # Auto-size columns on every sheet
+    for ws in wb.worksheets:
+        for col in ws.columns:
+            max_len = max((len(str(c.value)) for c in col if c.value is not None), default=0)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 40)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    site_tag = (sites.get(site_id, "site") if site_id else "all-sites")
+    filename = f"daily_meals_{site_tag}_{start_date.isoformat()}_to_{today.isoformat()}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/debug-data")
 async def debug_data(
     db: AsyncSession = Depends(get_db),

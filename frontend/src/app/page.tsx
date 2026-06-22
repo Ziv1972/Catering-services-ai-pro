@@ -10,7 +10,7 @@ import {
   ListTodo, ArrowRight, MessageSquare, Send,
   AlertCircle, AlertTriangle, CheckCircle2, Clock,
   ChevronRight, ChevronDown, ArrowLeft, X,
-  UtensilsCrossed, Upload, Loader2,
+  UtensilsCrossed, Upload, Loader2, Download,
 } from 'lucide-react';
 import { dashboardAPI, chatAPI, drillDownAPI, categoryAnalysisAPI, dailyMealsAPI, anomaliesAPI } from '@/lib/api';
 import ChatMessageRenderer from '@/components/chat/ChatMessageRenderer';
@@ -98,6 +98,7 @@ export default function Dashboard() {
   const [dailyMealsDays, setDailyMealsDays] = useState(30);
   const [dailyMealsSiteId, setDailyMealsSiteId] = useState<number | undefined>(undefined);
   const [csvUploading, setCsvUploading] = useState(false);
+  const [dailyMealsExporting, setDailyMealsExporting] = useState(false);
   const [csvResult, setCsvResult] = useState<any>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
 
@@ -268,6 +269,21 @@ export default function Dashboard() {
     } finally {
       setCsvUploading(false);
       if (csvInputRef.current) csvInputRef.current.value = '';
+    }
+  };
+
+  const handleDailyMealsExport = async () => {
+    setDailyMealsExporting(true);
+    try {
+      await dashboardAPI.dailyMealsExport({
+        days: dailyMealsDays,
+        site_id: dailyMealsSiteId,
+      });
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Download failed';
+      setCsvResult({ status: 'error', message: msg });
+    } finally {
+      setDailyMealsExporting(false);
     }
   };
 
@@ -1681,6 +1697,21 @@ export default function Dashboard() {
                   <Upload className="w-4 h-4 mr-1" />
                 )}
                 {csvUploading ? 'Uploading...' : 'Upload CSV'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDailyMealsExport}
+                disabled={dailyMealsExporting || !dailyMeals?.chart_data?.length}
+                className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                title="הורדת דו״ח לפי אתר / סוג / כמות"
+              >
+                {dailyMealsExporting ? (
+                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4 mr-1" />
+                )}
+                {dailyMealsExporting ? 'Exporting...' : 'Download Report'}
               </Button>
             </div>
           </div>

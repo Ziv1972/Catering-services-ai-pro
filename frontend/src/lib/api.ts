@@ -543,6 +543,22 @@ export const dashboardAPI = {
     const response = await api.get('/api/dashboard/daily-meals', { params });
     return response.data;
   },
+  dailyMealsExport: async (params?: { days?: number; site_id?: number }) => {
+    const response = await api.get('/api/dashboard/daily-meals/export', {
+      params,
+      responseType: 'blob',
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    const disposition = response.headers['content-disposition'] || '';
+    const match = disposition.match(/filename="?(.+?)"?$/);
+    link.download = match ? match[1] : 'daily_meals.xlsx';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  },
   mealsBudget: async (params?: { year?: number; site_id?: number }) => {
     const response = await api.get('/api/dashboard/meals-budget', { params });
     return response.data;
