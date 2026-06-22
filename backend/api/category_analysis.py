@@ -9,7 +9,7 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -31,6 +31,143 @@ MONTH_NAMES = {
     5: "May", 6: "June", 7: "July", 8: "August",
     9: "September", 10: "October", 11: "November", 12: "December",
 }
+
+
+# ─── Canonical product-category taxonomy (single source of truth) ───
+# Used by BOTH the app-startup seed (backend/main.py lifespan) and the
+# POST /sync-mappings endpoint. The startup seed only runs on an empty table,
+# so an already-seeded/production DB must call /sync-mappings to pick up edits.
+# Source: user's Excel "קטגוריות חלוקת פריטים במטבחונים.xlsx".
+
+CATEGORY_GROUPS: list[tuple[str, str, str, int]] = [
+    # (name, display_name_he, display_name_en, sort_order)
+    ("total_meals", "ארוחות", "Total Meals", 1),
+    ("working_days", "ימי עבודה", "Working Days", 2),
+    ("extras_lunch", "תוספות לצהריים", "Extras for Lunch", 3),
+    ("kitchenette_fruit", "מטבחון - פירות", "Kitchenette - Fruit", 4),
+    ("kitchenette_dry", "מטבחון - יבשים", "Kitchenette - Dry Goods", 5),
+    ("kitchenette_dairy", "מטבחון - חלבי", "Kitchenette - Dairy", 6),
+    ("coffee_tea", "קפה/תה/לימון", "Coffee/Tea/Lemon", 7),
+    ("cut_veg", "פלטות ירקות", "Cut Veg Platters", 8),
+    ("coffee_beans", "פולי קפה", "Coffee Beans", 9),
+]
+
+# (group_name, product_name_pattern) — matched in (group sort_order, list order).
+# Patterns are SQL LIKE → regex via re.search in _match_product_to_category.
+# NOTE on substring false-positives (fixed below):
+#   - dairy "%גיל 200%" (the תנובה "גיל" drink), NOT "%גיל %" which also matched
+#     "רגיל " inside "שקיקי תה ... (רגיל ובטעמים)" and mis-filed tea as dairy.
+#   - dry "%סוכר%חום%"/"%סוכר 1 ק%" (real sugar), NOT "%סוכר%" which also matched
+#     "ללא סוכר" inside "מעדן סויה ללא סוכר" and mis-filed the dessert as dry.
+CATEGORY_MAPPINGS: list[tuple[str, str]] = [
+    # Total Meals
+    ("total_meals", "%ארוחת צהריים%"),
+    ("total_meals", "%ארוחת ערב%"),
+    ("total_meals", "%ארחת ערב%"),
+    ("total_meals", "%ארוחת לילה%"),
+    ("total_meals", "%ארוחות לילה%"),
+    ("total_meals", "%ארוחות שבת%"),
+    ("total_meals", "%ארוזיות שומרים%"),
+    ("total_meals", "%ארוחות שומרים%"),
+    ("total_meals", "%תוספת למנה עיקרית%"),
+    ("total_meals", "%תוספת מנה עיקרית%"),
+    ("total_meals", "%כריך%"),
+    ("total_meals", "%לחמניה%"),
+    ("total_meals", "%השלמת ארוחות%"),
+    ("total_meals", "%ארוחות צהריים%"),
+    # Extras for lunch
+    ("extras_lunch", "%תפוחים למכונת מיצים%"),
+    ("extras_lunch", "%גזר קלוף למכונת מיצים%"),
+    ("extras_lunch", "%סלק קלוף למכונת מיצים%"),
+    ("extras_lunch", "%ארטיק%"),
+    ("extras_lunch", "%תרכיז%"),
+    ("extras_lunch", "%הפרש נוזל למדיח%"),
+    ("extras_lunch", "%הפרש ממחיר נוזל%"),
+    # Kitchenette - Fruit
+    ("kitchenette_fruit", "%פירות%"),
+    # Kitchenette - Dry Goods
+    ("kitchenette_dry", "%סוכר%חום%"),
+    ("kitchenette_dry", "%סוכר 1 ק%"),
+    ("kitchenette_dry", "%עוגיות%"),
+    ("kitchenette_dry", "%עוגיו%"),
+    ("kitchenette_dry", "%וופלים%"),
+    ("kitchenette_dry", "%בייגלה%"),
+    ("kitchenette_dry", "%גרנולה%"),
+    ("kitchenette_dry", "%דבש%"),
+    ("kitchenette_dry", "%סילאן%"),
+    ("kitchenette_dry", "%חוויאג%"),
+    ("kitchenette_dry", "%ממתיק%"),
+    ("kitchenette_dry", "%קסמי שיניים%"),
+    ("kitchenette_dry", "%קיסמי שינים%"),
+    ("kitchenette_dry", "%מלח לימון%"),
+    ("kitchenette_dry", "%נוטלה%"),
+    # Kitchenette - Dairy
+    ("kitchenette_dairy", "%דנונה%"),
+    ("kitchenette_dairy", "%יופלה%"),
+    ("kitchenette_dairy", "%פרילי%"),
+    ("kitchenette_dairy", "%מילקי%"),
+    ("kitchenette_dairy", "%מעדן%"),
+    ("kitchenette_dairy", "%שמנת%"),
+    ("kitchenette_dairy", "%חלב%"),
+    ("kitchenette_dairy", "%אשל%"),
+    ("kitchenette_dairy", "%גיל,%"),
+    ("kitchenette_dairy", "%גיל 200%"),
+    ("kitchenette_dairy", "%שוקו%"),
+    ("kitchenette_dairy", "%גבינ%"),
+    ("kitchenette_dairy", "%משקה שקדים%"),
+    # Coffee/Tea/Lemon
+    ("coffee_tea", "%קפה שחור%"),
+    ("coffee_tea", "%קפה נמס%"),
+    ("coffee_tea", "%מגורען%"),
+    ("coffee_tea", "%נטול קופאין%"),
+    ("coffee_tea", "%שקיקי תה%"),
+    ("coffee_tea", "%לימון שטוף%"),
+    ("coffee_tea", "%נענע%"),
+    # Cut Veg platters
+    ("cut_veg", "%פלטות%ירקות%"),
+    ("cut_veg", "%פלטת%ירקות%"),
+    # Coffee Beans
+    ("coffee_beans", "%קפה קדם%"),
+    ("coffee_beans", "%שכירות%Eversys%"),
+    ("coffee_beans", "%שכירות חודשית%"),
+]
+
+
+async def seed_category_taxonomy(db: AsyncSession, *, force: bool = False) -> dict:
+    """Seed product-category groups + mappings from the canonical lists above.
+
+    Idempotent. By default seeds only when the groups table is empty (startup
+    seed). With ``force=True`` it wipes existing groups/mappings and recreates
+    them — used by POST /sync-mappings to push taxonomy fixes to an already-
+    seeded DB, since the startup seed cannot pick up changes after the first run.
+    Nothing FKs to group ids except the mappings we recreate, so the wipe is safe.
+    """
+    existing = (await db.execute(select(ProductCategoryGroup))).scalars().first()
+    if existing and not force:
+        return {"status": "skipped", "reason": "already seeded"}
+
+    if force:
+        await db.execute(delete(ProductCategoryMapping))
+        await db.execute(delete(ProductCategoryGroup))
+        await db.flush()
+
+    groups = [
+        ProductCategoryGroup(name=n, display_name_he=he, display_name_en=en, sort_order=so)
+        for (n, he, en, so) in CATEGORY_GROUPS
+    ]
+    db.add_all(groups)
+    await db.flush()
+
+    grp = {g.name: g.id for g in groups}
+    for group_name, pattern in CATEGORY_MAPPINGS:
+        db.add(ProductCategoryMapping(group_id=grp[group_name], product_name_pattern=pattern))
+
+    await db.commit()
+    return {
+        "status": "synced" if force else "seeded",
+        "groups": len(groups),
+        "mappings": len(CATEGORY_MAPPINGS),
+    }
 
 
 async def _load_category_mappings(db: AsyncSession) -> list[tuple[str, str, str, str]]:
@@ -666,3 +803,17 @@ async def set_working_days(
 
     await db.commit()
     return {"status": "ok", "working_days": working_days}
+
+
+@router.post("/sync-mappings")
+async def sync_category_mappings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-apply the canonical category taxonomy to this DB (idempotent).
+
+    The startup seed only runs on an empty table, so already-seeded/production
+    DBs need this to pick up classification fixes (e.g. שקיקי תה → קפה/תה,
+    מעדן סויה → מטבחון-חלבי). Wipes and recreates groups + mappings.
+    """
+    return await seed_category_taxonomy(db, force=True)
