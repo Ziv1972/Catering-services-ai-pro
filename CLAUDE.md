@@ -8,13 +8,13 @@ AI-native catering management system for HP Israel. Agent-driven operations acro
 
 ## Version & Deploy Policy
 
-**Current Production Version: V03** (commit `79c2f82`, 2026-05-03)
+**Current Production Version: V04** (commit `7fc674e`, 2026-06-22)
 
-### CRITICAL: Deploy only with user approval
-- **NEVER push to main or deploy without explicit user approval**
-- Production is live and used daily — deploy carefully
-- Always ask before pushing: "Changes are ready. Approve push to main + deploy?"
-- After deploy, verify production health and increment version (V01 → V02, etc.)
+### Workflow: commit and deploy from `main`
+- **`main` is the active working branch.** Commit changes directly to `main`.
+- **`git push origin main` triggers Railway auto-deploy.** No PRs, no `dev` branch staging.
+- `dev` is stale and not used — do not branch from it.
+- Push without asking. After deploy, verify production health and increment version (V01 → V02, etc.).
 
 ## Commands
 
